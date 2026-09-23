@@ -1,0 +1,57 @@
+# Galiot — Agent & Contributor Conventions
+
+> *Guidelines for AI agents and human contributors working on Galiot.*
+
+---
+
+## Project Identity
+
+- **Name**: Galiot — The Agile Cloud Explorer
+- **Architecture**: 100% client-side SPA, zero server backend
+- **Hosting**: Cloudflare Workers Static Assets (free tier)
+- **License**: MIT
+
+## Tech Stack (Canonical Source: `docs/STACK_DECISION.md`)
+
+| Layer | Choice |
+|---|---|
+| Language | TypeScript ^7.0 (Go-based compiler) |
+| UI | React ^19.3 SPA (no SSR/RSC) |
+| Bundler | Vite 8 (executed by Bun) |
+| Runner/PM | Bun ≥ 1.4.2 |
+| Styling | Tailwind CSS ^4.3 |
+| Editor | CodeMirror 6 (NOT Monaco) |
+| Database | PGlite ≥ 0.5.8 (Postgres 18.3 WASM), IDB VFS primary |
+| S3 Signing | Vendored aws4fetch (src/lib/aws4fetch.ts) |
+| Vault | WebCrypto AES-GCM-256 + PBKDF2-600k |
+| Icons | Lucide React |
+
+## Conventions
+
+### Code Style
+- Strict TypeScript (`strict: true`, `noUncheckedIndexedAccess: true`)
+- Functional React components only (no class components)
+- Named exports (no default exports except route pages)
+- Barrel files (`index.ts`) only at module boundaries, not within
+
+### Security Rules
+- **Never** expose raw S3 secret keys to the main thread
+- All crypto operations in Web Workers only
+- Memory zeroing (`buffer.fill(0)`) after sensitive operations
+- No `eval`, no `new Function`, no inline scripts
+- No external CDN resources — everything vendored
+
+### File Naming
+- Components: `PascalCase.tsx`
+- Utilities/hooks: `camelCase.ts`
+- Workers: `name.worker.ts`
+- Tests: `name.test.ts` (colocated)
+
+### Documentation
+- Do NOT edit original spec docs retroactively
+- Add correction layers via `STACK_DECISION.md` re-verification logs
+- All claims must cite sources (vendor docs, npm, MDN)
+
+### Commit Messages
+- Conventional Commits: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`
+- Reference component: `feat(vault): add export/import backup`
