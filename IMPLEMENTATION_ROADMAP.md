@@ -8,14 +8,14 @@
 
 **Goal**: Establish a lightning-fast browser foundation running PostgreSQL in WebAssembly, backed by OPFS.
 
-- [ ] **1.1 Workspace & Toolchain Setup**:
+- [x] **1.1 Workspace & Toolchain Setup**:
   - Initialize Bun 1.4-powered Vite workspace with React 19, TypeScript 5.8+, and TailwindCSS v4.
   - Set up automated GitHub Actions workflow to build and deploy static assets to `gh-pages` on push.
-- [ ] **1.2 PGlite Worker Integration**:
+- [x] **1.2 PGlite Worker Integration**:
   - Implement dedicated Web Worker (`pglite.worker.ts`) hosting `@electric-sql/pglite`.
   - Configure OPFS (Origin Private File System) persistence with IndexedDB fallback.
   - Run initial schema migrations (`profiles`, `objects_cache`, `transfer_tasks`, `transfer_parts`).
-- [ ] **1.3 WebCrypto Zero-Knowledge Vault**:
+- [x] **1.3 WebCrypto Zero-Knowledge Vault**:
   - Implement client-side AES-GCM-256 encryption for S3 credentials.
   - Derive encryption keys using PBKDF2 from user master password or WebAuthn/Passkey.
 - [ ] **1.4 Direct S3 Client**:
@@ -31,7 +31,7 @@
 - [ ] **2.1 Virtualized Grid & Table Views**:
   - Integrate `@tanstack/react-virtual` for virtualized rendering of 100,000+ objects without DOM strain.
   - Implement multi-select (`Shift + Click`, `Cmd + Click`, lasso selection) matching Galeon desktop behavior.
-- [ ] **2.2 Reactive Live Queries**:
+- [x] **2.2 Reactive Live Queries**:
   - Connect React components to PGlite via `@electric-sql/pglite-react` (`useLiveQuery`).
   - Eliminate custom global state stores for object listings; let SQL drive the UI.
 - [ ] **2.3 Instant SQL Search & Filtering**:
