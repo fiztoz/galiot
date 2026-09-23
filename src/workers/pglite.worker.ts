@@ -1,79 +1,43 @@
 /// <reference lib="webworker" />
 import { PGlite } from '@electric-sql/pglite';
-import { createDbClient } from '../db/client';
-
-export interface DbWorkerMessage {
-  id: string;
-  type: 'query' | 'exec' | 'close';
-  sql?: string;
-  params?: any[];
-}
-
-export interface DbWorkerResponse {
-  id: string;
-  type: 'result' | 'error';
-  data?: any;
-  error?: string;
-}
-
-let dbPromise: Promise<PGlite> | null = null;
+import { live } from '@electric-sql/pglite/live';
+import { worker } from '@electric-sql/pglite/worker';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import { runMigrations } from '../db/migrations';
 
 /**
- * Get or initialize the database instance.
+ * Picks the fastest durable storage available to this worker:
+ * OPFS Access Handle (Chrome/Firefox workers) with IndexedDB fallback (Safari).
  */
-function getDb(): Promise<PGlite> {
-  if (!dbPromise) {
-    dbPromise = createDbClient().then((db) => {
-      self.postMessage({ type: 'ready' });
-      return db;
-    }).catch((err) => {
-      self.postMessage({ type: 'error', error: err instanceof Error ? err.message : String(err) });
-      throw err;
-    });
+async function resolveDataDir(): Promise<string> {
+  try {
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.storage &&
+      typeof navigator.storage.getDirectory === 'function'
+    ) {
+      await navigator.storage.getDirectory();
+      return 'opfs-ahp://galiot';
+    }
+  } catch {
+    // OPFS unavailable — fall through to IndexedDB
   }
-  return dbPromise;
+  return 'idb://galiot';
 }
 
-// Start init on worker load
-getDb();
+worker({
+  init: async (options) => {
+    const workerOptions = options as { dataDir?: string };
+    const dataDir = workerOptions.dataDir ?? (await resolveDataDir());
 
-self.onmessage = async (event: MessageEvent<DbWorkerMessage>) => {
-  const msg = event.data;
-  
-  if (!msg || !msg.id || !msg.type) {
-    return;
-  }
+    const db = await PGlite.create(dataDir, {
+      // pg_trgm must be registered before schema.sql runs CREATE EXTENSION.
+      extensions: { live, pg_trgm },
+    });
 
-  try {
-    const db = await getDb();
+    // Schema must be guaranteed before any query RPC is served.
+    await runMigrations(db);
 
-    switch (msg.type) {
-      case 'query':
-        if (!msg.sql) throw new Error("Query requires 'sql' field");
-        const res = await db.query(msg.sql, msg.params);
-        self.postMessage({ id: msg.id, type: 'result', data: res } satisfies DbWorkerResponse);
-        break;
-
-      case 'exec':
-        if (!msg.sql) throw new Error("Exec requires 'sql' field");
-        await db.exec(msg.sql);
-        self.postMessage({ id: msg.id, type: 'result' } satisfies DbWorkerResponse);
-        break;
-
-      case 'close':
-        await db.close();
-        dbPromise = null;
-        self.postMessage({ id: msg.id, type: 'result' } satisfies DbWorkerResponse);
-        break;
-
-      default:
-        throw new Error(`Unknown message type: ${(msg as any).type}`);
-    }
-  } catch (err) {
-    self.postMessage({
-      id: msg.id,
-      type: 'error',
-      error: err instanceof Error ? err.message : String(err),
-    } satisfies DbWorkerResponse);
-  }
-};
+    return db;
+  },
+});

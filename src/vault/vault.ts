@@ -1,281 +1,183 @@
-import type { PGlite } from '@electric-sql/pglite';
-import { 
-  deriveKEK, 
-  generateDEK, 
-  generateSalt, 
-  wrapDEK, 
-  unwrapDEK, 
-  encrypt, 
-  decrypt, 
+import {
+  deriveKEK,
+  generateDEK,
+  generateSalt,
+  wrapDEK,
+  unwrapDEK,
+  encrypt,
+  decrypt,
+  zeroBuffer,
   type EncryptedPayload,
-  zeroBuffer
 } from './crypto.js';
+import type { CredentialPlaintext } from './protocol.js';
 
-export interface NewProfile {
-  name: string;
-  endpoint: string;
-  region: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-}
-
-export interface DecryptedProfile extends NewProfile {
-  id: string;
-  createdAt: number;
-}
-
-export interface ProfileSummary {
-  id: string;
-  name: string;
-  endpoint: string;
-  region: string;
-  createdAt: number;
-}
-
-interface EncryptedProfileRecord {
-  id: string;
-  name: string;
-  endpoint: string;
-  region: string;
-  encrypted_credentials: string; // JSON string of EncryptedPayload
-  created_at: number;
-}
-
+/** Idle time after which the vault self-locks and wipes the DEK reference. */
 const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
 
+export interface SealedVault {
+  /** base64 salt */
+  salt: string;
+  /** base64 AES-KW wrapped DEK */
+  wrappedDek: string;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  return btoa(binary);
+}
+
+function fromBase64(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * In-memory vault session. Lives exclusively inside the vault worker:
+ * the DEK and any decrypted credentials never cross the worker boundary.
+ */
 export class VaultManager {
   private dek: CryptoKey | null = null;
-  private db: PGlite;
-  private lockTimer: number | null = null;
+  private lockTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly onLock: (() => void) | undefined;
 
-  private constructor(db: PGlite, dek: CryptoKey) {
-    this.db = db;
-    this.dek = dek;
+  private constructor(onLock?: (() => void) | undefined) {
+    this.onLock = onLock;
     this.resetTimer();
   }
 
-  private resetTimer() {
+  private resetTimer(): void {
     if (this.lockTimer !== null) {
-      window.clearTimeout(this.lockTimer);
+      clearTimeout(this.lockTimer);
     }
-    this.lockTimer = window.setTimeout(() => this.lock(), INACTIVITY_TIMEOUT_MS);
+    this.lockTimer = setTimeout(() => this.lock(), INACTIVITY_TIMEOUT_MS);
   }
 
-  private ensureUnlocked() {
+  private ensureUnlocked(): CryptoKey {
     if (!this.dek) {
       throw new Error('Vault is locked');
     }
     this.resetTimer();
+    return this.dek;
   }
 
   /**
-   * Zeros the DEK from memory implicitly and sets locked state.
+   * Drops the DEK reference and notifies the host so the UI can re-lock.
+   * WebCrypto keys cannot be zeroed in place; dropping the last reference
+   * allows the JS engine to reclaim the key material.
    */
   public lock(): void {
+    const wasUnlocked = this.dek !== null;
     if (this.lockTimer !== null) {
-      window.clearTimeout(this.lockTimer);
+      clearTimeout(this.lockTimer);
       this.lockTimer = null;
     }
-    // WebCrypto CryptoKey cannot be directly zeroed via ArrayBuffer access,
-    // so we drop the reference to allow GC to handle it.
     this.dek = null;
+    if (wasUnlocked) {
+      this.onLock?.();
+    }
   }
 
-  public isLocked(): boolean {
-    return this.dek === null;
-  }
-
-  static async initDbSchema(db: PGlite): Promise<void> {
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS _meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS profiles (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        endpoint TEXT NOT NULL,
-        region TEXT NOT NULL,
-        encrypted_credentials TEXT NOT NULL,
-        created_at BIGINT NOT NULL
-      );
-    `);
+  public isUnlocked(): boolean {
+    return this.dek !== null;
   }
 
   /**
-   * Creates a new vault. Generates salt and DEK, wraps DEK with passphrase-derived KEK,
-   * and stores salt and wrapped DEK in the database.
+   * Creates a new vault: generates the salt and DEK, wraps the DEK with a
+   * passphrase-derived KEK. Returns the sealed material for persistence.
    */
-  static async create(passphrase: string, db: PGlite): Promise<VaultManager> {
-    await VaultManager.initDbSchema(db);
-    
+  static async create(
+    passphrase: string,
+    onLock?: () => void,
+  ): Promise<{ vault: VaultManager; sealed: SealedVault }> {
     const salt = generateSalt();
     const kek = await deriveKEK(passphrase, salt);
     const dek = await generateDEK();
-    
+
     const wrappedDekBuf = await wrapDEK(kek, dek);
-    const wrappedDekBase64 = btoa(String.fromCharCode(...new Uint8Array(wrappedDekBuf)));
-    const saltBase64 = btoa(String.fromCharCode(...salt));
+    const sealed: SealedVault = {
+      salt: toBase64(salt),
+      wrappedDek: toBase64(new Uint8Array(wrappedDekBuf)),
+    };
 
-    await db.query(
-      `INSERT INTO _meta (key, value) VALUES ('salt', $1), ('wrapped_dek', $2)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;`,
-      [saltBase64, wrappedDekBase64]
-    );
-
-    // Defense-in-depth: clear intermediate arrays
     zeroBuffer(salt);
     zeroBuffer(wrappedDekBuf);
 
-    return new VaultManager(db, dek);
+    const vault = new VaultManager(onLock);
+    vault.dek = dek;
+    return { vault, sealed };
   }
 
   /**
-   * Unlocks an existing vault. Reads salt and wrapped DEK, derives KEK from passphrase,
-   * and unwraps DEK.
+   * Unlocks an existing vault from persisted sealed material.
+   * Throws 'Invalid passphrase' when the KEK cannot unwrap the DEK.
    */
-  static async unlock(passphrase: string, db: PGlite): Promise<VaultManager> {
-    await VaultManager.initDbSchema(db);
-
-    const saltRes = await db.query<{value: string}>(`SELECT value FROM _meta WHERE key = 'salt'`);
-    const dekRes = await db.query<{value: string}>(`SELECT value FROM _meta WHERE key = 'wrapped_dek'`);
-
-    const saltRow = saltRes.rows[0];
-    const dekRow = dekRes.rows[0];
-
-    if (!saltRow || !dekRow) {
-      throw new Error('Vault metadata not found');
-    }
-
-    const saltBase64 = saltRow.value;
-    const wrappedDekBase64 = dekRow.value;
-
-    const saltStr = atob(saltBase64);
-    const salt = new Uint8Array(saltStr.length);
-    for (let i = 0; i < saltStr.length; i++) salt[i] = saltStr.charCodeAt(i);
-
-    const dekStr = atob(wrappedDekBase64);
-    const wrappedDek = new Uint8Array(dekStr.length);
-    for (let i = 0; i < dekStr.length; i++) wrappedDek[i] = dekStr.charCodeAt(i);
+  static async unlock(
+    passphrase: string,
+    sealed: SealedVault,
+    onLock?: () => void,
+  ): Promise<VaultManager> {
+    const salt = fromBase64(sealed.salt);
+    const wrappedDek = fromBase64(sealed.wrappedDek);
 
     let kek: CryptoKey | null = null;
     let dek: CryptoKey | null = null;
     try {
       kek = await deriveKEK(passphrase, salt);
-      dek = await unwrapDEK(kek, wrappedDek.buffer);
-    } catch (e) {
+      dek = await unwrapDEK(kek, wrappedDek.buffer as ArrayBuffer);
+    } catch {
+      throw new Error('Invalid passphrase');
+    } finally {
       zeroBuffer(salt);
       zeroBuffer(wrappedDek);
-      throw new Error('Invalid passphrase');
     }
 
-    zeroBuffer(salt);
-    zeroBuffer(wrappedDek);
-
-    return new VaultManager(db, dek);
+    const vault = new VaultManager(onLock);
+    vault.dek = dek;
+    // Constructor already armed a timer; keep a single clean state.
+    vault.resetTimer();
+    return vault;
   }
 
   /**
-   * Checks if vault metadata exists.
+   * Verifies a passphrase against sealed material without producing a session
+   * (used by vault import/restore flows).
    */
-  static async exists(db: PGlite): Promise<boolean> {
+  static async verify(passphrase: string, sealed: SealedVault): Promise<boolean> {
+    const salt = fromBase64(sealed.salt);
+    const wrappedDek = fromBase64(sealed.wrappedDek);
     try {
-      const res = await db.query<{count: number}>(
-        `SELECT COUNT(*) as count FROM _meta WHERE key IN ('salt', 'wrapped_dek')`
-      );
-      return Number(res.rows[0]?.count ?? 0) === 2;
-    } catch (e) {
-      return false; // Table might not exist yet
+      const kek = await deriveKEK(passphrase, salt);
+      await unwrapDEK(kek, wrappedDek.buffer as ArrayBuffer);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      zeroBuffer(salt);
+      zeroBuffer(wrappedDek);
     }
   }
 
-  async addProfile(profile: NewProfile): Promise<string> {
-    this.ensureUnlocked();
-    
-    const id = crypto.randomUUID();
-    const createdAt = Date.now();
-    const credentials = JSON.stringify({
-      accessKeyId: profile.accessKeyId,
-      secretAccessKey: profile.secretAccessKey
-    });
-
-    const encryptedCredentials = await encrypt(this.dek!, credentials);
-    
-    await this.db.query(
-      `INSERT INTO profiles (id, name, endpoint, region, encrypted_credentials, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, profile.name, profile.endpoint, profile.region, JSON.stringify(encryptedCredentials), createdAt]
-    );
-
-    return id;
+  /** Encrypts credentials for storage in the `profiles` table. */
+  async encryptCredentials(credentials: CredentialPlaintext): Promise<EncryptedPayload> {
+    const dek = this.ensureUnlocked();
+    const payload = await encrypt(dek, JSON.stringify(credentials));
+    return payload;
   }
 
-  async getProfile(id: string): Promise<DecryptedProfile> {
-    this.ensureUnlocked();
-
-    const res = await this.db.query<EncryptedProfileRecord>(
-      `SELECT * FROM profiles WHERE id = $1`,
-      [id]
-    );
-
-    const row = res.rows[0];
-
-    if (!row) {
-      throw new Error('Profile not found');
-    }
-
-    const encryptedCreds: EncryptedPayload = JSON.parse(row.encrypted_credentials);
-    const decryptedJson = await decrypt(this.dek!, encryptedCreds);
-    const creds = JSON.parse(decryptedJson) as { accessKeyId: string; secretAccessKey: string };
-
-    return {
-      id: row.id,
-      name: row.name,
-      endpoint: row.endpoint,
-      region: row.region,
-      createdAt: Number(row.created_at),
-      accessKeyId: creds.accessKeyId,
-      secretAccessKey: creds.secretAccessKey
-    };
-  }
-
-  async listProfiles(): Promise<ProfileSummary[]> {
-    this.ensureUnlocked();
-
-    const res = await this.db.query<{id: string, name: string, endpoint: string, region: string, created_at: number}>(
-      `SELECT id, name, endpoint, region, created_at FROM profiles ORDER BY created_at DESC`
-    );
-
-    return res.rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      endpoint: row.endpoint,
-      region: row.region,
-      createdAt: Number(row.created_at)
-    }));
-  }
-
-  async deleteProfile(id: string): Promise<void> {
-    this.ensureUnlocked();
-    await this.db.query(`DELETE FROM profiles WHERE id = $1`, [id]);
-  }
-
-  async updateProfile(id: string, updates: Partial<NewProfile>): Promise<void> {
-    this.ensureUnlocked();
-
-    const currentProfile = await this.getProfile(id);
-    const newProfile = { ...currentProfile, ...updates };
-
-    const credentials = JSON.stringify({
-      accessKeyId: newProfile.accessKeyId,
-      secretAccessKey: newProfile.secretAccessKey
-    });
-
-    const encryptedCredentials = await encrypt(this.dek!, credentials);
-
-    await this.db.query(
-      `UPDATE profiles SET name = $1, endpoint = $2, region = $3, encrypted_credentials = $4 WHERE id = $5`,
-      [newProfile.name, newProfile.endpoint, newProfile.region, JSON.stringify(encryptedCredentials), id]
-    );
+  /**
+   * Decrypts stored credentials. Only ever called inside the vault worker so
+   * the plaintext never reaches the main thread.
+   */
+  async decryptCredentials(payload: EncryptedPayload): Promise<CredentialPlaintext> {
+    const dek = this.ensureUnlocked();
+    const json = await decrypt(dek, payload);
+    return JSON.parse(json) as CredentialPlaintext;
   }
 }
