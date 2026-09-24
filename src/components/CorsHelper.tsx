@@ -14,6 +14,7 @@ import { S3Client, type CorsConfiguration, type CorsRule } from '../s3/client';
 import { corsRuleToXml, evaluateCors, type CorsVerdict } from '../s3/corsPolicy';
 import { canUseVirtualHosting } from '../s3/url';
 import type { CorsDiagnostic } from '../s3/diagnostics';
+import { shouldOfferBridge } from '../bridge/environment';
 import type { CredentialPlaintext } from '../vault/protocol';
 import { vaultService } from '../vault/vaultService';
 
@@ -216,6 +217,8 @@ export function CorsHelper({
   // Verified in a real browser: when CORS is broken the browser blocks the
   // PutBucketCors request too, so the one-click fix cannot bootstrap itself.
   const corsBlocksTheFix = diagnosis?.reason === 'cors-blocked' || verdict === 'none';
+  // Local development only: a deployed build's visitors have no bridge to use.
+  const bridgeOffered = corsBlocksTheFix && shouldOfferBridge();
 
   return (
     <div className="p-3 text-sm rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 space-y-3">
@@ -324,7 +327,7 @@ export function CorsHelper({
         </div>
       )}
 
-      {corsBlocksTheFix && (
+      {bridgeOffered && (
         <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 p-2.5 space-y-2">
           <p className="text-[11px] text-zinc-600 dark:text-zinc-300 leading-relaxed">
             Or let the local bridge do it for you: it signs the request in the vault worker and
@@ -388,10 +391,10 @@ export function CorsHelper({
         <button
           type="button"
           onClick={() => void apply(true)}
-          disabled={loading || verdict === 'ok' || corsBlocksTheFix}
+          disabled={loading || verdict === 'ok' || bridgeOffered}
           title={
             corsBlocksTheFix
-              ? 'The browser blocks this request until a CORS policy exists — use a terminal instead.'
+              ? 'The browser blocks this request until a CORS policy exists — use the bridge or a terminal.'
               : undefined
           }
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-600 hover:bg-teal-700 text-white transition-colors disabled:opacity-50"
@@ -399,9 +402,11 @@ export function CorsHelper({
           {loading ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
           {verdict === 'ok'
             ? 'Policy applied'
-            : corsBlocksTheFix
-              ? 'Apply from a terminal'
-              : 'Apply recommended policy'}
+            : bridgeOffered
+              ? 'Use the bridge below'
+              : corsBlocksTheFix
+                ? 'Apply from a terminal'
+                : 'Apply recommended policy'}
         </button>
 
         <button
@@ -437,15 +442,16 @@ export function CorsHelper({
         )}
       </div>
 
-      {corsBlocksTheFix && (
+      {corsBlocksTheFix && !bridgeOffered && (
         <pre className="text-[10px] leading-relaxed p-2 rounded bg-zinc-950 text-zinc-300 border border-zinc-200 dark:border-zinc-800 overflow-x-auto">
           {corsRuleToXml(recommended)}
         </pre>
       )}
 
       <p className="text-[10px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
-        “Apply” appends a rule for {origin} and keeps existing rules. Deleting removes the whole
-        configuration, which may break other apps using this bucket.
+        {bridgeOffered
+          ? 'The bridge is a local development tool and is only offered while Galiot runs on this machine.'
+          : `“Apply” appends a rule for ${origin} and keeps existing rules. Deleting removes the whole configuration, which may break other apps using this bucket.`}
       </p>
     </div>
   );
