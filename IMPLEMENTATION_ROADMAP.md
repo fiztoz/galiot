@@ -79,9 +79,9 @@
 - [x] **4.2 Media & Document Previews**:
   - High-performance image viewer with zoom/pan.
   - Native PDF preview and audio/video streaming players.
-- [ ] **4.3 Presigned URL Generator & History**:
+- [x] **4.3 Presigned URL Generator & History**:
   - Generate download and upload grants with custom expiration policies (1 hour, 24 hours, 7 days).
-  - Persist generated links in `presigned_history` with one-click revocation.
+  - Persist generated links in `presigned_history`. Note: a presigned URL is a self-contained bearer token, so it cannot be revoked server-side — the UI states this and offers record removal plus the real remedy (rotating the signing key).
 
 ---
 
@@ -95,5 +95,4 @@
   - Automated MinIO test suite verifying MD5/SHA256 checksums on parallel uploads, aborted parts, and network blip resumes. (`bun run test:integrity`)
 - [x] **5.3 Performance Benchmarks**:
   - Benchmark listing speed and memory usage against Galeon Desktop and Cyberduck. (`bun run bench`; engine results in [`benchmarks/ENGINE.md`](benchmarks/ENGINE.md); Galeon/Cyberduck comparison still needs a desktop run)
-- [ ] **5.4 Launch to GitHub Pages**:
-  - Publish public live demo and documentation at `https://<username>.github.io/galiot`.
+- [ ] **5.4 Launch** (operational work: hosting decision, deploy secrets, real-bucket verification — tracked in [`LAUNCH.md`](LAUNCH.md))
