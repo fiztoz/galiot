@@ -130,10 +130,19 @@ the request in the vault worker (the secret never leaves it) and the bridge send
 it from your machine, where no CORS rules apply. It is not a general proxy:
 
 - binds `127.0.0.1` only
-- accepts only local app origins
+- accepts only local app origins (`localhost` / `127.0.0.1` on :5173 and :4173)
 - requires the token it prints at startup
 - forwards only requests carrying a SigV4 `Authorization` header
+- refuses wildcard origins and non-http(s) targets
 - stops entirely with Ctrl+C
+
+Serving Galiot from a different origin (custom local domain, LAN/Tailscale
+hostname, or a deployed URL you are testing) needs that exact origin allowed —
+never a wildcard:
+
+```bash
+GALIOT_BRIDGE_ORIGINS=https://galiot.example.com bun run bridge
+```
 
 Without it, apply the same policy with `mc cors set` / `aws s3api put-bucket-cors`.
 

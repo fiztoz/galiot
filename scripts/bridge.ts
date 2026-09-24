@@ -24,10 +24,14 @@ import {
   checkForwardRequest,
   corsHeaders,
   isOriginAllowed,
+  resolveAllowedOrigins,
 } from '../src/bridge/policy';
 
 const port = Number(process.env.GALIOT_BRIDGE_PORT ?? BRIDGE_DEFAULT_PORT);
 const token = process.env.GALIOT_BRIDGE_TOKEN ?? crypto.randomUUID();
+const allowedOrigins = resolveAllowedOrigins(
+  (process.env.GALIOT_BRIDGE_ORIGINS ?? '').split(',').filter(Boolean),
+);
 
 interface ForwardBody {
   target: string;
@@ -39,7 +43,7 @@ interface ForwardBody {
 function json(payload: unknown, status = 200, origin: string | null = null): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+    headers: { 'Content-Type': 'application/json', ...corsHeaders(origin, allowedOrigins) },
   });
 }
 
@@ -50,14 +54,14 @@ const server = Bun.serve({
     const origin = request.headers.get('origin');
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders(origin) });
+      return new Response(null, { status: 204, headers: corsHeaders(origin, allowedOrigins) });
     }
 
     const url = new URL(request.url);
 
     // Health check: lets the app discover the bridge and the token hint.
     if (url.pathname === '/health') {
-      if (!isOriginAllowed(origin)) {
+      if (!isOriginAllowed(origin, allowedOrigins)) {
         return json({ ok: false, error: 'origin not allowed' }, 403, origin);
       }
       return json({ ok: true, version: 1, tokenRequired: true }, 200, origin);
@@ -80,6 +84,7 @@ const server = Bun.serve({
         origin,
         token: request.headers.get(BRIDGE_TOKEN_HEADER),
         expectedToken: token,
+        allowedOrigins,
       },
     );
 
@@ -134,6 +139,12 @@ Galiot bridge listening on http://127.0.0.1:${server.port}
 Paste this token into Galiot (Vault → Connections → CORS helper) when it
 asks to apply a CORS policy. The bridge only forwards SigV4-signed S3
 requests from local app origins, and only to the address you give it.
+
+Allowed origins:
+${allowedOrigins.map((origin) => `  - ${origin}`).join('\n')}
+
+Serving Galiot from another origin? Add it explicitly:
+  GALIOT_BRIDGE_ORIGINS=https://your-host bun run bridge
 
 Stop it with Ctrl+C.
 `);

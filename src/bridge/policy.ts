@@ -10,25 +10,51 @@
  * kept free of I/O so they can be unit-tested.
  */
 
-/** Origins allowed to talk to the bridge (the app in local development). */
-export const ALLOWED_BRIDGE_ORIGINS = [
+/**
+ * Origins allowed to talk to the bridge, by default: the local dev server and a
+ * local preview build.
+ *
+ * The bridge is deliberately localhost-only and never accepts a wildcard. If
+ * you serve Galiot from a different origin (a custom local domain, a LAN or
+ * Tailscale hostname, or a deployed URL you are testing), add that exact
+ * origin with GALIOT_BRIDGE_ORIGINS rather than editing this list.
+ */
+export const DEFAULT_BRIDGE_ORIGINS = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:4173',
   'http://127.0.0.1:4173',
 ];
 
+/**
+ * Builds the allowlist from defaults plus explicit extras.
+ *
+ * Wildcards and non-http(s) entries are dropped: this process can forward
+ * signed requests, so the origin check is the thing standing between a random
+ * website and your S3 credentials.
+ */
+export function resolveAllowedOrigins(extra: string[] = []): string[] {
+  const cleaned = extra
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter((origin) => /^https?:\/\/[^\s*]+$/.test(origin));
+
+  return [...new Set([...DEFAULT_BRIDGE_ORIGINS, ...cleaned])];
+}
+
 export const BRIDGE_DEFAULT_PORT = 8787;
 export const BRIDGE_TOKEN_HEADER = 'x-galiot-bridge-token';
 
-export function isOriginAllowed(origin: string | null): boolean {
+export function isOriginAllowed(origin: string | null, allowed: string[] = DEFAULT_BRIDGE_ORIGINS): boolean {
   if (!origin) return false;
-  return ALLOWED_BRIDGE_ORIGINS.includes(origin);
+  return allowed.includes(origin.replace(/\/$/, ''));
 }
 
-export function corsHeaders(origin: string | null): Record<string, string> {
+export function corsHeaders(
+  origin: string | null,
+  allowed: string[] = DEFAULT_BRIDGE_ORIGINS,
+): Record<string, string> {
   return {
-    'Access-Control-Allow-Origin': isOriginAllowed(origin) ? (origin ?? '') : '',
+    'Access-Control-Allow-Origin': isOriginAllowed(origin, allowed) ? (origin ?? '') : '',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': `content-type, ${BRIDGE_TOKEN_HEADER}`,
     'Access-Control-Max-Age': '600',
@@ -59,9 +85,14 @@ export type ForwardCheck =
  */
 export function checkForwardRequest(
   request: ForwardRequest,
-  options: { origin: string | null; token: string | null; expectedToken: string | null },
+  options: {
+    origin: string | null;
+    token: string | null;
+    expectedToken: string | null;
+    allowedOrigins?: string[];
+  },
 ): ForwardCheck {
-  if (!isOriginAllowed(options.origin)) {
+  if (!isOriginAllowed(options.origin, options.allowedOrigins ?? DEFAULT_BRIDGE_ORIGINS)) {
     return { ok: false, reason: 'bad-origin', detail: 'Origin is not an allowed local app origin.' };
   }
 
