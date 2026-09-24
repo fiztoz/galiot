@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { X, Loader2, Plug, CheckCircle2, XCircle } from 'lucide-react';
+import { X, Loader2, Plug, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import type { AppDB } from '../db/client';
 import { createConnection } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
@@ -11,6 +11,12 @@ interface ConnectionDialogProps {
 }
 
 type TestState =
+  | { status: 'idle' }
+  | { status: 'testing' }
+  | { status: 'ok'; message: string }
+  | { status: 'fail'; message: string };
+
+type CorsState =
   | { status: 'idle' }
   | { status: 'testing' }
   | { status: 'ok'; message: string }
@@ -53,6 +59,7 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: 'idle' });
+  const [cors, setCors] = useState<CorsState>({ status: 'idle' });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -60,6 +67,7 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
       setForm(EMPTY_FORM);
       setError(null);
       setTest({ status: 'idle' });
+      setCors({ status: 'idle' });
       setSaving(false);
     }
   }, [open]);
@@ -76,6 +84,7 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
   const setField = useCallback(<K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
     setTest({ status: 'idle' });
+    setCors({ status: 'idle' });
   }, []);
 
   const buildPayload = useCallback((): { ok: true } | { ok: false; error: string } => {
@@ -95,21 +104,23 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
     }
 
     setTest({ status: 'testing' });
+    setCors({ status: 'testing' });
+
+    const profile = {
+      endpoint: normalizeEndpoint(form.endpoint),
+      region: form.region.trim() || 'us-east-1',
+      bucket: form.bucket.trim(),
+      pathStyle: form.pathStyle,
+    };
+    const credentials = {
+      plain: {
+        accessKeyId: form.accessKeyId.trim(),
+        secretAccessKey: form.secretAccessKey.trim(),
+      },
+    };
+
     try {
-      const result = await vaultService.call('s3.test', {
-        profile: {
-          endpoint: normalizeEndpoint(form.endpoint),
-          region: form.region.trim() || 'us-east-1',
-          bucket: form.bucket.trim(),
-          pathStyle: form.pathStyle,
-        },
-        credentials: {
-          plain: {
-            accessKeyId: form.accessKeyId.trim(),
-            secretAccessKey: form.secretAccessKey.trim(),
-          },
-        },
-      });
+      const result = await vaultService.call('s3.test', { profile, credentials });
 
       if (result.ok) {
         setTest({
@@ -119,11 +130,38 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
       } else {
         setTest({
           status: 'fail',
-          message: `${result.error} — if this is a network/CORS error, allow origin ${window.location.origin} with methods GET, HEAD, PUT, POST, DELETE on the bucket.`,
+          message: result.error ?? 'The bucket rejected the request (check credentials and policy).',
         });
       }
+
+      // CORS preflight runs in parallel with the credentialed test above.
+      void (async () => {
+        try {
+          const corsResult = await vaultService.call('s3.cors', { profile });
+          if (corsResult.allowed) {
+            setCors({
+              status: 'ok',
+              message: `CORS preflight passed — allowed methods: ${corsResult.methods.join(', ') || 'not reported'}.`,
+            });
+          } else {
+            setCors({
+              status: 'fail',
+              message:
+                'CORS preflight rejected this origin. Add a CORS policy allowing ' +
+                `${window.location.origin} with methods GET, HEAD, PUT, POST, DELETE, ` +
+                'expose header ETag, and allowed headers * — otherwise the browser blocks all requests.',
+            });
+          }
+        } catch (err) {
+          setCors({
+            status: 'fail',
+            message: `CORS preflight failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      })();
     } catch (err) {
       setTest({ status: 'fail', message: err instanceof Error ? err.message : String(err) });
+      setCors({ status: 'idle' });
     }
   }, [buildPayload, form]);
 
@@ -309,6 +347,35 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
                 <>
                   <XCircle size={15} className="flex-none mt-0.5" />
                   <span className="break-words">{test.message}</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {cors.status !== 'idle' && (
+            <div
+              className={`p-3 text-sm rounded-lg border flex items-start gap-2 ${
+                cors.status === 'ok'
+                  ? 'bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
+                  : cors.status === 'fail'
+                    ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border-amber-100 dark:border-amber-900/40'
+                    : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border-zinc-100 dark:border-zinc-700'
+              }`}
+            >
+              {cors.status === 'testing' ? (
+                <>
+                  <Loader2 size={15} className="flex-none mt-0.5 animate-spin" />
+                  Running CORS preflight…
+                </>
+              ) : cors.status === 'ok' ? (
+                <>
+                  <CheckCircle2 size={15} className="flex-none mt-0.5" />
+                  <span className="break-words">{cors.message}</span>
+                </>
+              ) : (
+                <>
+                  <AlertTriangle size={15} className="flex-none mt-0.5" />
+                  <span className="break-words">{cors.message}</span>
                 </>
               )}
             </div>

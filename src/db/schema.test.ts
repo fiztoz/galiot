@@ -140,6 +140,7 @@ describe('replaceListing (explorer cache)', () => {
           lastModified: '2026-09-20T10:00:00.000Z',
           size: 2048,
           eTag: '"abc"',
+          storageClass: 'STANDARD',
         },
       ],
       prefixes: ['photos/2024/'],
@@ -163,6 +164,12 @@ describe('replaceListing (explorer cache)', () => {
       { filename: '2024', key: 'photos/2024/', size: 0, is_dir: true },
       { filename: 'beach.jpg', key: 'photos/2024/beach.jpg', size: 2048, is_dir: false },
     ]);
+
+    // Storage class from ListObjectsV2 is persisted (enables the 2.3 filter).
+    const storageClass = await db.query<{ storage_class: string | null }>(
+      `SELECT storage_class FROM objects_cache WHERE key = 'photos/2024/beach.jpg'`,
+    );
+    expect(storageClass.rows[0]?.storage_class).toBe('STANDARD');
 
     // Re-listing the same prefix must not duplicate rows.
     await replaceListing(appDb, PROFILE_ID, 'my-bucket', 'photos/', {

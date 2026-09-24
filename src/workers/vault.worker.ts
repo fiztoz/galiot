@@ -13,6 +13,7 @@ import {
   type VaultRequest,
   type VaultResponse,
   type VaultMethod,
+  type FolderStatsResult,
 } from '../vault/protocol';
 
 let vault: VaultManager | null = null;
@@ -45,6 +46,66 @@ function makeS3Client(profile: S3ProfileConfig, creds: CredentialPlaintext): S3C
     secretAccessKey: creds.secretAccessKey,
     sessionToken: creds.sessionToken,
   });
+}
+
+/**
+ * Walks a folder subtree depth-first with delimiter listing, collecting every
+ * directory and file entry for an exact roll-up (roadmap 2.4). Capped so a
+ * single click can never run away on a huge bucket.
+ */
+async function collectFolderStats(
+  client: S3Client,
+  rootKey: string,
+  maxEntries: number,
+): Promise<FolderStatsResult> {
+  const directories: string[] = [];
+  const files: FolderStatsResult['files'] = [];
+  const stack: string[] = [rootKey];
+
+  let entryCount = 0;
+  let truncated = false;
+
+  while (stack.length > 0 && !truncated) {
+    const prefix = stack.pop() as string;
+    let continuationToken: string | undefined;
+
+    do {
+      const page = await client.listObjects(prefix, {
+        delimiter: '/',
+        maxKeys: 1000,
+        continuationToken,
+      });
+
+      for (const childPrefix of page.prefixes) {
+        entryCount += 1;
+        if (entryCount > maxEntries) {
+          truncated = true;
+          break;
+        }
+        directories.push(childPrefix);
+        stack.push(childPrefix);
+      }
+
+      for (const object of page.objects) {
+        entryCount += 1;
+        if (entryCount > maxEntries) {
+          truncated = true;
+          break;
+        }
+        files.push({
+          key: object.key,
+          size: object.size,
+          lastModified: object.lastModified,
+          eTag: object.eTag,
+          storageClass: object.storageClass,
+        });
+      }
+
+      continuationToken = page.isTruncated ? page.nextContinuationToken : undefined;
+    } while (continuationToken && !truncated);
+  }
+
+  return { directories, files, truncated, entryCount };
 }
 
 async function dispatch<M extends VaultMethod>(
@@ -105,6 +166,12 @@ async function dispatch<M extends VaultMethod>(
       }
     }
 
+    case 's3.cors': {
+      const p = params as { profile: S3ProfileConfig; method?: string };
+      const client = makeS3Client(p.profile, { accessKeyId: '', secretAccessKey: '' });
+      return client.checkCors(p.method ?? 'GET');
+    }
+
     case 's3.list': {
       const p = params as NonNullable<VaultRequest<'s3.list'>['params']>;
       const creds = await resolveCredentials(p.credentials);
@@ -114,6 +181,13 @@ async function dispatch<M extends VaultMethod>(
         maxKeys: p.maxKeys,
         continuationToken: p.continuationToken,
       });
+    }
+
+    case 's3.folderStats': {
+      const p = params as NonNullable<VaultRequest<'s3.folderStats'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      const client = makeS3Client(p.profile, creds);
+      return collectFolderStats(client, p.rootKey, p.maxEntries ?? 20000);
     }
 
     case 's3.delete': {

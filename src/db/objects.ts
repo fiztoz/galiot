@@ -62,7 +62,7 @@ export async function replaceListing(
           obj.size,
           obj.eTag,
           obj.lastModified,
-          null,
+          obj.storageClass,
           null,
         ],
       );
@@ -155,4 +155,74 @@ export async function presignDownload(
     expiresIn,
   });
   return url;
+}
+
+/**
+ * Walks a remote folder subtree (worker-side, paginated + capped) and upserts
+ * every discovered directory and file into `objects_cache`, so the recursive
+ * CTE can produce an exact roll-up.
+ */
+export async function harvestFolderStats(
+  db: AppDB,
+  profile: ConnectionRow,
+  rootKey: string,
+  maxEntries = 20000,
+): Promise<{ truncated: boolean; entryCount: number }> {
+  const sealed = await getSealedCredentials(db, profile.id);
+  const stats = await vaultService.call('s3.folderStats', {
+    profile: profileConfig(profile),
+    credentials: { sealed },
+    rootKey,
+    maxEntries,
+  });
+
+  await db.transaction(async (tx) => {
+    for (const key of stats.directories) {
+      await tx.query(
+        `INSERT INTO objects_cache
+           (profile_id, bucket, key, prefix, filename, is_dir, size, cached_at)
+         VALUES ($1, $2, $3, $4, $5, true, 0, NOW())
+         ON CONFLICT (profile_id, bucket, key) DO UPDATE
+           SET prefix = EXCLUDED.prefix,
+               filename = EXCLUDED.filename,
+               cached_at = NOW()`,
+        [profile.id, profile.bucket, key, parentPrefixOf(key), lastSegment(key)],
+      );
+    }
+
+    for (const file of stats.files) {
+      await tx.query(
+        `INSERT INTO objects_cache
+           (profile_id, bucket, key, prefix, filename, is_dir, size, etag, last_modified, storage_class, cached_at)
+         VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, NOW())
+         ON CONFLICT (profile_id, bucket, key) DO UPDATE
+           SET prefix = EXCLUDED.prefix,
+               filename = EXCLUDED.filename,
+               size = EXCLUDED.size,
+               etag = EXCLUDED.etag,
+               last_modified = EXCLUDED.last_modified,
+               storage_class = EXCLUDED.storage_class,
+               cached_at = NOW()`,
+        [
+          profile.id,
+          profile.bucket,
+          file.key,
+          parentPrefixOf(file.key),
+          lastSegment(file.key),
+          file.size,
+          file.eTag,
+          file.lastModified,
+          file.storageClass,
+        ],
+      );
+    }
+  });
+
+  return { truncated: stats.truncated, entryCount: stats.entryCount };
+}
+
+/** Parent folder prefix of a key, e.g. 'a/b/c.txt' → 'a/b/'. */
+function parentPrefixOf(key: string): string {
+  const slash = key.lastIndexOf('/');
+  return slash === -1 ? '' : key.slice(0, slash + 1);
 }

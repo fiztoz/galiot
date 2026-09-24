@@ -11,7 +11,14 @@ export interface S3ClientOptions {
 }
 
 export interface ListObjectsResult {
-  objects: { key: string; lastModified: string; size: number; eTag: string }[];
+  objects: {
+    key: string;
+    lastModified: string;
+    size: number;
+    eTag: string;
+    /** ListObjectsV2 returns StorageClass per key (absent on some providers). */
+    storageClass: string | null;
+  }[];
   prefixes: string[];
   isTruncated: boolean;
   nextContinuationToken?: string;
@@ -110,6 +117,7 @@ export class S3Client {
       lastModified: node.querySelector('LastModified')?.textContent || '',
       size: parseInt(node.querySelector('Size')?.textContent || '0', 10),
       eTag: node.querySelector('ETag')?.textContent || '',
+      storageClass: node.querySelector('StorageClass')?.textContent || null,
     }));
 
     const prefixes = Array.from(doc.querySelectorAll('CommonPrefixes Prefix')).map(node => node.textContent || '');
@@ -251,24 +259,35 @@ export class S3Client {
     if (!res.ok && res.status !== 204) throw new Error(`AbortMultipartUpload failed: ${res.statusText}`);
   }
 
-  public async checkCors(): Promise<CorsCheckResult> {
+  /**
+   * Sends a CORS preflight for the given method. Runs unauthenticated, so the
+   * worker can supply its own origin (workers have no `window`).
+   */
+  public async checkCors(
+    method = 'GET',
+    origin = globalThis.location?.origin ?? '',
+  ): Promise<CorsCheckResult> {
     const url = this.buildUrl();
     const res = await fetch(url.toString(), {
       method: 'OPTIONS',
       headers: {
-        'Origin': window.location.origin,
-        'Access-Control-Request-Method': 'GET',
+        'Origin': origin,
+        'Access-Control-Request-Method': method,
       },
     });
-    
+
     if (!res.ok) {
-        return { allowed: false, methods: [] };
+      return { allowed: false, methods: [] };
     }
-    
+
+    const allowOrigin = res.headers.get('Access-Control-Allow-Origin');
+    const originAllowed =
+      allowOrigin === '*' || (allowOrigin !== null && allowOrigin === origin);
     const methods = res.headers.get('Access-Control-Allow-Methods');
+
     return {
-        allowed: true,
-        methods: methods ? methods.split(',').map(m => m.trim()) : [],
+      allowed: originAllowed,
+      methods: methods ? methods.split(',').map((m) => m.trim()) : [],
     };
   }
 }

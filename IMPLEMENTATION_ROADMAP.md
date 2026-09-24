@@ -28,16 +28,16 @@
 
 **Goal**: Deliver a 60 FPS, virtualized file browser capable of handling hundreds of thousands of objects.
 
-- [ ] **2.1 Virtualized Grid & Table Views**:
+- [x] **2.1 Virtualized Grid & Table Views**:
   - Integrate `@tanstack/react-virtual` for virtualized rendering of 100,000+ objects without DOM strain.
   - Implement multi-select (`Shift + Click`, `Cmd + Click`, lasso selection) matching Galeon desktop behavior.
 - [x] **2.2 Reactive Live Queries**:
   - Connect React components to PGlite via `@electric-sql/pglite-react` (`useLiveQuery`).
   - Eliminate custom global state stores for object listings; let SQL drive the UI.
-- [ ] **2.3 Instant SQL Search & Filtering**:
+- [x] **2.3 Instant SQL Search & Filtering**:
   - Implement trigram-based instant fuzzy searching across object names.
   - Filter by date range, size threshold, and storage class directly via SQL queries.
-- [ ] **2.4 Recursive Folder Size Calculation**:
+- [x] **2.4 Recursive Folder Size Calculation**:
   - Implement recursive CTE queries to roll up directory statistics on hover or demand.
 
 ---

@@ -55,6 +55,27 @@ export interface PresignResult {
   url: string;
 }
 
+export interface CorsResult {
+  allowed: boolean;
+  methods: string[];
+}
+
+export interface FolderStatsResult {
+  /** Every directory key in the subtree (including nested levels). */
+  directories: string[];
+  /** Every file in the subtree. */
+  files: {
+    key: string;
+    size: number;
+    lastModified: string;
+    eTag: string;
+    storageClass: string | null;
+  }[];
+  /** True when the entry cap stopped the walk before the subtree was complete. */
+  truncated: boolean;
+  entryCount: number;
+}
+
 export type VaultMethod =
   | 'vault.create'
   | 'vault.unlock'
@@ -63,8 +84,10 @@ export type VaultMethod =
   | 'vault.verify'
   | 'creds.encrypt'
   | 's3.test'
+  | 's3.cors'
   | 's3.list'
   | 's3.delete'
+  | 's3.folderStats'
   | 's3.presignGet';
 
 export interface VaultRequest<M extends VaultMethod = VaultMethod> {
@@ -82,6 +105,7 @@ export interface VaultParams {
   'vault.verify': { passphrase: string; salt: string; wrappedDek: string };
   'creds.encrypt': { credentials: CredentialPlaintext };
   's3.test': { profile: S3ProfileConfig; credentials: Credentials };
+  's3.cors': { profile: S3ProfileConfig; method?: string };
   's3.list': {
     profile: S3ProfileConfig;
     credentials: Credentials;
@@ -91,6 +115,12 @@ export interface VaultParams {
     continuationToken?: string;
   };
   's3.delete': { profile: S3ProfileConfig; credentials: Credentials; keys: string[] };
+  's3.folderStats': {
+    profile: S3ProfileConfig;
+    credentials: Credentials;
+    rootKey: string;
+    maxEntries?: number;
+  };
   's3.presignGet': {
     profile: S3ProfileConfig;
     credentials: Credentials;
@@ -107,8 +137,10 @@ export type VaultResults = {
   'vault.verify': { valid: boolean };
   'creds.encrypt': { payload: EncryptedPayload };
   's3.test': TestConnectionResult;
+  's3.cors': CorsResult;
   's3.list': ListObjectsResult;
   's3.delete': { deleted: string[]; errors: { key: string; code: string; message: string }[] };
+  's3.folderStats': FolderStatsResult;
   's3.presignGet': PresignResult;
 };
 
