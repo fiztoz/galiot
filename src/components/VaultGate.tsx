@@ -43,13 +43,26 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       }
     })();
 
+    // Covers both idle auto-lock and an explicit vault deletion: if the vault
+    // no longer exists, fall back to the create screen instead of unlock.
     const unsubscribe = vaultService.onLocked(() => {
       if (cancelled) return;
-      setState('unlock');
       setPassword('');
       setConfirmPassword('');
-      setNotice('Vault auto-locked after inactivity.');
       onUnlockChange?.(false);
+      setState('unlock');
+      setNotice('Vault auto-locked after inactivity.');
+
+      void (async () => {
+        try {
+          if (!(await vaultExists(db))) {
+            setNotice('The vault was deleted. Create a new one to continue.');
+            setState('create');
+          }
+        } catch {
+          // Leave the unlock screen as-is; the user can retry.
+        }
+      })();
     });
 
     return () => {

@@ -7,24 +7,29 @@ import {
   ShieldCheck,
   AlertTriangle,
   CheckCircle2,
+  Trash2,
 } from 'lucide-react';
 import type { AppDB } from '../db/client';
 import { downloadVaultBackup, exportVault, importVault } from '../vault/export';
-import { lockVault } from '../vault/repository';
+import { deleteVault, lockVault } from '../vault/repository';
 
 interface VaultSettingsProps {
   db: AppDB;
   onLocked: () => void;
+  /** Called after the vault has been erased, so the shell can reset itself. */
+  onDeleted?: () => void;
 }
 
 /**
  * Vault backup/restore. The export is ciphertext-only; the import passphrase is
  * verified inside the vault worker (never on the main thread).
  */
-export function VaultSettings({ db, onLocked }: VaultSettingsProps) {
+export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
   const [busy, setBusy] = useState<'export' | 'import' | 'lock' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deletePhrase, setDeletePhrase] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const run = async (action: () => Promise<string | void>) => {
@@ -68,6 +73,18 @@ export function VaultSettings({ db, onLocked }: VaultSettingsProps) {
       setBusy('lock');
       await lockVault();
       onLocked();
+    }).finally(() => setBusy(null));
+
+  const handleDeleteVault = () =>
+    run(async () => {
+      setBusy('lock');
+      if (deletePhrase !== 'DELETE') {
+        throw new Error('Type DELETE exactly to confirm.');
+      }
+      await deleteVault(db);
+      setConfirmDelete(false);
+      setDeletePhrase('');
+      onDeleted?.();
     }).finally(() => setBusy(null));
 
   return (
@@ -140,6 +157,63 @@ export function VaultSettings({ db, onLocked }: VaultSettingsProps) {
         <ShieldCheck size={13} className="flex-none mt-0.5" />
         Restoring replaces every connection and the transfer ledger in this browser.
       </p>
+
+      <div className="pt-3 border-t border-red-100 dark:border-red-900/40">
+        {!confirmDelete ? (
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            disabled={busy !== null}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors disabled:opacity-50"
+          >
+            <Trash2 size={13} />
+            Delete vault and start over
+          </button>
+        ) : (
+          <div className="space-y-2 rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50/60 dark:bg-red-950/25 p-3">
+            <p className="text-xs font-medium text-red-700 dark:text-red-400">
+              This permanently erases everything in this browser:
+            </p>
+            <ul className="text-[11px] text-red-600/90 dark:text-red-400/90 list-disc pl-4 space-y-0.5">
+              <li>the vault key and every stored connection</li>
+              <li>the cached object listing</li>
+              <li>transfer history and generated share links</li>
+            </ul>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+              Backups you already exported are not affected. This cannot be undone.
+            </p>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={deletePhrase}
+                onChange={(e) => setDeletePhrase(e.target.value)}
+                placeholder="Type DELETE to confirm"
+                aria-label="Type DELETE to confirm"
+                className="flex-1 px-2.5 py-1.5 text-xs bg-white dark:bg-zinc-950 border border-red-200 dark:border-red-900 rounded-lg focus:outline-none focus:ring-1 focus:ring-red-500 dark:text-zinc-100"
+              />
+              <button
+                type="button"
+                onClick={() => void handleDeleteVault()}
+                disabled={busy !== null || deletePhrase !== 'DELETE'}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {busy === 'lock' ? <Loader2 size={12} className="animate-spin" /> : 'Erase everything'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmDelete(false);
+                  setDeletePhrase('');
+                }}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

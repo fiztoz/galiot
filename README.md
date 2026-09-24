@@ -122,4 +122,5 @@ The complete research and technical specification suite for Galiot:
 | Presigned links | Cannot be revoked once issued | A presigned URL is a self-contained bearer token; only rotating the signing key invalidates it |
 | Storage persistence | Safari may evict IndexedDB data after 7 days without user interaction | Platform storage policy; an installed PWA is exempt |
 | Folder sizes | Exact only for folders you have visited or scanned with "Exact size" | The cache is populated by browsing; uncached branches are not included |
+| Recovering from a lost vault | Impossible without a passphrase or an exported backup | By design: Galiot cannot read its own vault. Export a backup from Vault settings |
 | Transfer checksums | Verified on demand, not continuously | ETags are content MD5s only for single-part, unencrypted uploads; multipart ETags are composite |

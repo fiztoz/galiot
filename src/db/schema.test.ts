@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { runMigrations } from './migrations';
+import { wipeVaultData } from '../vault/repository';
 import { replaceListing } from './objects';
 import type { AppDB } from './client';
 
@@ -231,6 +232,75 @@ describe('explorer SQL patterns', () => {
     );
     expect(Number(res.rows[0]?.total)).toBe(3500);
 
+    await db.close();
+  });
+});
+
+describe('wipeVaultData (vault delete)', () => {
+  test('empties every table but leaves a usable schema', async () => {
+    const db = await freshDb();
+    await runMigrations(db);
+    await seedProfile(db);
+
+    await db.query(
+      `INSERT INTO objects_cache (profile_id, bucket, key, prefix, filename, is_dir, size)
+       VALUES ($1, 'my-bucket', 'a/b.txt', 'a/', 'b.txt', false, 10)`,
+      [PROFILE_ID],
+    );
+    await db.query(
+      `INSERT INTO transfer_tasks (id, profile_id, direction, remote_key, file_size, bytes_transferred, status)
+       VALUES ('22222222-2222-4222-8222-222222222222', $1, 'upload', 'a/b.txt', 10, 0, 'completed')`,
+      [PROFILE_ID],
+    );
+    await db.query(
+      `INSERT INTO transfer_parts (task_id, part_number, start_byte, end_byte, status)
+       VALUES ('22222222-2222-4222-8222-222222222222', 1, 0, 9, 'completed')`,
+    );
+    await db.query(
+      `INSERT INTO presigned_history (id, profile_id, bucket, key, url, permission, expires_at)
+       VALUES ('33333333-3333-4333-8333-333333333333', $1, 'my-bucket', 'a/b.txt', 'https://x', 'read', NOW())`,
+      [PROFILE_ID],
+    );
+    await db.query(
+      `INSERT INTO _meta (key, value) VALUES ('salt', 's'), ('wrapped_dek', 'w')
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    );
+
+    await wipeVaultData(db as unknown as AppDB);
+
+    for (const table of [
+      'profiles',
+      'objects_cache',
+      'transfer_tasks',
+      'transfer_parts',
+      'presigned_history',
+    ]) {
+      const count = await db.query<{ count: number }>(`SELECT COUNT(*) AS count FROM ${table}`);
+      expect(Number(count.rows[0]?.count)).toBe(0);
+    }
+
+    // The vault key material must be gone (only the schema marker may remain).
+    const meta = await db.query<{ key: string }>(`SELECT key FROM _meta ORDER BY key`);
+    expect(meta.rows.map((r) => r.key)).toEqual(['schema_version']);
+
+    // Schema survives, so a new vault can be created without re-migration.
+    await runMigrations(db);
+    const tables = await db.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'profiles'`,
+    );
+    expect(tables.rows).toHaveLength(1);
+
+    await db.close();
+  });
+
+  test('is safe to call twice', async () => {
+    const db = await freshDb();
+    await runMigrations(db);
+    await wipeVaultData(db as unknown as AppDB);
+    await wipeVaultData(db as unknown as AppDB);
+    const meta = await db.query<{ count: number }>(`SELECT COUNT(*) AS count FROM _meta`);
+    expect(Number(meta.rows[0]?.count)).toBe(1);
     await db.close();
   });
 });

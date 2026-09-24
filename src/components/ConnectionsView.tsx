@@ -235,7 +235,14 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
 
             {/* The vault worker broadcasts 'locked'; VaultGate re-locks on its
                 own, so closing the modal is all that is needed here. */}
-            <VaultSettings db={db} onLocked={() => setSettingsOpen(false)} />
+            <VaultSettings
+              db={db}
+              onLocked={() => setSettingsOpen(false)}
+              onDeleted={() => {
+                setSettingsOpen(false);
+                setActiveId(null);
+              }}
+            />
           </div>
         </div>
       )}

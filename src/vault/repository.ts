@@ -62,6 +62,42 @@ export async function lockVault(): Promise<void> {
   await vaultService.call('vault.lock');
 }
 
+/**
+ * Empties every table while keeping the schema in place.
+ *
+ * Split from `deleteVault` so the data wipe is testable without a worker: the
+ * worker only owns the DEK, never the rows.
+ */
+export async function wipeVaultData(db: AppDB): Promise<void> {
+  await db.transaction(async (tx) => {
+    // Child rows first so this stays correct even if a foreign key is missing
+    // in an older database file.
+    await tx.exec(
+      `DELETE FROM transfer_parts;
+       DELETE FROM transfer_tasks;
+       DELETE FROM presigned_history;
+       DELETE FROM objects_cache;
+       DELETE FROM profiles;
+       DELETE FROM _meta;`,
+    );
+    // Migrations key off table existence, but keep the marker tidy.
+    await tx.query(`INSERT INTO _meta (key, value) VALUES ('schema_version', '1')`, []);
+  });
+}
+
+/**
+ * Irreversibly destroys the vault: drops the DEK in the worker and erases every
+ * stored connection, cached object, transfer and generated link.
+ *
+ * Exported vault backups are unaffected — they are files the user already has.
+ */
+export async function deleteVault(db: AppDB): Promise<void> {
+  // Lock first: if the worker still held the DEK, a new vault could in
+  // principle be created before the rows are gone.
+  await lockVault();
+  await wipeVaultData(db);
+}
+
 export async function isVaultUnlocked(): Promise<boolean> {
   const status = await vaultService.call('vault.status');
   return status.unlocked;
