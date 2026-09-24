@@ -1,10 +1,12 @@
 # Galiot — Galeon Parity Matrix & Web Trade-off Analysis
 
-> **⚠️ Hosting correction (2026-09-24):** this document predates the hosting
-> decision and still describes **GitHub Pages**. Galiot ships to **Cloudflare
-> Workers Static Assets** (free tier, $0, static requests free & unlimited).
-> See [docs/STACK_DECISION.md](docs/STACK_DECISION.md) §6, §12 and §13 for the verified decision and sources.
-> This file is kept as the original spec; corrections live in that log.
+> **⚠️ Hosting correction (2026-09-24):** the hosting and cost statements in
+> this document are obsolete. Galiot's build output is a static bundle that any
+> static host or edge CDN can serve; the provider is an interchangeable
+> implementation detail, not a design constraint. See
+> [docs/STACK_DECISION.md](docs/STACK_DECISION.md) for the decision log. This
+> file is kept as the original spec; corrections live there.
+
 
 > *A feature-by-feature evaluation comparing Galeon (Desktop / Rust / Tauri) with Galiot (100% Client-Side Web / GitHub Pages), detailing parity strategies, web trade-offs, and web-native superpowers.*
 
