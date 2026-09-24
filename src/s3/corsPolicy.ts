@@ -76,13 +76,54 @@ export function corsRuleToXml(rule: CorsRule): string {
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch] ?? ch,
     );
 
+  // Every allowed origin is emitted. Emitting only the first would produce a
+  // policy that differs from the one Galiot itself applies, which is worse than
+  // no copy button at all.
+  const origins = rule.allowedOrigins.length > 0 ? rule.allowedOrigins : ['*'];
+
   return [
     '<CORSRule>',
-    `  <AllowedOrigin>${escape(rule.allowedOrigins[0] ?? '*')}</AllowedOrigin>`,
+    ...origins.map((o) => `  <AllowedOrigin>${escape(o)}</AllowedOrigin>`),
     ...rule.allowedMethods.map((m) => `  <AllowedMethod>${escape(m)}</AllowedMethod>`),
     ...rule.allowedHeaders.map((h) => `  <AllowedHeader>${escape(h)}</AllowedHeader>`),
     ...rule.exposeHeaders.map((h) => `  <ExposeHeader>${escape(h)}</ExposeHeader>`),
     `  <MaxAgeSeconds>${rule.maxAgeSeconds}</MaxAgeSeconds>`,
     '</CORSRule>',
   ].join('\n');
+}
+
+/**
+ * The full policy document, byte-for-byte what Galiot sends to the bucket.
+ *
+ * One serializer for every path — the worker's PutBucketCors body, the XML the
+ * user copies, and the file the MinIO command reads — so a policy cannot differ
+ * depending on which path wrote it.
+ */
+export function corsConfigToXml(config: CorsConfiguration): string {
+  const rules = config.rules.map(corsRuleToXml).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<CORSConfiguration>
+${rules}
+</CORSConfiguration>`;
+}
+
+/**
+ * The AWS CLI shape for `put-bucket-cors` / `get-bucket-cors`, which is JSON and
+ * uses plural keys — not the XML the S3 API itself takes.
+ *
+ * Empty collections are omitted rather than sent as `[]`: AWS rejects an empty
+ * `AllowedMethods`, and an empty `ExposeHeaders` is an error on some providers.
+ */
+export function corsConfigToAwsJson(config: CorsConfiguration): string {
+  const rules = config.rules.map((rule) => {
+    const entry: Record<string, unknown> = {};
+    if (rule.allowedOrigins.length > 0) entry.AllowedOrigins = rule.allowedOrigins;
+    if (rule.allowedMethods.length > 0) entry.AllowedMethods = rule.allowedMethods;
+    if (rule.allowedHeaders.length > 0) entry.AllowedHeaders = rule.allowedHeaders;
+    if (rule.exposeHeaders.length > 0) entry.ExposeHeaders = rule.exposeHeaders;
+    if (Number.isFinite(rule.maxAgeSeconds)) entry.MaxAgeSeconds = rule.maxAgeSeconds;
+    return entry;
+  });
+
+  return JSON.stringify({ CORSRules: rules }, null, 2);
 }

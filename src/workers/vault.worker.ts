@@ -2,13 +2,13 @@
 import { VaultManager } from '../vault/vault';
 import { S3Client } from '../s3/client';
 import { AwsClient } from '../lib/aws4fetch';
-import { presignGetUrl, presignPutUrl } from '../s3/presign';
+import { presignGetUrl, presignPutBucketCors, presignPutUrl } from '../s3/presign';
+import { corsConfigToXml } from '../s3/corsPolicy';
 import {
   buildGaleonPreview,
   prepareGaleonImport,
 } from '../vault/galeonImport';
 import type { EncryptedPayload } from '../vault/crypto';
-import type { CorsConfiguration } from '../s3/client';
 import type { SignRequest, SignResponse } from '../transfer/protocol';
 import { BRIDGE_DEFAULT_PORT, BRIDGE_TOKEN_HEADER } from '../bridge/policy';
 import {
@@ -53,33 +53,19 @@ async function signWith(
   return { url: signed.url, method: signed.method, headers: out };
 }
 
-function serializeCorsConfig(config: { rules: CorsConfiguration['rules'] }): string {
-  const escape = (value: string): string =>
-    value.replace(/[&<>"']/g, (ch) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch] ?? ch,
-    );
-
-  const rules = config.rules
-    .map((rule) => {
-      const list = (items: string[], tag: string): string =>
-        items.map((item) => `<${tag}>${escape(item)}</${tag}>`).join('');
-      return (
-        '<CORSRule>' +
-        list(rule.allowedOrigins, 'AllowedOrigin') +
-        list(rule.allowedMethods, 'AllowedMethod') +
-        list(rule.allowedHeaders, 'AllowedHeader') +
-        list(rule.exposeHeaders, 'ExposeHeader') +
-        `<MaxAgeSeconds>${rule.maxAgeSeconds}</MaxAgeSeconds>` +
-        '</CORSRule>'
-      );
-    })
-    .join('');
-
-  return `<?xml version="1.0" encoding="UTF-8"?><CORSConfiguration>${rules}</CORSConfiguration>`;
-}
-
 function bridgeUrl(path: string): string {
   return `http://127.0.0.1:${BRIDGE_DEFAULT_PORT}${path}`;
+}
+
+/** A SigV4 signer for a profile's region, from already-resolved credentials. */
+function signerFor(creds: CredentialPlaintext, region: string): AwsClient {
+  return new AwsClient({
+    accessKeyId: creds.accessKeyId,
+    secretAccessKey: creds.secretAccessKey,
+    sessionToken: creds.sessionToken,
+    region,
+    service: 's3',
+  });
 }
 
 async function probeBridge(
@@ -398,19 +384,13 @@ async function dispatch<M extends VaultMethod>(
       const p = params as NonNullable<VaultRequest<'s3.cors.putViaBridge'>['params']>;
       const creds = await resolveCredentials(p.credentials);
       const client = makeS3Client(p.profile, creds);
-      const signer = new AwsClient({
-        accessKeyId: creds.accessKeyId,
-        secretAccessKey: creds.secretAccessKey,
-        sessionToken: creds.sessionToken,
-        region: p.profile.region,
-        service: 's3',
-      });
+      const signer = signerFor(creds, p.profile.region);
 
       // Sign here, forward there: the DEK and secret never leave this worker,
       // and the bridge only ever sees a normal SigV4-signed S3 request.
       const url = client.objectUrl(undefined, { cors: '' });
       const signed = await signWith(signer, 'PUT', url, { 'content-type': 'application/xml' });
-      const body = serializeCorsConfig(p.config);
+      const body = corsConfigToXml(p.config);
 
       const result = await forwardViaBridge(p.origin, p.token, {
         target: signed.url,
@@ -425,6 +405,19 @@ async function dispatch<M extends VaultMethod>(
         body: result.body?.slice(0, 500),
         via: 'bridge' as const,
       };
+    }
+
+    case 's3.cors.presign': {
+      const p = params as NonNullable<VaultRequest<'s3.cors.presign'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      const expiresIn = p.expiresIn ?? 3600;
+      const url = await presignPutBucketCors(
+        signerFor(creds, p.profile.region),
+        p.profile,
+        'application/xml',
+        expiresIn,
+      );
+      return { url, expiresIn };
     }
 
     case 's3.cors.delete': {

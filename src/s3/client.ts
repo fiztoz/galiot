@@ -1,5 +1,6 @@
 import { AwsClient } from '../lib/aws4fetch';
 import { buildS3Url } from './url';
+import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
 
 export interface S3ClientOptions {
   endpoint: string;
@@ -136,20 +137,22 @@ export class S3Client {
     if (!res.ok) throw new Error(`ListObjects failed: ${res.statusText}`);
 
     const text = await res.text();
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(text, 'text/xml');
 
-    const objects = Array.from(doc.querySelectorAll('Contents')).map(node => ({
-      key: node.querySelector('Key')?.textContent || '',
-      lastModified: node.querySelector('LastModified')?.textContent || '',
-      size: parseInt(node.querySelector('Size')?.textContent || '0', 10),
-      eTag: node.querySelector('ETag')?.textContent || '',
-      storageClass: node.querySelector('StorageClass')?.textContent || null,
+    const objects = xmlBlocks(text, 'Contents').map((block) => ({
+      key: xmlFirst(block, 'Key') ?? '',
+      lastModified: xmlFirst(block, 'LastModified') ?? '',
+      size: parseInt(xmlFirst(block, 'Size') ?? '0', 10),
+      eTag: xmlFirst(block, 'ETag') ?? '',
+      storageClass: xmlFirst(block, 'StorageClass') ?? null,
     }));
 
-    const prefixes = Array.from(doc.querySelectorAll('CommonPrefixes Prefix')).map(node => node.textContent || '');
-    const isTruncated = doc.querySelector('IsTruncated')?.textContent === 'true';
-    const nextContinuationToken = doc.querySelector('NextContinuationToken')?.textContent || undefined;
+    const prefixes = xmlBlocks(text, 'CommonPrefixes').map(
+      (block) => xmlFirst(block, 'Prefix') ?? '',
+    );
+    // Trimmed here, and only here: the reader is verbatim so object keys keep
+    // any leading/trailing spaces S3 allows.
+    const isTruncated = (xmlFirst(text, 'IsTruncated') ?? '').trim() === 'true';
+    const nextContinuationToken = xmlFirst(text, 'NextContinuationToken');
 
     return { objects, prefixes, isTruncated, nextContinuationToken };
   }
@@ -220,14 +223,12 @@ export class S3Client {
     if (!res.ok) throw new Error(`DeleteObjects failed: ${res.statusText}`);
     
     const text = await res.text();
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(text, 'text/xml');
-    
-    const deleted = Array.from(doc.querySelectorAll('Deleted Key')).map(node => node.textContent || '');
-    const errors = Array.from(doc.querySelectorAll('Error')).map(node => ({
-      key: node.querySelector('Key')?.textContent || '',
-      code: node.querySelector('Code')?.textContent || '',
-      message: node.querySelector('Message')?.textContent || '',
+
+    const deleted = xmlBlocks(text, 'Deleted').map((block) => xmlFirst(block, 'Key') ?? '');
+    const errors = xmlBlocks(text, 'Error').map((block) => ({
+      key: xmlFirst(block, 'Key') ?? '',
+      code: xmlFirst(block, 'Code') ?? '',
+      message: xmlFirst(block, 'Message') ?? '',
     }));
     
     return { deleted, errors };
@@ -242,9 +243,7 @@ export class S3Client {
     if (!res.ok) throw new Error(`CreateMultipartUpload failed: ${res.statusText}`);
     
     const text = await res.text();
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(text, 'text/xml');
-    const uploadId = doc.querySelector('UploadId')?.textContent;
+    const uploadId = xmlFirst(text, 'UploadId');
     if (!uploadId) throw new Error('Failed to parse UploadId');
     return uploadId;
   }
@@ -296,21 +295,14 @@ export class S3Client {
     if (res.status === 404) return { rules: [] };
     if (!res.ok) throw new Error(`GetBucketCors failed: ${res.status} ${res.statusText}`);
 
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/xml');
-    const rules: CorsRule[] = [];
-
-    doc.querySelectorAll('CORSRule').forEach((node) => {
-      const collect = (tag: string): string[] =>
-        Array.from(node.querySelectorAll(tag)).map((el) => el.textContent ?? '').filter(Boolean);
-
-      rules.push({
-        allowedOrigins: collect('AllowedOrigin'),
-        allowedMethods: collect('AllowedMethod'),
-        allowedHeaders: collect('AllowedHeader'),
-        exposeHeaders: collect('ExposeHeader'),
-        maxAgeSeconds: parseInt(node.querySelector('MaxAgeSeconds')?.textContent ?? '0', 10),
-      });
-    });
+    const text = await res.text();
+    const rules: CorsRule[] = xmlBlocks(text, 'CORSRule').map((block) => ({
+      allowedOrigins: xmlTextValues(block, 'AllowedOrigin'),
+      allowedMethods: xmlTextValues(block, 'AllowedMethod'),
+      allowedHeaders: xmlTextValues(block, 'AllowedHeader'),
+      exposeHeaders: xmlTextValues(block, 'ExposeHeader'),
+      maxAgeSeconds: parseInt(xmlFirst(block, 'MaxAgeSeconds') ?? '0', 10),
+    }));
 
     return { rules };
   }

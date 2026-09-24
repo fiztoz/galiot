@@ -1,13 +1,17 @@
 /**
- * Minimal XML element reader for Node/Bun tooling.
+ * Minimal XML element reader, used by *both* the app and the Bun tooling.
  *
- * The browser app uses `DOMParser` (see src/s3/client.ts), but Bun has no DOM.
- * The integrity harness runs in Bun, so it needs a tiny parser for the handful
- * of S3 XML responses we care about. This is intentionally *not* a general XML
- * parser: it only extracts element text by tag name, which is all S3's
- * machine-generated responses require.
+ * This started as a Bun-only shim because the browser had `DOMParser`. It is now
+ * the only reader: `DOMParser` is not exposed to dedicated Web Workers in
+ * Chrome (verified: `typeof DOMParser === 'undefined'` in a worker, `function`
+ * on the main thread), and every S3 response is parsed inside the vault or
+ * transfer worker. Using the DOM API there failed at runtime with
+ * "DOMParser is not defined" — which the diagnostics then misreported as a CORS
+ * block, making a working bucket look unreachable.
  *
- * Namespaced tags are normalised (`CORSRule`, `s3:CORSRule` → same key).
+ * This is intentionally *not* a general XML parser: it extracts element text by
+ * tag name, which is all S3's machine-generated responses require. Namespaced
+ * tags are normalised (`CORSRule`, `s3:CORSRule` → same key).
  */
 
 function decodeEntities(value: string): string {
@@ -20,13 +24,20 @@ function decodeEntities(value: string): string {
     .replace(/&amp;/g, '&');
 }
 
-/** Returns the text content of every `<tag>` element, document order preserved. */
+/**
+ * Returns the text content of every `<tag>` element, document order preserved.
+ *
+ * Values are returned verbatim — no trimming — because that is what
+ * `DOMParser.textContent` did and S3 object keys may legitimately begin or end
+ * with a space. Callers parsing numbers or booleans trim (or rely on
+ * `parseInt`, which tolerates surrounding whitespace).
+ */
 export function xmlTextValues(xml: string, tag: string): string[] {
   const pattern = new RegExp(`<(?:[\\w-]+:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[\\w-]+:)?${tag}>`, 'g');
   const values: string[] = [];
 
   for (const match of xml.matchAll(pattern)) {
-    values.push(decodeEntities((match[1] ?? '').trim()));
+    values.push(decodeEntities(match[1] ?? ''));
   }
   return values;
 }

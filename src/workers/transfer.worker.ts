@@ -19,6 +19,7 @@ import type {
   UploadJob,
 } from '../transfer/protocol';
 import { buildS3Url } from '../s3/url';
+import { xmlBlocks, xmlFirst } from '../s3/xml';
 
 /** Per-part retry policy for transient network failures. */
 const MAX_ATTEMPTS = 3;
@@ -457,9 +458,7 @@ class TransferEngine {
     if (!res.ok) {
       throw new Error(`CreateMultipartUpload failed: ${res.status} ${res.statusText}`);
     }
-    const uploadId = new DOMParser()
-      .parseFromString(await res.text(), 'text/xml')
-      .querySelector('UploadId')?.textContent;
+    const uploadId = xmlFirst(await res.text(), 'UploadId');
     if (!uploadId) throw new Error('Failed to parse UploadId from response');
     return uploadId;
   }
@@ -475,13 +474,13 @@ class TransferEngine {
       throw new Error(`ListParts failed: ${res.status} ${res.statusText}`);
     }
 
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/xml');
+    const text = await res.text();
     const parts = new Map<number, CompletedPart>();
-    doc.querySelectorAll('Part').forEach((node) => {
-      const partNumber = parseInt(node.querySelector('PartNumber')?.textContent ?? '0', 10);
-      const size = parseInt(node.querySelector('Size')?.textContent ?? '0', 10);
-      const eTag = node.querySelector('ETag')?.textContent ?? '';
-      if (!partNumber) return;
+    for (const block of xmlBlocks(text, 'Part')) {
+      const partNumber = parseInt(xmlFirst(block, 'PartNumber') ?? '0', 10);
+      const size = parseInt(xmlFirst(block, 'Size') ?? '0', 10);
+      const eTag = xmlFirst(block, 'ETag') ?? '';
+      if (!partNumber) continue;
       parts.set(partNumber, {
         partNumber,
         eTag,
@@ -489,7 +488,7 @@ class TransferEngine {
         startByte: 0,
         endByte: 0,
       });
-    });
+    }
     return parts;
   }
 
