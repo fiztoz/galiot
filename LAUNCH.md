@@ -22,6 +22,13 @@ Everything below is a decision or a secret that the code cannot provide. Phases
 - [ ] Add a connection and confirm the connection test passes.
 - [ ] Confirm the bucket CORS verdict in the wizard; apply the recommended rule
       if it reports a problem (Phase 5.1).
+- [ ] **Add the production origin to the bucket CORS policy.** A rule for
+      `http://localhost:5173` does not cover the hosted URL: CORS is decided by
+      the bucket, not by where the app is hosted, so a deployed build is blocked
+      until the production origin is listed. Keep the localhost rule as a
+      second entry so local development keeps working. The wizard suggests the
+      right origin automatically (it uses `window.location.origin`), so no code
+      change is needed — only the bucket policy.
 - [ ] Run the transfer integrity suite: `bun run test:integrity`
       (single-PUT, multipart + composite ETag, parallel parts, resume, ranges).
 - [ ] Run the engine benchmark: `bun run bench` (results in
