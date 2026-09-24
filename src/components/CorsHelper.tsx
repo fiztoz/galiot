@@ -11,7 +11,13 @@ import {
   Cable,
 } from 'lucide-react';
 import { S3Client, type CorsConfiguration, type CorsRule } from '../s3/client';
-import { corsRuleToXml, evaluateCors, type CorsVerdict } from '../s3/corsPolicy';
+import {
+  corsConfigToAwsJson,
+  corsRuleToXml,
+  evaluateCors,
+  type CorsVerdict,
+} from '../s3/corsPolicy';
+import { buildCorsRemediation, type RemediationOption } from '../s3/corsRemediation';
 import { canUseVirtualHosting } from '../s3/url';
 import type { CorsDiagnostic } from '../s3/diagnostics';
 import { shouldOfferBridge } from '../bridge/environment';
@@ -78,6 +84,56 @@ export function CorsHelper({
   const [bridgeStatus, setBridgeStatus] = useState<
     | { state: 'unknown' | 'checking' | 'up' | 'down'; message?: string }
   >({ state: 'unknown' });
+  // Remediation command state. The presigned URL is fetched on demand: it
+  // expires, and a stale one would only produce a confusing 403.
+  const [remediation, setRemediation] = useState<RemediationOption[] | null>(null);
+  const [remediationBusy, setRemediationBusy] = useState(false);
+  const [activeOption, setActiveOption] = useState<RemediationOption['id']>('curl');
+  const [copiedScript, setCopiedScript] = useState(false);
+
+  // Derived before the callbacks below, which depend on them.
+  const recommended = S3Client.recommendedCorsRule(origin);
+  const evaluation = config ? evaluateCors(config, origin) : null;
+  const verdict = evaluation?.verdict ?? null;
+
+  /**
+   * Builds the copy-paste commands. Each one is self-contained: no `mc alias
+   * set`, no `aws configure`, no hand-written policy file. A user cannot
+   * configure those tools before they have a profile, and cannot get a profile
+   * until CORS is fixed — so the commands carry everything themselves.
+   */
+  const buildRemediation = useCallback(
+    async (withSecrets: boolean) => {
+      setRemediationBusy(true);
+      setError(null);
+      try {
+        const { url } = await vaultService.call('s3.cors.presign', {
+          profile,
+          credentials: { plain: credentials },
+          expiresIn: 3600,
+        });
+
+        setRemediation(
+          buildCorsRemediation({
+            endpoint: profile.endpoint,
+            region: profile.region,
+            bucket: profile.bucket,
+            config: { rules: [recommended] },
+            presignedUrl: url,
+            accessKeyId: credentials.accessKeyId,
+            secretAccessKey: credentials.secretAccessKey,
+            includeSecrets: withSecrets,
+            shell: /windows/i.test(navigator.userAgent) ? 'powershell' : 'posix',
+          }),
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setRemediationBusy(false);
+      }
+    },
+    [credentials, profile, recommended],
+  );
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
@@ -96,10 +152,6 @@ export function CorsHelper({
     if (initialConfig === undefined) void fetchConfig();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialConfig]);
-
-  const recommended = S3Client.recommendedCorsRule(origin);
-  const evaluation = config ? evaluateCors(config, origin) : null;
-  const verdict = evaluation?.verdict ?? null;
 
   const apply = useCallback(
     async (append: boolean) => {
@@ -212,6 +264,17 @@ export function CorsHelper({
     }
   }, [recommended]);
 
+  /** Copies a generated remediation block, with its own copied-flag. */
+  const copyScript = useCallback(async (script: string) => {
+    try {
+      await navigator.clipboard.writeText(script);
+      setCopiedScript(true);
+      setTimeout(() => setCopiedScript(false), 1500);
+    } catch {
+      setError('Clipboard unavailable in this context.');
+    }
+  }, []);
+
   const copy = VERDICT_COPY[verdict ?? 'none'];
   const needsPathStyle = !canUseVirtualHosting(profile.endpoint) && !profile.pathStyle;
   // Verified in a real browser: when CORS is broken the browser blocks the
@@ -219,6 +282,15 @@ export function CorsHelper({
   const corsBlocksTheFix = diagnosis?.reason === 'cors-blocked' || verdict === 'none';
   // Local development only: a deployed build's visitors have no bridge to use.
   const bridgeOffered = corsBlocksTheFix && shouldOfferBridge();
+
+  // Build the safe variant (no secret in the command) the first time the
+  // commands are needed, since the presigned URL expires.
+  useEffect(() => {
+    if (corsBlocksTheFix && remediation === null && !remediationBusy) {
+      void buildRemediation(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [corsBlocksTheFix, remediation, remediationBusy]);
 
   return (
     <div className="p-3 text-sm rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 space-y-3">
@@ -310,20 +382,107 @@ export function CorsHelper({
         <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/25 p-2.5 space-y-2">
           <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
             Writing a CORS policy is itself a signed cross-origin request, so the browser blocks
-            &ldquo;Apply&rdquo; until a policy exists. Set the rule once from a terminal or console,
-            then reload Galiot.
+            &ldquo;Apply&rdquo; until a policy exists. Pick whichever of these you already have — each
+            one is a complete command, so nothing needs configuring first.
           </p>
-          <div className="space-y-1 text-[10px] font-mono text-zinc-600 dark:text-zinc-300">
-            <p className="text-zinc-500 dark:text-zinc-400"># MinIO</p>
-            <code className="block px-2 py-1 rounded bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900 break-all">
-              mc cors set myminio/{profile.bucket} cors.xml
-            </code>
-            <p className="text-zinc-500 dark:text-zinc-400 pt-1"># AWS S3</p>
-            <code className="block px-2 py-1 rounded bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900 break-all">
-              aws s3api put-bucket-cors --bucket {profile.bucket} --cors-configuration file://cors.json
-            </code>
-            <p className="text-zinc-500 dark:text-zinc-400 pt-1"># Cloudflare R2 (dashboard → bucket → Settings → CORS)</p>
+
+          <div className="flex flex-wrap gap-1" role="tablist" aria-label="CORS remediation method">
+            {(remediation ?? []).map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                role="tab"
+                aria-selected={activeOption === option.id}
+                onClick={() => setActiveOption(option.id)}
+                className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
+                  activeOption === option.id
+                    ? 'bg-teal-600 text-white'
+                    : 'bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900 text-zinc-600 dark:text-zinc-300 hover:bg-amber-50 dark:hover:bg-zinc-900'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+            {remediationBusy && (
+              <span className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] text-zinc-500">
+                <Loader2 size={11} className="animate-spin" />
+                Preparing…
+              </span>
+            )}
           </div>
+
+          {remediation
+            ?.filter((option) => option.id === activeOption)
+            .map((option) => (
+              <div key={option.id} className="space-y-1.5">
+                <p className="text-[10px] text-zinc-500 dark:text-zinc-400">{option.requires}</p>
+
+                {option.id === 'dashboard' ? (
+                  <>
+                    <pre className="p-2 rounded bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900 overflow-x-auto text-[10px] leading-relaxed">
+                      {corsConfigToAwsJson({ rules: [recommended] })}
+                    </pre>
+                    <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                      Paste into your provider&rsquo;s CORS settings (R2: bucket → Settings → CORS
+                      rules). The AWS CLI JSON shape is what every S3-compatible console accepts.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <pre className="p-2 rounded bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900 overflow-x-auto text-[10px] leading-relaxed whitespace-pre-wrap break-all">
+                      {option.script}
+                    </pre>
+                    {option.id === 'curl' && (
+                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                        Paste the whole block into a terminal and run it. The URL carries a signature
+                        for this one request, valid for an hour — no keys, no configuration, and
+                        nothing to install.
+                      </p>
+                    )}
+                  </>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void copyScript(
+                        option.id === 'dashboard'
+                          ? corsConfigToAwsJson({ rules: [recommended] })
+                          : option.script,
+                      )
+                    }
+                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded-md border border-amber-300 dark:border-amber-800 text-zinc-700 dark:text-zinc-300 hover:bg-white dark:hover:bg-zinc-900 transition-colors"
+                  >
+                    {copiedScript ? <Check size={11} /> : <Copy size={11} />}
+                    {copiedScript ? 'Copied' : 'Copy'}
+                  </button>
+
+                  {option.id !== 'curl' && option.id !== 'dashboard' && (
+                    <label className="inline-flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={option.containsSecret}
+                        onChange={(e) => void buildRemediation(e.target.checked)}
+                        disabled={remediationBusy}
+                        className="h-3 w-3 rounded border-zinc-300 dark:border-zinc-600 text-teal-600 focus:ring-teal-500"
+                      />
+                      Fill in my keys
+                    </label>
+                  )}
+                </div>
+
+                {option.containsSecret && (
+                  <p className="flex items-start gap-1.5 text-[10px] text-amber-700 dark:text-amber-400">
+                    <AlertTriangle size={11} className="flex-none mt-0.5" />
+                    <span>
+                      This command now contains your secret key, and your shell saves commands in
+                      its history. Leave it unticked to be prompted for the keys instead.
+                    </span>
+                  </p>
+                )}
+              </div>
+            ))}
         </div>
       )}
 

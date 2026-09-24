@@ -91,6 +91,7 @@ export type VaultMethod =
   | 's3.cors.put'
   | 's3.cors.putViaBridge'
   | 'bridge.health'
+  | 's3.cors.presign'
   | 's3.cors.delete'
   | 's3.list'
   | 's3.delete'
@@ -136,6 +137,11 @@ export interface VaultParams {
   };
   /** Checks whether the companion bridge is running. */
   'bridge.health': { origin: string; token: string };
+  /**
+   * Presigns PutBucketCors so the user can apply the policy with curl, which
+   * needs no S3 tooling, no configuration, and is not subject to CORS.
+   */
+  's3.cors.presign': { profile: S3ProfileConfig; credentials: Credentials; expiresIn?: number };
   's3.cors.delete': { profile: S3ProfileConfig; credentials: Credentials };
   's3.list': {
     profile: S3ProfileConfig;
@@ -202,6 +208,7 @@ export type VaultResults = {
   's3.cors.put': { applied: true };
   's3.cors.putViaBridge': { applied: boolean; status: number; body?: string; via: 'bridge' };
   'bridge.health': { reachable: boolean; error?: string };
+  's3.cors.presign': { url: string; expiresIn: number };
   's3.cors.delete': { deleted: true };
   's3.list': ListObjectsResult;
   's3.delete': { deleted: string[]; errors: { key: string; code: string; message: string }[] };

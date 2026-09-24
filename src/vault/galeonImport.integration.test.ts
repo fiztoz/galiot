@@ -5,8 +5,7 @@ import { runMigrations } from '../db/migrations';
 import { insertSealedConnections } from './repository';
 import { VaultManager } from './vault';
 import { buildGaleonPreview, prepareGaleonImport } from './galeonImport';
-import { AwsClient } from '../lib/aws4fetch';
-import { buildS3Url } from '../s3/url';
+import { S3Client } from '../s3/client';
 import type { AppDB } from '../db/client';
 
 /**
@@ -145,29 +144,24 @@ describe('Galeon import end to end', () => {
     expect(decrypted.accessKeyId).toBe(ACCESS_KEY);
     expect(decrypted.secretAccessKey).toBe(SECRET_KEY);
 
-    // 5. And it actually works: the imported row and its sealed keys produce a
-    //    real SigV4-signed ListObjectsV2 the server accepts. (Parsing the XML
-    //    response needs a DOM, which Bun has no DOMParser for; the URL building
-    //    and signing under test here are the part an import can break.)
-    const signer = new AwsClient({
+    // 5. And it actually works: the imported row and its sealed keys list the
+    //    bucket through the real S3 client, including the XML response parsing.
+    const client = new S3Client({
+      endpoint: row.endpoint,
+      region: row.region,
+      bucket: row.bucket,
+      pathStyle: row.path_style,
       accessKeyId: decrypted.accessKeyId,
       secretAccessKey: decrypted.secretAccessKey,
-      region: row.region,
-      service: 's3',
     });
-    const url = buildS3Url(
-      { endpoint: row.endpoint, bucket: row.bucket, pathStyle: row.path_style },
-      undefined,
-      { 'list-type': '2' },
-    );
-    const signed = await signer.sign(url, { method: 'GET' });
-    const response = await fetch(signed.url, { method: 'GET', headers: signed.headers });
+    const listing = await client.listObjects('', { maxKeys: 10 });
 
-    expect(response.status).toBe(200);
+    expect(listing.objects.map((o) => o.key)).toEqual(['reports/q3.csv', 'reports/q4.csv']);
+    expect(listing.objects[0]?.size).toBe(2048);
+    expect(listing.objects[1]?.storageClass).toBe('GLACIER');
     expect(lastAuthorization).toContain('AWS4-HMAC-SHA256');
     expect(lastAuthorization).toContain(ACCESS_KEY);
     expect(lastAuthorization).toContain('/us-east-1/s3/aws4_request');
-    expect(await response.text()).toContain('reports/q3.csv');
 
     vault.lock();
     await db.close();

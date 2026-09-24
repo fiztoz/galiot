@@ -547,5 +547,52 @@ from the repository configuration.
 
 ---
 
+## 14. Re-verification log — 2026-09-24 (pass 6: worker XML parsing)
+
+**Correction: do not use `DOMParser` anywhere in Galiot, including inside Web
+Workers.**
+
+The S3 client originally parsed responses with `new DOMParser()` in
+`src/s3/client.ts` and `src/workers/transfer.worker.ts`, on the assumption that
+the browser global is available wherever the code runs. Every S3 response is
+parsed in the vault or transfer worker, and in Chrome that global does not
+exist. Verified empirically in Chrome 153 (macOS, headless) with a blob-URL
+dedicated worker:
+
+```
+main thread: typeof DOMParser === "function"
+worker:      typeof DOMParser === "undefined"
+             typeof XMLSerializer === "undefined"
+```
+
+The failure mode was worse than a crash: the connection diagnostics classify a
+failed request as a CORS block when the endpoint is reachable, so a perfectly
+healthy bucket reported "the endpoint answered, but the browser blocked the
+response" and offered a CORS fix that could not help. Unit tests could not
+catch it, because Bun has no DOM either way — it was found by driving the real
+UI in a real browser against a mock bucket and reading the dialog.
+
+Correction applied: `src/s3/xml.ts` (previously a Bun-only shim for the
+integrity harness) is now the single reader for both the app and the tooling,
+and no `DOMParser`/`XMLSerializer` reference remains in `src/`. The reader is
+verbatim rather than trimming, matching the `textContent` behaviour it
+replaces, because S3 object keys may legally begin or end with a space.
+
+Sources and scope: this entry claims only the verified Chrome behaviour above
+and the resulting repository state. MDN's `DOMParser` page
+(https://developer.mozilla.org/en-US/docs/Web/API/DOMParser, last modified
+2025-10-13) documents the interface and its `parseFromString` method but does
+not state worker availability, so no spec-level claim is made here. The
+regression guard is `src/s3/corsRemediation.integration.test.ts` plus the
+browser two-phase flow, which exercises the worker path end to end.
+
+Also settled in this pass: the CORS remediation commands no longer assume the
+user has configured `mc` or the AWS CLI, which was impossible anyway — the user
+has no profile until CORS is fixed. Each generated command is self-contained,
+and the default curl path needs no tooling at all because the request is
+presigned in the vault worker.
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*

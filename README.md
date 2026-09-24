@@ -151,7 +151,37 @@ thread. Galeon remains the tool for those connections.
 
 ---
 
-## 7. Optional local bridge (`bun run bridge`)
+## 7. Fixing CORS from a terminal, with nothing pre-configured
+
+When a bucket has no CORS policy, the browser blocks the very request that would
+write one — so Galiot cannot fix it from the page. The CORS helper offers
+commands for that, and **none of them assume you have set anything up first**,
+which matters because you cannot configure `mc` or the AWS CLI until you have a
+profile, and you cannot get a profile until CORS is fixed.
+
+| Option | What you need |
+|---|---|
+| **curl** | Nothing. `curl` is already on your machine |
+| **MinIO client (`mc`)** | The `mc` binary only — the command creates and then removes its own alias |
+| **AWS CLI (`aws`)** | The `aws` binary only — the command sets its own environment |
+| **Provider dashboard** | Your provider's web console — paste the JSON |
+
+The curl path is the shortest: Galiot presigns the `PutBucketCors` request in the
+vault worker and prints a complete copy-paste block. The URL carries a signature
+scoped to that one request, valid for an hour — **the secret key is never in the
+command**, and the request is not from a browser, so CORS does not apply.
+
+The `mc` and `aws` commands prompt for the keys rather than embedding them, so
+they do not end up in your shell history. Tick *Fill in my keys* if you would
+rather paste once, and the helper will warn you that the command then contains
+the secret.
+
+The generated policy always uses your current origin, so a local build suggests
+`http://localhost:5173` and a deployed one suggests your real hostname.
+
+---
+
+## 8. Optional local bridge (`bun run bridge`)
 
 A browser cannot fix a bucket's CORS policy: the request that would write it is
 itself blocked by the missing policy. That is why a browser *worker* cannot do
@@ -186,7 +216,7 @@ Without it, apply the same policy with `mc cors set` / `aws s3api put-bucket-cor
 
 ---
 
-## 8. Known Limitations
+## 9. Known Limitations
 
 | Area | Limitation | Why |
 |---|---|---|
