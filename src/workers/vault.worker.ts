@@ -3,6 +3,8 @@ import { VaultManager } from '../vault/vault';
 import { S3Client } from '../s3/client';
 import { AwsClient } from '../lib/aws4fetch';
 import { presignGetUrl } from '../s3/presign';
+import type { EncryptedPayload } from '../vault/crypto';
+import type { SignRequest, SignResponse } from '../transfer/protocol';
 import {
   VAULT_CHANNEL,
   VAULT_EVENT_CHANNEL,
@@ -17,6 +19,10 @@ import {
 } from '../vault/protocol';
 
 let vault: VaultManager | null = null;
+/** Direct channel to the transfer worker for signing. */
+let transferPort: MessagePort | null = null;
+/** AwsClient cache per profile, wiped whenever the vault locks. */
+const signerCache = new Map<string, AwsClient>();
 
 function emitLocked(): void {
   postMessage({ channel: VAULT_EVENT_CHANNEL, event: 'locked' });
@@ -34,6 +40,67 @@ async function resolveCredentials(credentials: Credentials): Promise<CredentialP
     return credentials.plain;
   }
   return requireUnlocked().decryptCredentials(credentials.sealed);
+}
+
+/**
+ * Resolves a signing client for a profile from the sealed credential blob the
+ * transfer worker forwards. Credentials are decrypted here and never leave this
+ * worker — the transfer worker only ever receives signed requests.
+ */
+async function getSigner(profileId: string, sealed: EncryptedPayload): Promise<AwsClient> {
+  const cached = signerCache.get(profileId);
+  if (cached) return cached;
+
+  const creds = await requireUnlocked().decryptCredentials(sealed);
+  const client = new AwsClient({
+    accessKeyId: creds.accessKeyId,
+    secretAccessKey: creds.secretAccessKey,
+    sessionToken: creds.sessionToken,
+    // Region/endpoint live on the (non-secret) target the transfer worker holds;
+    // SigV4 needs the region, which the worker passes per request when known.
+    region: undefined,
+    service: 's3',
+  });
+  signerCache.set(profileId, client);
+  return client;
+}
+
+/** Signs one request for the transfer worker. */
+async function handleSignRequest(request: SignRequest): Promise<void> {
+  if (!transferPort || request.type !== 'sign') return;
+
+  try {
+    const signer = await getSigner(request.profileId, request.credentials);
+    const headers = new Headers(request.headers);
+    const signed = await signer.sign(new URL(request.url), {
+      method: request.method,
+      headers,
+      body: request.body,
+      // Region is per-connection and non-secret: the transfer worker passes it.
+      aws: { region: request.region },
+    });
+
+    const signedHeaders: Record<string, string> = {};
+    signed.headers.forEach((value, key) => {
+      signedHeaders[key] = value;
+    });
+
+    const response: SignResponse = {
+      type: 'signed',
+      id: request.id,
+      url: signed.url,
+      method: signed.method,
+      headers: signedHeaders,
+    };
+    transferPort.postMessage(response);
+  } catch (err) {
+    const response: SignResponse = {
+      type: 'sign-error',
+      id: request.id,
+      error: err instanceof Error ? err.message : String(err),
+    };
+    transferPort.postMessage(response);
+  }
 }
 
 function makeS3Client(profile: S3ProfileConfig, creds: CredentialPlaintext): S3Client {
@@ -129,6 +196,7 @@ async function dispatch<M extends VaultMethod>(
     }
 
     case 'vault.lock': {
+      signerCache.clear();
       vault?.lock();
       vault = null;
       return { locked: true as const };
@@ -142,6 +210,17 @@ async function dispatch<M extends VaultMethod>(
       const p = params as { passphrase: string; salt: string; wrappedDek: string };
       const valid = await VaultManager.verify(p.passphrase, { salt: p.salt, wrappedDek: p.wrappedDek });
       return { valid };
+    }
+
+    case 'vault.attachTransferPort': {
+      // A port arrives here directly from the main thread; the other end lives
+      // in the transfer worker. From now on this worker signs for it.
+      const p = params as { port: MessagePort };
+      transferPort = p.port;
+      transferPort.onmessage = (event: MessageEvent<SignRequest>) => {
+        void handleSignRequest(event.data);
+      };
+      return { attached: true as const };
     }
 
     case 'creds.encrypt': {

@@ -1,4 +1,5 @@
 import { AwsClient } from '../lib/aws4fetch';
+import { buildS3Url } from './url';
 
 export interface S3ClientOptions {
   endpoint: string;
@@ -70,30 +71,11 @@ export class S3Client {
   }
 
   private buildUrl(key?: string, queryParams?: Record<string, string>): URL {
-    let urlStr = this.endpoint;
-    if (this.pathStyle) {
-      urlStr += `/${this.bucket}`;
-      if (key) {
-        urlStr += `/${key.split('/').map(encodeURIComponent).join('/')}`;
-      }
-    } else {
-      const url = new URL(this.endpoint);
-      url.hostname = `${this.bucket}.${url.hostname}`;
-      urlStr = url.toString();
-      if (key) {
-        urlStr += `/${key.split('/').map(encodeURIComponent).join('/')}`;
-      }
-    }
-    
-    const url = new URL(urlStr);
-    if (queryParams) {
-      for (const [k, v] of Object.entries(queryParams)) {
-        if (v !== undefined && v !== null) {
-          url.searchParams.set(k, v);
-        }
-      }
-    }
-    return url;
+    return buildS3Url(
+      { endpoint: this.endpoint, bucket: this.bucket, pathStyle: this.pathStyle },
+      key,
+      queryParams,
+    );
   }
 
   public async listObjects(prefix?: string, options?: { delimiter?: string; maxKeys?: number; continuationToken?: string }): Promise<ListObjectsResult> {

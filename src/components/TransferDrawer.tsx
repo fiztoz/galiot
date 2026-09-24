@@ -1,0 +1,335 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLiveQuery } from '@electric-sql/pglite-react';
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Pause,
+  Play,
+  Trash2,
+  X,
+  RotateCcw,
+  ListX,
+} from 'lucide-react';
+import type { AppDB, ConnectionRow } from '../db/client';
+import { transferManager, type TransferTaskRow } from '../transfer/manager';
+import { formatBytes } from '../lib/format';
+import { etaSeconds, formatEta } from '../transfer/planner';
+
+interface TransferDrawerProps {
+  db: AppDB;
+}
+
+
+const PROFILE_COLUMNS = `id, name, protocol, endpoint, region, bucket, path_style, storage_class, created_at, updated_at`;
+
+const ACTIVE_STATUSES = new Set(['queued', 'transferring']);
+
+function isFinished(task: TransferTaskRow): boolean {
+  return task.status === 'completed' || task.status === 'failed';
+}
+
+export function TransferDrawer(_props: TransferDrawerProps) {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingResumeRef = useRef<TransferTaskRow | null>(null);
+  const previousActiveRef = useRef(0);
+
+  const tasks = useLiveQuery<TransferTaskRow>(
+    `SELECT id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred,
+            status, speed_bytes_sec, upload_id, error_message, created_at, updated_at
+       FROM transfer_tasks
+      ORDER BY created_at DESC
+      LIMIT 50`,
+  );
+
+  const profiles = useLiveQuery<ConnectionRow>(
+    `SELECT ${PROFILE_COLUMNS} FROM profiles`,
+  );
+
+  const profileById = useMemo(
+    () => new Map((profiles?.rows ?? []).map((p) => [p.id, p] as const)),
+    [profiles],
+  );
+
+  const rows = tasks?.rows ?? [];
+  const activeCount = rows.filter((t) => ACTIVE_STATUSES.has(t.status)).length;
+
+  // Reveal the drawer the moment work starts.
+  useEffect(() => {
+    if (activeCount > previousActiveRef.current) {
+      setOpen(true);
+    }
+    previousActiveRef.current = activeCount;
+  }, [activeCount]);
+
+  const run = useCallback(async (fn: () => Promise<void> | void) => {
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const handlePickForResume = useCallback(
+    (task: TransferTaskRow) => {
+      const profile = profileById.get(task.profile_id);
+      if (!profile) {
+        setError('Connection for this transfer is no longer available.');
+        return;
+      }
+      pendingResumeRef.current = task;
+      fileInputRef.current?.click();
+    },
+    [profileById],
+  );
+
+  const handleResume = useCallback(
+    (task: TransferTaskRow) => {
+      const profile = profileById.get(task.profile_id);
+      if (!profile) {
+        setError('Connection for this transfer is no longer available.');
+        return;
+      }
+
+      if (task.direction === 'upload') {
+        handlePickForResume(task);
+        return;
+      }
+
+      void run(() => transferManager.resumeDownload(profile, task));
+    },
+    [handlePickForResume, profileById, run],
+  );
+
+  const handleFilePicked = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      const task = pendingResumeRef.current;
+      pendingResumeRef.current = null;
+      event.target.value = '';
+      if (!file || !task) return;
+
+      const profile = profileById.get(task.profile_id);
+      if (!profile) {
+        setError('Connection for this transfer is no longer available.');
+        return;
+      }
+      void run(() => transferManager.resumeUpload(profile, task, file));
+    },
+    [profileById, run],
+  );
+
+  return (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleFilePicked}
+        aria-label="Select file to resume upload"
+      />
+
+      <div className="fixed bottom-4 right-4 z-40 w-[min(24rem,calc(100vw-2rem))] flex flex-col items-end gap-2">
+        {error && (
+          <div className="w-full flex items-start justify-between gap-2 rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/60 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+            <span className="break-words">{error}</span>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="flex-none p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/40"
+              aria-label="Dismiss"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
+        {open && rows.length > 0 && (
+          <div className="w-full max-h-[60vh] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-100 dark:border-zinc-800 sticky top-0 bg-white dark:bg-zinc-900">
+              <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
+                Transfers
+                {activeCount > 0 && (
+                  <span className="ml-1.5 text-teal-600 dark:text-teal-400">{activeCount} active</span>
+                )}
+              </span>
+              <div className="flex items-center gap-1">
+                {rows.some(isFinished) && (
+                  <button
+                    type="button"
+                    onClick={() => void run(() => transferManager.clearFinished())}
+                    className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                    title="Clear finished"
+                    aria-label="Clear finished"
+                  >
+                    <ListX size={13} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                  aria-label="Collapse transfers"
+                >
+                  <ChevronDown size={13} />
+                </button>
+              </div>
+            </div>
+
+            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {rows.map((task) => {
+                const total = Number(task.file_size);
+                const done = Number(task.bytes_transferred);
+                const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+                const isActive = ACTIVE_STATUSES.has(task.status);
+                const eta = isActive
+                  ? etaSeconds(Math.max(0, total - done), Number(task.speed_bytes_sec))
+                  : null;
+
+                return (
+                  <li key={task.id} className="px-3 py-2.5">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-0.5 flex-none text-zinc-400">
+                        {task.direction === 'upload' ? (
+                          <ArrowUpFromLine size={14} />
+                        ) : (
+                          <ArrowDownToLine size={14} />
+                        )}
+                      </span>
+
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100"
+                          title={task.remote_key}
+                        >
+                          {task.remote_key}
+                        </p>
+
+                        <div className="mt-1 h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              task.status === 'failed'
+                                ? 'bg-red-500'
+                                : task.status === 'completed'
+                                  ? 'bg-green-500'
+                                  : 'bg-teal-500'
+                            }`}
+                            style={{ width: `${percent}%` }}
+                          />
+                        </div>
+
+                        <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-zinc-400 dark:text-zinc-500">
+                          <span className="tabular-nums">
+                            {formatBytes(done)} / {formatBytes(total)}
+                            {isActive && Number(task.speed_bytes_sec) > 0
+                              ? ` · ${formatBytes(Number(task.speed_bytes_sec))}/s`
+                              : ''}
+                            {isActive && eta !== null ? ` · ${formatEta(eta)}` : ''}
+                          </span>
+                          <span
+                            className={
+                              task.status === 'failed'
+                                ? 'text-red-500'
+                                : task.status === 'completed'
+                                  ? 'text-green-600 dark:text-green-500'
+                                  : ''
+                            }
+                          >
+                            {task.status === 'failed' && task.error_message
+                              ? task.error_message
+                              : task.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex-none flex items-center gap-0.5">
+                        {task.status === 'transferring' && (
+                          <button
+                            type="button"
+                            onClick={() => transferManager.pause(task.id)}
+                            className="p-1 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            title="Pause"
+                            aria-label="Pause transfer"
+                          >
+                            <Pause size={13} />
+                          </button>
+                        )}
+
+                        {task.status === 'paused' && (
+                          <button
+                            type="button"
+                            onClick={() => handleResume(task)}
+                            className="p-1 rounded text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            title={task.direction === 'upload' ? 'Re-select file to resume' : 'Resume'}
+                            aria-label="Resume transfer"
+                          >
+                            <Play size={13} />
+                          </button>
+                        )}
+
+                        {task.status === 'failed' && task.upload_id && (
+                          <button
+                            type="button"
+                            onClick={() => handleResume(task)}
+                            className="p-1 rounded text-zinc-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            title="Retry with the same file"
+                            aria-label="Retry transfer"
+                          >
+                            <RotateCcw size={13} />
+                          </button>
+                        )}
+
+                        {isActive && (
+                          <button
+                            type="button"
+                            onClick={() => transferManager.cancel(task.id)}
+                            className="p-1 rounded text-zinc-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            title="Cancel"
+                            aria-label="Cancel transfer"
+                          >
+                            <X size={13} />
+                          </button>
+                        )}
+
+                        {isFinished(task) && (
+                          <button
+                            type="button"
+                            onClick={() => void run(() => transferManager.removeTask(task.id))}
+                            className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            title="Remove from list"
+                            aria-label="Remove transfer"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="inline-flex items-center gap-2 rounded-full border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 shadow-lg hover:border-teal-500/60 transition-colors"
+        >
+          {activeCount > 0 ? (
+            <Loader2 size={13} className="animate-spin text-teal-500" />
+          ) : (
+            <ArrowUpFromLine size={13} className="text-teal-500" />
+          )}
+          {activeCount > 0 ? `${activeCount} transfer${activeCount === 1 ? '' : 's'} running` : 'Transfers'}
+          {open ? <ChevronUp size={12} /> : rows.length > 0 ? <ChevronDown size={12} /> : null}
+        </button>
+      </div>
+    </>
+  );
+}

@@ -46,11 +46,11 @@
 
 **Goal**: Implement a fault-tolerant, parallelized chunk transfer pipeline and HTML5 local directory mounting.
 
-- [ ] **3.1 Multipart Parallel Upload Pipeline**:
+- [x] **3.1 Multipart Parallel Upload Pipeline**:
   - Build Web Worker upload pool splitting files into 8MB - 64MB parts.
   - Record uploaded part ETags in PGlite `transfer_parts` table.
   - Enable automatic pause, resume, and cancellation across network disconnects or page reloads.
-- [ ] **3.2 Resumable Range-Based Downloads**:
+- [x] **3.2 Resumable Range-Based Downloads**:
   - Stream downloads using HTTP `Range` headers into OPFS temporary files or directly into writable streams.
 - [ ] **3.3 Dual-Pane Mode with File System Access API**:
   - Mount user-selected computer folders (`window.showDirectoryPicker()`) into the left pane.

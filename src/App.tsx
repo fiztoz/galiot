@@ -4,6 +4,8 @@ import { PGliteProvider } from '@electric-sql/pglite-react';
 import { initDb, type AppDB } from './db/client';
 import { VaultGate } from './components/VaultGate';
 import { ConnectionsView } from './components/ConnectionsView';
+import { TransferDrawer } from './components/TransferDrawer';
+import { transferManager } from './transfer/manager';
 
 function Splash({ label }: { label: string }) {
   return (
@@ -36,6 +38,12 @@ function FatalError({ message }: { message: string }) {
 
 function Shell({ db }: { db: AppDB }) {
   const [isUnlocked, setIsUnlocked] = useState(false);
+
+  // Spawns the transfer worker and the worker↔worker signing channel. Transfer
+  // progress is persisted, so the panel survives navigation and reloads.
+  useEffect(() => {
+    void transferManager.init(db);
+  }, [db]);
 
   return (
     <div className="h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col font-sans">
@@ -73,6 +81,8 @@ function Shell({ db }: { db: AppDB }) {
           <ConnectionsView db={db} />
         </VaultGate>
       </main>
+
+      <TransferDrawer db={db} />
     </div>
   );
 }

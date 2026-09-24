@@ -90,6 +90,32 @@ class VaultService {
     this.lockedListeners.add(listener);
     return () => this.lockedListeners.delete(listener);
   }
+
+  /**
+   * Hands one end of a MessageChannel to the vault worker so it can sign
+   * requests for the transfer worker. The transfer worker's end is never
+   * seen by this thread's code, and no credential values pass through here.
+   */
+  public attachTransferPort(port: MessagePort): Promise<void> {
+    const worker = this.ensureWorker();
+    const id = this.nextId++;
+
+    return new Promise<void>((resolve, reject) => {
+      this.pending.set(id, {
+        resolve: () => resolve(),
+        reject,
+      });
+      worker.postMessage(
+        {
+          channel: VAULT_CHANNEL,
+          id,
+          method: 'vault.attachTransferPort',
+          params: { port },
+        },
+        [port],
+      );
+    });
+  }
 }
 
 export const vaultService = new VaultService();

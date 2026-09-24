@@ -82,6 +82,7 @@ export type VaultMethod =
   | 'vault.lock'
   | 'vault.status'
   | 'vault.verify'
+  | 'vault.attachTransferPort'
   | 'creds.encrypt'
   | 's3.test'
   | 's3.cors'
@@ -103,6 +104,7 @@ export interface VaultParams {
   'vault.lock': undefined;
   'vault.status': undefined;
   'vault.verify': { passphrase: string; salt: string; wrappedDek: string };
+  'vault.attachTransferPort': { port: MessagePort };
   'creds.encrypt': { credentials: CredentialPlaintext };
   's3.test': { profile: S3ProfileConfig; credentials: Credentials };
   's3.cors': { profile: S3ProfileConfig; method?: string };
@@ -135,6 +137,7 @@ export type VaultResults = {
   'vault.lock': { locked: true };
   'vault.status': { unlocked: boolean };
   'vault.verify': { valid: boolean };
+  'vault.attachTransferPort': { attached: true };
   'creds.encrypt': { payload: EncryptedPayload };
   's3.test': TestConnectionResult;
   's3.cors': CorsResult;
