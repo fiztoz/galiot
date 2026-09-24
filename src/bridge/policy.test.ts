@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  ALLOWED_BRIDGE_ORIGINS,
+  DEFAULT_BRIDGE_ORIGINS,
+  resolveAllowedOrigins,
   BRIDGE_TOKEN_HEADER,
   checkForwardRequest,
   corsHeaders,
@@ -13,7 +14,7 @@ const SIGNED_HEADERS = {
 };
 
 const options = {
-  origin: ALLOWED_BRIDGE_ORIGINS[0]!,
+  origin: DEFAULT_BRIDGE_ORIGINS[0]!,
   token: 'secret-token',
   expectedToken: 'secret-token',
 };
@@ -108,5 +109,34 @@ describe('checkForwardRequest', () => {
 
   test('token header name is namespaced to avoid collisions', () => {
     expect(BRIDGE_TOKEN_HEADER).toBe('x-galiot-bridge-token');
+  });
+});
+
+describe('resolveAllowedOrigins', () => {
+  test('defaults cover the local dev server and preview build', () => {
+    const origins = resolveAllowedOrigins();
+    expect(origins).toContain('http://localhost:5173');
+    expect(origins).toContain('http://127.0.0.1:4173');
+  });
+
+  test('adds explicit extras', () => {
+    const origins = resolveAllowedOrigins(['https://galiot.example.com', 'http://galiot.example.com:5173']);
+    expect(origins).toContain('https://galiot.example.com');
+    expect(origins).toContain('http://galiot.example.com:5173');
+    expect(isOriginAllowed('https://galiot.example.com', origins)).toBe(true);
+  });
+
+  test('refuses wildcards and non-http schemes', () => {
+    const origins = resolveAllowedOrigins(['*', 'null', 'file://x', 'https://ok.example']);
+    expect(origins).not.toContain('*');
+    expect(origins).not.toContain('null');
+    expect(origins).not.toContain('file://x');
+    expect(origins).toContain('https://ok.example');
+  });
+
+  test('normalises trailing slashes and de-duplicates', () => {
+    const origins = resolveAllowedOrigins(['http://localhost:5173/', 'http://localhost:5173']);
+    expect(origins.filter((o) => o === 'http://localhost:5173')).toHaveLength(1);
+    expect(isOriginAllowed('http://localhost:5173/', origins)).toBe(true);
   });
 });
