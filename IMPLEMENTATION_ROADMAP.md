@@ -73,10 +73,10 @@
 
 **Goal**: Provide in-browser productivity tools that surpass desktop file-watcher workflows.
 
-- [ ] **4.1 Embedded Monaco Editor**:
-  - Embed Monaco Editor for direct in-browser editing of JSON, YAML, Python, Markdown, and configuration files.
+- [x] **4.1 Embedded CodeMirror 6 Editor** (CodeMirror supersedes the Monaco wording here — see `docs/STACK_DECISION.md` §3):
+  - Embed CodeMirror 6 for direct in-browser editing of JSON, YAML, Python, Markdown, and configuration files.
   - Build side-by-side visual diff viewer to inspect changes before re-uploading to S3.
-- [ ] **4.2 Media & Document Previews**:
+- [x] **4.2 Media & Document Previews**:
   - High-performance image viewer with zoom/pan.
   - Native PDF preview and audio/video streaming players.
 - [ ] **4.3 Presigned URL Generator & History**:

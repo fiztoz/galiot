@@ -89,6 +89,8 @@ export type VaultMethod =
   | 's3.list'
   | 's3.delete'
   | 's3.folderStats'
+  | 's3.getText'
+  | 's3.putText'
   | 's3.presignGet';
 
 export interface VaultRequest<M extends VaultMethod = VaultMethod> {
@@ -123,6 +125,16 @@ export interface VaultParams {
     rootKey: string;
     maxEntries?: number;
   };
+  /** Fetches a text object for the in-browser editor (size-capped). */
+  's3.getText': { profile: S3ProfileConfig; credentials: Credentials; key: string; maxBytes?: number };
+  /** Writes editor content back to the bucket. */
+  's3.putText': {
+    profile: S3ProfileConfig;
+    credentials: Credentials;
+    key: string;
+    body: string;
+    contentType: string;
+  };
   's3.presignGet': {
     profile: S3ProfileConfig;
     credentials: Credentials;
@@ -144,6 +156,8 @@ export type VaultResults = {
   's3.list': ListObjectsResult;
   's3.delete': { deleted: string[]; errors: { key: string; code: string; message: string }[] };
   's3.folderStats': FolderStatsResult;
+  's3.getText': { text: string; size: number; contentType: string | null; eTag: string | null };
+  's3.putText': { eTag: string };
   's3.presignGet': PresignResult;
 };
 

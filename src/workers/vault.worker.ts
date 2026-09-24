@@ -18,6 +18,19 @@ import {
   type FolderStatsResult,
 } from '../vault/protocol';
 
+/** Minimal byte formatter for worker-side error messages. */
+function formatBytesForWorker(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes;
+  let unit = -1;
+  do {
+    value /= 1024;
+    unit += 1;
+  } while (value >= 1024 && unit < units.length - 1);
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
 let vault: VaultManager | null = null;
 /** Direct channel to the transfer worker for signing. */
 let transferPort: MessagePort | null = null;
@@ -274,6 +287,42 @@ async function dispatch<M extends VaultMethod>(
       const creds = await resolveCredentials(p.credentials);
       const client = makeS3Client(p.profile, creds);
       return client.deleteObjects(p.keys);
+    }
+
+    case 's3.getText': {
+      const p = params as NonNullable<VaultRequest<'s3.getText'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      const client = makeS3Client(p.profile, creds);
+      const maxBytes = p.maxBytes ?? 2 * 1024 * 1024;
+      const res = await client.getObject(p.key);
+      if (!res.ok) throw new Error(`GetObject failed: ${res.status} ${res.statusText}`);
+
+      const declared = parseInt(res.headers.get('content-length') ?? '0', 10);
+      if (declared > maxBytes) {
+        throw new Error(
+          `File is ${formatBytesForWorker(declared)} — the editor opens files up to 2 MB. Use Download instead.`,
+        );
+      }
+
+      const buffer = await res.arrayBuffer();
+      if (buffer.byteLength > maxBytes) {
+        throw new Error('File is too large for the in-browser editor.');
+      }
+
+      return {
+        text: new TextDecoder('utf-8', { fatal: false }).decode(buffer),
+        size: buffer.byteLength,
+        contentType: res.headers.get('content-type'),
+        eTag: res.headers.get('etag'),
+      };
+    }
+
+    case 's3.putText': {
+      const p = params as NonNullable<VaultRequest<'s3.putText'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      const client = makeS3Client(p.profile, creds);
+      const result = await client.putObject(p.key, p.body, p.contentType);
+      return { eTag: result.eTag };
     }
 
     case 's3.presignGet': {
