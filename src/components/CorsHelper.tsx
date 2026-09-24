@@ -8,6 +8,7 @@ import {
   Check,
   Trash2,
   AlertTriangle,
+  Cable,
 } from 'lucide-react';
 import { S3Client, type CorsConfiguration, type CorsRule } from '../s3/client';
 import { corsRuleToXml, evaluateCors, type CorsVerdict } from '../s3/corsPolicy';
@@ -72,6 +73,10 @@ export function CorsHelper({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [bridgeToken, setBridgeToken] = useState('');
+  const [bridgeStatus, setBridgeStatus] = useState<
+    | { state: 'unknown' | 'checking' | 'up' | 'down'; message?: string }
+  >({ state: 'unknown' });
 
   const fetchConfig = useCallback(async () => {
     setLoading(true);
@@ -137,6 +142,64 @@ export function CorsHelper({
       setLoading(false);
     }
   }, [credentials, profile]);
+
+  const checkBridge = useCallback(async () => {
+    setBridgeStatus({ state: 'checking' });
+    try {
+      const health = await vaultService.call('bridge.health', {
+        origin: window.location.origin,
+        token: bridgeToken,
+      });
+      setBridgeStatus(
+        health.reachable
+          ? { state: 'up' }
+          : { state: 'down', message: 'The bridge is not running on 127.0.0.1:8787.' },
+      );
+    } catch (err) {
+      setBridgeStatus({
+        state: 'down',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [bridgeToken]);
+
+  /** Applies the policy from the machine, where CORS does not apply. */
+  const applyViaBridge = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const existing = config?.rules ?? [];
+      const next: CorsConfiguration = {
+        rules: [
+          ...existing.filter((rule) => !rule.allowedOrigins.includes(origin)),
+          recommended,
+        ],
+      };
+
+      const result = await vaultService.call('s3.cors.putViaBridge', {
+        profile,
+        credentials: { plain: credentials },
+        config: next,
+        origin: window.location.origin,
+        token: bridgeToken,
+      });
+
+      if (result.applied) {
+        setConfig(next);
+        setBridgeStatus({ state: 'up' });
+        onApplied?.();
+      } else {
+        setBridgeStatus({
+          state: 'down',
+          message: `The bridge could not apply the policy (HTTP ${result.status}). ${result.body ?? ''}`.trim(),
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [bridgeToken, config, credentials, onApplied, profile, recommended]);
 
   const copyXml = useCallback(async () => {
     try {
@@ -258,6 +321,66 @@ export function CorsHelper({
             </code>
             <p className="text-zinc-500 dark:text-zinc-400 pt-1"># Cloudflare R2 (dashboard → bucket → Settings → CORS)</p>
           </div>
+        </div>
+      )}
+
+      {corsBlocksTheFix && (
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 p-2.5 space-y-2">
+          <p className="text-[11px] text-zinc-600 dark:text-zinc-300 leading-relaxed">
+            Or let the local bridge do it for you: it signs the request in the vault worker and
+            sends it from this machine, where the browser&rsquo;s CORS rules do not apply.
+          </p>
+
+          <ol className="text-[11px] text-zinc-500 dark:text-zinc-400 list-decimal pl-4 space-y-1">
+            <li>
+              Start the bridge in your project:{' '}
+              <code className="font-mono px-1 py-0.5 rounded bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700">
+                bun run bridge
+              </code>
+            </li>
+            <li>Paste the token it prints below.</li>
+          </ol>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={bridgeToken}
+              onChange={(e) => {
+                setBridgeToken(e.target.value.trim());
+                setBridgeStatus({ state: 'unknown' });
+              }}
+              placeholder="Bridge token"
+              aria-label="Bridge token"
+              className="flex-1 px-2.5 py-1.5 text-xs font-mono bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 dark:text-zinc-100"
+            />
+            <button
+              type="button"
+              onClick={() => void checkBridge()}
+              disabled={bridgeToken.length === 0 || bridgeStatus.state === 'checking'}
+              className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-white dark:hover:bg-zinc-800 transition-colors disabled:opacity-50 whitespace-nowrap"
+            >
+              {bridgeStatus.state === 'checking' ? 'Checking…' : 'Check bridge'}
+            </button>
+          </div>
+
+          {bridgeStatus.state === 'up' && (
+            <p className="text-[11px] text-green-600 dark:text-green-400">Bridge is running.</p>
+          )}
+          {bridgeStatus.state === 'down' && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400 break-words">
+              {bridgeStatus.message}
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void applyViaBridge()}
+            disabled={loading || bridgeStatus.state !== 'up'}
+            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-600 hover:bg-teal-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? <Loader2 size={12} className="animate-spin" /> : <Cable size={12} />}
+            Apply CORS policy via bridge
+          </button>
         </div>
       )}
 

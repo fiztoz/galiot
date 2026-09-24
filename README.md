@@ -113,7 +113,33 @@ The complete research and technical specification suite for Galiot:
 
 ---
 
-## 7. Known Limitations
+## 7. Optional local bridge (`bun run bridge`)
+
+A browser cannot fix a bucket's CORS policy: the request that would write it is
+itself blocked by the missing policy. That is why a browser *worker* cannot do
+it either — CORS is enforced per request, not per thread.
+
+The bridge is a tiny local companion server for exactly that one case:
+
+```bash
+bun run bridge          # prints a one-time token
+```
+
+Paste the token into **CORS helper → Apply CORS policy via bridge**. Galiot signs
+the request in the vault worker (the secret never leaves it) and the bridge sends
+it from your machine, where no CORS rules apply. It is not a general proxy:
+
+- binds `127.0.0.1` only
+- accepts only local app origins
+- requires the token it prints at startup
+- forwards only requests carrying a SigV4 `Authorization` header
+- stops entirely with Ctrl+C
+
+Without it, apply the same policy with `mc cors set` / `aws s3api put-bucket-cors`.
+
+---
+
+## 8. Known Limitations
 
 | Area | Limitation | Why |
 |---|---|---|
