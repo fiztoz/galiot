@@ -6,7 +6,7 @@ import { createConnection } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 import { CorsHelper } from './CorsHelper';
 import { diagnoseCors, type CorsDiagnostic } from '../s3/diagnostics';
-import { isLocalEndpointHost } from '../s3/url';
+import { normalizeEndpoint } from '../s3/url';
 
 interface ConnectionDialogProps {
   db: AppDB;
@@ -29,22 +29,6 @@ type CorsState =
 const INPUT_CLASS =
   'w-full px-3 py-2 bg-zinc-50 dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent dark:text-zinc-100 transition-shadow text-sm';
 const LABEL_CLASS = 'block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5';
-
-/**
- * Adds a scheme if missing and strips trailing slashes.
- *
- * Local endpoints default to http, not https: self-hosted MinIO and
- * LocalStack almost always serve plain HTTP, and forcing https there is a
- * silent cause of "Failed to fetch".
- */
-export function normalizeEndpoint(raw: string): string {
-  const endpoint = raw.trim().replace(/\/+$/, '');
-  if (/^https?:\/\//i.test(endpoint)) return endpoint;
-
-  const hostPart = endpoint.split('/')[0] ?? '';
-  const scheme = isLocalEndpointHost(hostPart) ? 'http' : 'https';
-  return `${scheme}://${endpoint}`;
-}
 
 interface FormState {
   name: string;

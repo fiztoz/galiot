@@ -1,5 +1,6 @@
 import type { EncryptedPayload } from './crypto';
 import type { CorsConfiguration, ListObjectsResult } from '../s3/client';
+import type { GaleonImportPrepareResult, GaleonImportPreview } from './galeonImport';
 
 /**
  * Shared message protocol between the main thread and the vault worker.
@@ -97,7 +98,9 @@ export type VaultMethod =
   | 's3.getText'
   | 's3.putText'
   | 's3.presignGet'
-  | 's3.presignPut';
+  | 's3.presignPut'
+  | 'galeon.preview'
+  | 'galeon.prepare';
 
 export interface VaultRequest<M extends VaultMethod = VaultMethod> {
   channel: typeof VAULT_CHANNEL;
@@ -172,6 +175,17 @@ export interface VaultParams {
     contentType?: string;
     expiresIn?: number;
   };
+  /**
+   * Parses a Galeon profile export inside the worker and returns a preview with
+   * no credential material in it. `text` is the raw file the user picked.
+   */
+  'galeon.preview': { text: string };
+  /**
+   * Encrypts each importable Galeon profile's credentials and returns rows that
+   * are ready to insert. `expectedHash` is the preview's content hash, so a
+   * file swapped between preview and confirm is rejected instead of imported.
+   */
+  'galeon.prepare': { text: string; expectedHash: string };
 }
 
 export type VaultResults = {
@@ -196,6 +210,8 @@ export type VaultResults = {
   's3.putText': { eTag: string };
   's3.presignGet': PresignResult;
   's3.presignPut': PresignResult;
+  'galeon.preview': GaleonImportPreview;
+  'galeon.prepare': GaleonImportPrepareResult;
 };
 
 export type VaultResponse<M extends VaultMethod = VaultMethod> =

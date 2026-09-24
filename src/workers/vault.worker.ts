@@ -3,6 +3,10 @@ import { VaultManager } from '../vault/vault';
 import { S3Client } from '../s3/client';
 import { AwsClient } from '../lib/aws4fetch';
 import { presignGetUrl, presignPutUrl } from '../s3/presign';
+import {
+  buildGaleonPreview,
+  prepareGaleonImport,
+} from '../vault/galeonImport';
 import type { EncryptedPayload } from '../vault/crypto';
 import type { CorsConfiguration } from '../s3/client';
 import type { SignRequest, SignResponse } from '../transfer/protocol';
@@ -330,6 +334,23 @@ async function dispatch<M extends VaultMethod>(
       const p = params as { credentials: CredentialPlaintext };
       const payload = await requireUnlocked().encryptCredentials(p.credentials);
       return { payload };
+    }
+
+    // Galeon import. The file text arrives from a file the user picked, it is
+    // parsed here, and the credentials are encrypted here — so the plaintext
+    // keys exist in this worker and nowhere else. The preview the main thread
+    // renders is built from the secret-free entries only.
+    case 'galeon.preview': {
+      const p = params as { text: string };
+      return buildGaleonPreview(p.text);
+    }
+
+    case 'galeon.prepare': {
+      const p = params as { text: string; expectedHash: string };
+      const manager = requireUnlocked();
+      return prepareGaleonImport(p.text, p.expectedHash, (credentials) =>
+        manager.encryptCredentials(credentials),
+      );
     }
 
     case 's3.test': {
