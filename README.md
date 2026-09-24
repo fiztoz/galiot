@@ -113,6 +113,44 @@ The complete research and technical specification suite for Galiot:
 
 ---
 
+## 6. Importing connections from Galeon
+
+**Connections → Import from Galeon** reads a Galeon profile export (`galeon.profiles`,
+version 1) and brings its S3 connections across.
+
+In Galeon, export with **include credentials** checked. Galeon strips the keys
+otherwise, and a connection without keys cannot be imported — the dialog says so
+per profile rather than importing something that cannot work.
+
+What the importer handles:
+
+- **All three file shapes** Galeon accepts: the `galeon.profiles` envelope, a
+  bare profiles array, and a `config.json` snapshot.
+- **Field mapping**: endpoint (with a scheme inferred for bare hosts, `http` for
+  self-hosted ones), region (defaulting to `us-east-1`), bucket, storage class,
+  and addressing — Galeon's `useVirtualHostStyle` is the inverse of Galiot's
+  `path_style`, and when Galeon left it unset the importer infers it from the
+  endpoint, because an unset value means virtual-hosted on AWS but path-style on
+  a self-hosted MinIO.
+- **Skips it must skip**: non-S3 profiles (Galiot is S3-only) and profiles with
+  no credentials, each with the reason shown in the dialog.
+- **Refuses what should not be imported silently**: Galeon's "disable TLS
+  verification" flag is reported and dropped — Galiot always verifies TLS.
+
+**Credentials are parsed and encrypted in the vault worker.** The file is handed
+to the worker, which reads the keys, seals them with the vault's DEK and returns
+only ciphertext; the preview the page renders contains no key material, and the
+file text is re-read from the file handle per call rather than held in component
+state. A file swapped between preview and confirm is rejected via a content hash
+instead of importing something you did not review.
+
+There is deliberately **no export back to Galeon**: Galiot's stored credentials
+are ciphertext sealed by a key that only exists in the vault worker, so
+producing a plaintext Galeon profile would mean decrypting secrets onto the main
+thread. Galeon remains the tool for those connections.
+
+---
+
 ## 7. Optional local bridge (`bun run bridge`)
 
 A browser cannot fix a bucket's CORS policy: the request that would write it is

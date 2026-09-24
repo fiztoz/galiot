@@ -9,10 +9,12 @@ import {
   ChevronRight,
   X,
   Settings,
+  FileDown,
 } from 'lucide-react';
 import type { AppDB, ConnectionRow } from '../db/client';
 import { deleteConnection } from '../vault/repository';
 import { ConnectionDialog } from './ConnectionDialog';
+import { GaleonImportDialog } from './GaleonImportDialog';
 import { VaultSettings } from './VaultSettings';
 import { Explorer } from './Explorer';
 
@@ -36,6 +38,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const connections = useLiveQuery<ConnectionRow>(
     `SELECT ${CONNECTION_COLUMNS} FROM profiles ORDER BY name ASC`,
@@ -96,6 +99,16 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
             {rows.length > 0 && (
               <button
                 type="button"
+                onClick={() => setImportOpen(true)}
+                className="inline-flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <FileDown size={15} />
+                Import from Galeon
+              </button>
+            )}
+            {rows.length > 0 && (
+              <button
+                type="button"
                 onClick={() => setDialogOpen(true)}
                 className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 rounded-lg font-medium text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-950"
               >
@@ -122,14 +135,24 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
               Add an S3-compatible cloud storage connection to get started managing your buckets and
               objects — 100% client-side, credentials never leave this browser.
             </p>
-            <button
-              type="button"
-              onClick={() => setDialogOpen(true)}
-              className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
-            >
-              <Plus size={18} />
-              Add Connection
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => setDialogOpen(true)}
+                className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
+              >
+                <Plus size={18} />
+                Add Connection
+              </button>
+              <button
+                type="button"
+                onClick={() => setImportOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 font-medium transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800"
+              >
+                <FileDown size={16} />
+                Import from Galeon
+              </button>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -205,6 +228,8 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
       </div>
 
       <ConnectionDialog db={db} open={dialogOpen} onClose={() => setDialogOpen(false)} />
+
+      <GaleonImportDialog db={db} open={importOpen} onClose={() => setImportOpen(false)} />
 
       {settingsOpen && (
         <div

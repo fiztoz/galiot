@@ -155,6 +155,56 @@ export async function deleteConnection(db: AppDB, id: string): Promise<void> {
   await db.query(`DELETE FROM profiles WHERE id = $1`, [id]);
 }
 
+/**
+ * Inserts connections whose credentials were already sealed by the vault
+ * worker (used by the Galeon import, where the file's plaintext keys are
+ * encrypted worker-side and never reach the main thread).
+ *
+ * One transaction: a partial import is worse than none, because the user would
+ * not know which half landed.
+ */
+export async function insertSealedConnections(
+  db: AppDB,
+  rows: {
+    id: string;
+    name: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    pathStyle: boolean;
+    encryptedCredentials: EncryptedPayload;
+    storageClass: string | null;
+  }[],
+): Promise<number> {
+  if (rows.length === 0) return 0;
+
+  const now = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    for (const row of rows) {
+      await tx.query(
+        `INSERT INTO profiles
+           (id, name, protocol, endpoint, region, bucket, path_style,
+            encrypted_credentials, storage_class, created_at, updated_at)
+         VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          row.id,
+          row.name,
+          row.endpoint,
+          row.region,
+          row.bucket,
+          row.pathStyle,
+          JSON.stringify(row.encryptedCredentials),
+          row.storageClass,
+          now,
+          now,
+        ],
+      );
+    }
+  });
+
+  return rows.length;
+}
+
 /** Loads the sealed credentials blob for a connection (worker-only decryption). */
 export async function getSealedCredentials(db: AppDB, id: string): Promise<EncryptedPayload> {
   const res = await db.query<{ encrypted_credentials: unknown }>(

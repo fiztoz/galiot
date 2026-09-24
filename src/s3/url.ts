@@ -69,6 +69,30 @@ export function isLocalEndpointHost(host: string): boolean {
   return false;
 }
 
+/**
+ * Adds a scheme if missing and strips trailing slashes.
+ *
+ * Local endpoints default to http, not https: self-hosted MinIO and
+ * LocalStack almost always serve plain HTTP, and forcing https there is a
+ * silent cause of "Failed to fetch".
+ */
+export function normalizeEndpoint(raw: string): string {
+  const trimmed = raw.trim();
+
+  // An explicit scheme is matched first and its own "//" is never treated as a
+  // trailing path slash — otherwise "https://" normalizes to "https:/" and
+  // then to the nonsense-but-parseable "https://https:".
+  const withScheme = /^(https?):\/\/(.*)$/i.exec(trimmed);
+  if (withScheme) {
+    return `${withScheme[1]!.toLowerCase()}://${withScheme[2]!.replace(/\/+$/, '')}`;
+  }
+
+  const endpoint = trimmed.replace(/\/+$/, '');
+  const hostPart = endpoint.split('/')[0] ?? '';
+  const scheme = isLocalEndpointHost(hostPart) ? 'http' : 'https';
+  return `${scheme}://${endpoint}`;
+}
+
 /** Endpoint + addressing that will actually produce a usable URL. */
 export function effectiveAddressing(addressing: S3Addressing): S3Addressing {
   return {
