@@ -110,6 +110,11 @@ export class S3Client {
     this.pathStyle = options.pathStyle ?? false;
   }
 
+  /** Public accessor for the endpoint/bucket/addressing (used by tooling). */
+  public objectUrl(key?: string, queryParams?: Record<string, string>): URL {
+    return this.buildUrl(key, queryParams);
+  }
+
   private buildUrl(key?: string, queryParams?: Record<string, string>): URL {
     return buildS3Url(
       { endpoint: this.endpoint, bucket: this.bucket, pathStyle: this.pathStyle },

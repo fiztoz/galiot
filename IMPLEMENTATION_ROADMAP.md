@@ -91,9 +91,9 @@
 
 - [x] **5.1 1-Click CORS Helper**:
   - Add interactive CORS diagnostics tool to test bucket settings and generate/apply CORS policies automatically.
-- [ ] **5.2 Transfer Integrity Test Suite**:
-  - Automated MinIO test suite verifying MD5/SHA256 checksums on parallel uploads, aborted parts, and network blip resumes.
-- [ ] **5.3 Performance Benchmarks**:
-  - Benchmark listing speed and memory usage against Galeon Desktop and Cyberduck.
+- [x] **5.2 Transfer Integrity Test Suite**:
+  - Automated MinIO test suite verifying MD5/SHA256 checksums on parallel uploads, aborted parts, and network blip resumes. (`bun run test:integrity`)
+- [x] **5.3 Performance Benchmarks**:
+  - Benchmark listing speed and memory usage against Galeon Desktop and Cyberduck. (`bun run bench`; engine results in [`benchmarks/ENGINE.md`](benchmarks/ENGINE.md); Galeon/Cyberduck comparison still needs a desktop run)
 - [ ] **5.4 Launch to GitHub Pages**:
   - Publish public live demo and documentation at `https://<username>.github.io/galiot`.

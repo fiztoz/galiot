@@ -11,6 +11,8 @@
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
     "test": "bun test",
+    "test:integrity": "bun run scripts/integrity-test.ts",
+    "bench": "bun run scripts/bench.ts",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
