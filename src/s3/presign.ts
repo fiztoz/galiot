@@ -1,53 +1,54 @@
 import { AwsClient } from '../lib/aws4fetch';
+import { buildS3Url } from './url';
 
+export interface PresignTarget {
+  endpoint: string;
+  bucket: string;
+  pathStyle: boolean;
+}
+
+/** Presigned GET (download) URL. */
 export async function presignGetUrl(
   client: AwsClient,
-  endpoint: string,
-  bucket: string,
+  target: PresignTarget,
   key: string,
-  expiresIn: number = 3600
+  expiresIn: number = 3600,
 ): Promise<string> {
-  const urlStr = buildUrl(endpoint, bucket, key);
-  const url = new URL(urlStr);
+  const url = buildS3Url(target, key);
   url.searchParams.set('X-Amz-Expires', expiresIn.toString());
-  
+
   const req = await client.sign(url, {
     method: 'GET',
-    aws: { signQuery: true }
+    aws: { signQuery: true },
   });
-  
+
   return req.url;
 }
 
+/**
+ * Presigned PUT (upload) URL. Callers must send exactly the same
+ * `Content-Type` header that was signed with.
+ */
 export async function presignPutUrl(
   client: AwsClient,
-  endpoint: string,
-  bucket: string,
+  target: PresignTarget,
   key: string,
   contentType?: string,
-  expiresIn: number = 3600
+  expiresIn: number = 3600,
 ): Promise<string> {
-  const urlStr = buildUrl(endpoint, bucket, key);
-  const url = new URL(urlStr);
+  const url = buildS3Url(target, key);
   url.searchParams.set('X-Amz-Expires', expiresIn.toString());
-  
+
   const headers = new Headers();
   if (contentType) {
     headers.set('Content-Type', contentType);
   }
-  
+
   const req = await client.sign(url, {
     method: 'PUT',
     headers,
-    aws: { signQuery: true }
+    aws: { signQuery: true },
   });
-  
-  return req.url;
-}
 
-function buildUrl(endpoint: string, bucket: string, key: string): string {
-  // Assuming path style for simplicity, but could be configured
-  const cleanEndpoint = endpoint.replace(/\/$/, '');
-  const encodedKey = key.split('/').map(encodeURIComponent).join('/');
-  return `${cleanEndpoint}/${bucket}/${encodedKey}`;
+  return req.url;
 }

@@ -91,7 +91,8 @@ export type VaultMethod =
   | 's3.folderStats'
   | 's3.getText'
   | 's3.putText'
-  | 's3.presignGet';
+  | 's3.presignGet'
+  | 's3.presignPut';
 
 export interface VaultRequest<M extends VaultMethod = VaultMethod> {
   channel: typeof VAULT_CHANNEL;
@@ -141,6 +142,13 @@ export interface VaultParams {
     key: string;
     expiresIn?: number;
   };
+  's3.presignPut': {
+    profile: S3ProfileConfig;
+    credentials: Credentials;
+    key: string;
+    contentType?: string;
+    expiresIn?: number;
+  };
 }
 
 export type VaultResults = {
@@ -159,6 +167,7 @@ export type VaultResults = {
   's3.getText': { text: string; size: number; contentType: string | null; eTag: string | null };
   's3.putText': { eTag: string };
   's3.presignGet': PresignResult;
+  's3.presignPut': PresignResult;
 };
 
 export type VaultResponse<M extends VaultMethod = VaultMethod> =

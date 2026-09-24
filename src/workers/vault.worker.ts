@@ -2,7 +2,7 @@
 import { VaultManager } from '../vault/vault';
 import { S3Client } from '../s3/client';
 import { AwsClient } from '../lib/aws4fetch';
-import { presignGetUrl } from '../s3/presign';
+import { presignGetUrl, presignPutUrl } from '../s3/presign';
 import type { EncryptedPayload } from '../vault/crypto';
 import type { SignRequest, SignResponse } from '../transfer/protocol';
 import {
@@ -335,13 +335,31 @@ async function dispatch<M extends VaultMethod>(
         region: p.profile.region,
         service: 's3',
       });
-      const url = await presignGetUrl(
-        aws,
-        p.profile.endpoint,
-        p.profile.bucket,
-        p.key,
-        p.expiresIn ?? 3600,
-      );
+      const target = {
+        endpoint: p.profile.endpoint,
+        bucket: p.profile.bucket,
+        pathStyle: p.profile.pathStyle,
+      };
+      const url = await presignGetUrl(aws, target, p.key, p.expiresIn ?? 3600);
+      return { url };
+    }
+
+    case 's3.presignPut': {
+      const p = params as NonNullable<VaultRequest<'s3.presignPut'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      const aws = new AwsClient({
+        accessKeyId: creds.accessKeyId,
+        secretAccessKey: creds.secretAccessKey,
+        sessionToken: creds.sessionToken,
+        region: p.profile.region,
+        service: 's3',
+      });
+      const target = {
+        endpoint: p.profile.endpoint,
+        bucket: p.profile.bucket,
+        pathStyle: p.profile.pathStyle,
+      };
+      const url = await presignPutUrl(aws, target, p.key, p.contentType, p.expiresIn ?? 3600);
       return { url };
     }
 
