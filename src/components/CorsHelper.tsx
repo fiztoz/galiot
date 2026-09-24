@@ -150,6 +150,9 @@ export function CorsHelper({
 
   const copy = VERDICT_COPY[verdict ?? 'none'];
   const needsPathStyle = !canUseVirtualHosting(profile.endpoint) && !profile.pathStyle;
+  // Verified in a real browser: when CORS is broken the browser blocks the
+  // PutBucketCors request too, so the one-click fix cannot bootstrap itself.
+  const corsBlocksTheFix = diagnosis?.reason === 'cors-blocked' || verdict === 'none';
 
   return (
     <div className="p-3 text-sm rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 space-y-3">
@@ -237,24 +240,58 @@ export function CorsHelper({
         </div>
       )}
 
+      {corsBlocksTheFix && (
+        <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/25 p-2.5 space-y-2">
+          <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+            Writing a CORS policy is itself a signed cross-origin request, so the browser blocks
+            &ldquo;Apply&rdquo; until a policy exists. Set the rule once from a terminal or console,
+            then reload Galiot.
+          </p>
+          <div className="space-y-1 text-[10px] font-mono text-zinc-600 dark:text-zinc-300">
+            <p className="text-zinc-500 dark:text-zinc-400"># MinIO</p>
+            <code className="block px-2 py-1 rounded bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900 break-all">
+              mc cors set myminio/{profile.bucket} cors.xml
+            </code>
+            <p className="text-zinc-500 dark:text-zinc-400 pt-1"># AWS S3</p>
+            <code className="block px-2 py-1 rounded bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900 break-all">
+              aws s3api put-bucket-cors --bucket {profile.bucket} --cors-configuration file://cors.json
+            </code>
+            <p className="text-zinc-500 dark:text-zinc-400 pt-1"># Cloudflare R2 (dashboard → bucket → Settings → CORS)</p>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => void apply(true)}
-          disabled={loading || verdict === 'ok'}
+          disabled={loading || verdict === 'ok' || corsBlocksTheFix}
+          title={
+            corsBlocksTheFix
+              ? 'The browser blocks this request until a CORS policy exists — use a terminal instead.'
+              : undefined
+          }
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-600 hover:bg-teal-700 text-white transition-colors disabled:opacity-50"
         >
           {loading ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-          {verdict === 'ok' ? 'Policy applied' : 'Apply recommended policy'}
+          {verdict === 'ok'
+            ? 'Policy applied'
+            : corsBlocksTheFix
+              ? 'Apply from a terminal'
+              : 'Apply recommended policy'}
         </button>
 
         <button
           type="button"
           onClick={() => void copyXml()}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-white dark:hover:bg-zinc-800 transition-colors"
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+            corsBlocksTheFix
+              ? 'bg-teal-600 hover:bg-teal-700 text-white'
+              : 'border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-white dark:hover:bg-zinc-800'
+          }`}
         >
           {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-          Copy XML
+          {corsBlocksTheFix ? 'Copy CORS XML' : 'Copy XML'}
         </button>
 
         {config && config.rules.length > 0 && (
@@ -276,6 +313,12 @@ export function CorsHelper({
           </button>
         )}
       </div>
+
+      {corsBlocksTheFix && (
+        <pre className="text-[10px] leading-relaxed p-2 rounded bg-zinc-950 text-zinc-300 border border-zinc-200 dark:border-zinc-800 overflow-x-auto">
+          {corsRuleToXml(recommended)}
+        </pre>
+      )}
 
       <p className="text-[10px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
         “Apply” appends a rule for {origin} and keeps existing rules. Deleting removes the whole
