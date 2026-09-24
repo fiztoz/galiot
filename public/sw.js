@@ -1,7 +1,5 @@
-/// <reference lib="webworker" />
-export default null;
+/* Galiot service worker — static shell caching; S3 traffic is never cached. */
 
-declare let self: ServiceWorkerGlobalScope;
 
 const CACHE_NAME = 'galiot-v1';
 const ASSETS_CACHE_NAME = 'galiot-assets-v1';

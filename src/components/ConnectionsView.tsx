@@ -1,9 +1,19 @@
 import { useCallback, useState } from 'react';
 import { useLiveQuery } from '@electric-sql/pglite-react';
-import { Plus, Sailboat, Trash2, HardDrive, MapPin, ChevronRight, X } from 'lucide-react';
+import {
+  Plus,
+  Sailboat,
+  Trash2,
+  HardDrive,
+  MapPin,
+  ChevronRight,
+  X,
+  Settings,
+} from 'lucide-react';
 import type { AppDB, ConnectionRow } from '../db/client';
 import { deleteConnection } from '../vault/repository';
 import { ConnectionDialog } from './ConnectionDialog';
+import { VaultSettings } from './VaultSettings';
 import { Explorer } from './Explorer';
 
 interface ConnectionsViewProps {
@@ -25,6 +35,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const connections = useLiveQuery<ConnectionRow>(
     `SELECT ${CONNECTION_COLUMNS} FROM profiles ORDER BY name ASC`,
@@ -72,16 +83,27 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                 : `${rows.length} connection${rows.length === 1 ? '' : 's'} · credentials sealed in your vault`}
             </p>
           </div>
-          {rows.length > 0 && (
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setDialogOpen(true)}
-              className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 rounded-lg font-medium text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-950"
+              onClick={() => setSettingsOpen(true)}
+              className="p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              title="Vault settings"
+              aria-label="Vault settings"
             >
-              <Plus size={16} />
-              Add Connection
+              <Settings size={16} />
             </button>
-          )}
+            {rows.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setDialogOpen(true)}
+                className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 rounded-lg font-medium text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-950"
+              >
+                <Plus size={16} />
+                Add Connection
+              </button>
+            )}
+          </div>
         </div>
 
         {deleteError && (
@@ -183,6 +205,40 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
       </div>
 
       <ConnectionDialog db={db} open={dialogOpen} onClose={() => setDialogOpen(false)} />
+
+      {settingsOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setSettingsOpen(false);
+          }}
+        >
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                  Vault settings
+                </h2>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">
+                  Backup, restore and lock your local vault.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(false)}
+                className="p-2 -mr-2 -mt-1 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                aria-label="Close settings"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* The vault worker broadcasts 'locked'; VaultGate re-locks on its
+                own, so closing the modal is all that is needed here. */}
+            <VaultSettings db={db} onLocked={() => setSettingsOpen(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

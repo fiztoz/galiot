@@ -1,10 +1,18 @@
-import type { PGlite } from '@electric-sql/pglite';
-import { VaultManager } from './vault.js';
+import type { AppDB } from '../db/client';
+import { vaultService } from './vaultService';
+
+/**
+ * Vault backup/restore.
+ *
+ * The file contains only ciphertext (wrapped DEK + sealed credentials), but
+ * verifying an import requires PBKDF2 — which must never run on the main
+ * thread, so verification is delegated to the vault worker.
+ */
 
 export interface VaultExportData {
   version: number;
   meta: { key: string; value: string }[];
-  profiles: Record<string, unknown>[]; // Matches the structure of the profiles table
+  profiles: Record<string, unknown>[];
 }
 
 /** Columns copied during import — must exist in `schema.sql`. */
@@ -21,6 +29,20 @@ const PROFILE_COLUMNS = [
   'created_at',
   'updated_at',
 ] as const;
+
+/** Dumps the vault as a JSON file. Works while locked. */
+export async function exportVault(db: AppDB): Promise<Blob> {
+  const metaRes = await db.query<{ key: string; value: string }>('SELECT key, value FROM _meta');
+  const profilesRes = await db.query<Record<string, unknown>>('SELECT * FROM profiles');
+
+  const payload: VaultExportData = {
+    version: 1,
+    meta: metaRes.rows,
+    profiles: profilesRes.rows,
+  };
+
+  return new Blob([JSON.stringify(payload)], { type: 'application/json' });
+}
 
 function profileValues(profile: Record<string, unknown>): unknown[] {
   return PROFILE_COLUMNS.map((column) => {
@@ -47,62 +69,47 @@ function profileValues(profile: Record<string, unknown>): unknown[] {
 }
 
 /**
- * Exports all vault data (salt, wrapped DEK, encrypted profiles) from the database
- * as a JSON blob. Does not require the vault to be unlocked.
+ * Restores a backup after verifying the passphrase in the vault worker.
+ * The current vault is replaced only once the passphrase checks out.
  */
-export async function exportVault(db: PGlite): Promise<Blob> {
-  const metaRes = await db.query<{ key: string; value: string }>('SELECT key, value FROM _meta');
-  const profilesRes = await db.query<Record<string, unknown>>('SELECT * FROM profiles');
-
-  const exportData: VaultExportData = {
-    version: 1,
-    meta: metaRes.rows,
-    profiles: profilesRes.rows,
-  };
-
-  const jsonStr = JSON.stringify(exportData);
-  return new Blob([jsonStr], { type: 'application/json' });
-}
-
-/**
- * Imports a vault backup file. Verifies the passphrase against the exported
- * sealed material first, then overwrites the existing vault contents.
- */
-export async function importVault(db: PGlite, file: File, passphrase: string): Promise<void> {
-  const text = await file.text();
-  let exportData: VaultExportData;
-
+export async function importVault(db: AppDB, file: File, passphrase: string): Promise<void> {
+  let data: VaultExportData;
   try {
-    exportData = JSON.parse(text) as VaultExportData;
+    data = JSON.parse(await file.text()) as VaultExportData;
   } catch {
     throw new Error('Failed to parse vault backup file');
   }
 
-  if (!exportData.version || !exportData.meta || !exportData.profiles) {
+  if (!data.version || !data.meta || !data.profiles) {
     throw new Error('Invalid vault export format');
   }
 
-  const salt = exportData.meta.find((m) => m.key === 'salt')?.value;
-  const wrappedDek = exportData.meta.find((m) => m.key === 'wrapped_dek')?.value;
+  const salt = data.meta.find((m) => m.key === 'salt')?.value;
+  const wrappedDek = data.meta.find((m) => m.key === 'wrapped_dek')?.value;
   if (!salt || !wrappedDek) {
     throw new Error('Backup does not contain vault key material');
   }
 
-  const valid = await VaultManager.verify(passphrase, { salt, wrappedDek });
+  const { valid } = await vaultService.call('vault.verify', {
+    passphrase,
+    salt,
+    wrappedDek,
+  });
   if (!valid) {
     throw new Error('Invalid passphrase for the provided vault file');
   }
 
-  // Passphrase is valid. Safely overwrite the current DB data.
   await db.transaction(async (tx) => {
     await tx.exec('DELETE FROM _meta; DELETE FROM profiles;');
+    // transfer ledger is invalidated by the new vault; drop it with the keys.
+    await tx.exec('DELETE FROM transfer_tasks;');
 
-    for (const meta of exportData.meta) {
+    for (const meta of data.meta) {
       await tx.query('INSERT INTO _meta (key, value) VALUES ($1, $2)', [meta.key, meta.value]);
     }
 
     const placeholders = PROFILE_COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
-    for (const profile of exportData.profiles) {
+    for (const profile of data.profiles) {
       await tx.query(
         `INSERT INTO profiles (${PROFILE_COLUMNS.join(', ')}) VALUES (${placeholders})`,
         profileValues(profile),
@@ -111,20 +118,14 @@ export async function importVault(db: PGlite, file: File, passphrase: string): P
   });
 }
 
-/**
- * Triggers a browser file download for a Blob (the vault backup).
- * Creates an anchor element and simulates a click.
- */
+/** Triggers a browser download for a backup blob. */
 export function downloadVaultBackup(blob: Blob): void {
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `galiot-vault-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-
-  // Cleanup
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `galiot-vault-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

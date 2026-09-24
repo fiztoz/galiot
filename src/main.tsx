@@ -14,7 +14,8 @@ createRoot(rootElement).render(
   </StrictMode>
 );
 
-if ('serviceWorker' in navigator) {
+// App-shell caching only in production builds; dev relies on Vite HMR.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((error) => {
       console.error('Service Worker registration failed:', error);
