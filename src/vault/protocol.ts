@@ -88,6 +88,8 @@ export type VaultMethod =
   | 's3.probe'
   | 's3.cors.get'
   | 's3.cors.put'
+  | 's3.cors.putViaBridge'
+  | 'bridge.health'
   | 's3.cors.delete'
   | 's3.list'
   | 's3.delete'
@@ -121,6 +123,16 @@ export interface VaultParams {
     credentials: Credentials;
     config: CorsConfiguration;
   };
+  /** Applies a CORS policy through the local companion bridge. */
+  's3.cors.putViaBridge': {
+    profile: S3ProfileConfig;
+    credentials: Credentials;
+    config: CorsConfiguration;
+    origin: string;
+    token: string;
+  };
+  /** Checks whether the companion bridge is running. */
+  'bridge.health': { origin: string; token: string };
   's3.cors.delete': { profile: S3ProfileConfig; credentials: Credentials };
   's3.list': {
     profile: S3ProfileConfig;
@@ -174,6 +186,8 @@ export type VaultResults = {
   's3.probe': { reachable: boolean; url: string; error?: string };
   's3.cors.get': CorsConfiguration;
   's3.cors.put': { applied: true };
+  's3.cors.putViaBridge': { applied: boolean; status: number; body?: string; via: 'bridge' };
+  'bridge.health': { reachable: boolean; error?: string };
   's3.cors.delete': { deleted: true };
   's3.list': ListObjectsResult;
   's3.delete': { deleted: string[]; errors: { key: string; code: string; message: string }[] };

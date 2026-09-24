@@ -13,6 +13,7 @@
     "test": "bun test",
     "test:integrity": "bun run scripts/integrity-test.ts",
     "bench": "bun run scripts/bench.ts",
+    "bridge": "bun run scripts/bridge.ts",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

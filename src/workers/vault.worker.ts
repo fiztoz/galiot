@@ -4,7 +4,9 @@ import { S3Client } from '../s3/client';
 import { AwsClient } from '../lib/aws4fetch';
 import { presignGetUrl, presignPutUrl } from '../s3/presign';
 import type { EncryptedPayload } from '../vault/crypto';
+import type { CorsConfiguration } from '../s3/client';
 import type { SignRequest, SignResponse } from '../transfer/protocol';
+import { BRIDGE_DEFAULT_PORT, BRIDGE_TOKEN_HEADER } from '../bridge/policy';
 import {
   VAULT_CHANNEL,
   VAULT_EVENT_CHANNEL,
@@ -29,6 +31,94 @@ function formatBytesForWorker(bytes: number): string {
     unit += 1;
   } while (value >= 1024 && unit < units.length - 1);
   return `${value.toFixed(1)} ${units[unit]}`;
+}
+
+
+/** Signs a request with a client that already holds credentials. */
+async function signWith(
+  client: AwsClient,
+  method: string,
+  url: URL,
+  headers: Record<string, string>,
+): Promise<{ url: string; method: string; headers: Record<string, string> }> {
+  const signed = await client.sign(url, { method, headers: new Headers(headers) });
+  const out: Record<string, string> = {};
+  signed.headers.forEach((value, name) => {
+    out[name] = value;
+  });
+  return { url: signed.url, method: signed.method, headers: out };
+}
+
+function serializeCorsConfig(config: { rules: CorsConfiguration['rules'] }): string {
+  const escape = (value: string): string =>
+    value.replace(/[&<>"']/g, (ch) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch] ?? ch,
+    );
+
+  const rules = config.rules
+    .map((rule) => {
+      const list = (items: string[], tag: string): string =>
+        items.map((item) => `<${tag}>${escape(item)}</${tag}>`).join('');
+      return (
+        '<CORSRule>' +
+        list(rule.allowedOrigins, 'AllowedOrigin') +
+        list(rule.allowedMethods, 'AllowedMethod') +
+        list(rule.allowedHeaders, 'AllowedHeader') +
+        list(rule.exposeHeaders, 'ExposeHeader') +
+        `<MaxAgeSeconds>${rule.maxAgeSeconds}</MaxAgeSeconds>` +
+        '</CORSRule>'
+      );
+    })
+    .join('');
+
+  return `<?xml version="1.0" encoding="UTF-8"?><CORSConfiguration>${rules}</CORSConfiguration>`;
+}
+
+function bridgeUrl(path: string): string {
+  return `http://127.0.0.1:${BRIDGE_DEFAULT_PORT}${path}`;
+}
+
+async function probeBridge(
+  origin: string,
+  token: string,
+): Promise<{ reachable: boolean; error?: string }> {
+  try {
+    const res = await fetch(bridgeUrl('/health'), {
+      headers: { Origin: origin, [BRIDGE_TOKEN_HEADER]: token },
+    });
+    if (!res.ok) return { reachable: false, error: `bridge responded ${res.status}` };
+    return { reachable: true };
+  } catch (err) {
+    return { reachable: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function forwardViaBridge(
+  origin: string,
+  token: string,
+  payload: { target: string; method: string; headers: Record<string, string>; body: string },
+): Promise<{ ok: boolean; status: number; body?: string }> {
+  try {
+    const res = await fetch(bridgeUrl('/forward'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: origin,
+        [BRIDGE_TOKEN_HEADER]: token,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = (await res.json()) as {
+      ok?: boolean;
+      status?: number;
+      body?: string;
+      error?: string;
+    };
+    return { ok: data.ok === true, status: data.status ?? res.status, body: data.error ?? data.body };
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 let vault: VaultManager | null = null;
@@ -276,6 +366,44 @@ async function dispatch<M extends VaultMethod>(
       const creds = await resolveCredentials(p.credentials);
       await makeS3Client(p.profile, creds).putBucketCors(p.config);
       return { applied: true as const };
+    }
+
+    case 'bridge.health': {
+      const p = params as { origin: string; token: string };
+      return probeBridge(p.origin, p.token);
+    }
+
+    case 's3.cors.putViaBridge': {
+      const p = params as NonNullable<VaultRequest<'s3.cors.putViaBridge'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      const client = makeS3Client(p.profile, creds);
+      const signer = new AwsClient({
+        accessKeyId: creds.accessKeyId,
+        secretAccessKey: creds.secretAccessKey,
+        sessionToken: creds.sessionToken,
+        region: p.profile.region,
+        service: 's3',
+      });
+
+      // Sign here, forward there: the DEK and secret never leave this worker,
+      // and the bridge only ever sees a normal SigV4-signed S3 request.
+      const url = client.objectUrl(undefined, { cors: '' });
+      const signed = await signWith(signer, 'PUT', url, { 'content-type': 'application/xml' });
+      const body = serializeCorsConfig(p.config);
+
+      const result = await forwardViaBridge(p.origin, p.token, {
+        target: signed.url,
+        method: signed.method,
+        headers: signed.headers,
+        body,
+      });
+
+      return {
+        applied: result.ok && result.status >= 200 && result.status < 300,
+        status: result.status,
+        body: result.body?.slice(0, 500),
+        via: 'bridge' as const,
+      };
     }
 
     case 's3.cors.delete': {
