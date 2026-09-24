@@ -5,6 +5,8 @@ import type { S3ProfileConfig } from '../vault/protocol';
 import { createConnection } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 import { CorsHelper } from './CorsHelper';
+import { diagnoseCors, type CorsDiagnostic } from '../s3/diagnostics';
+import { isLocalEndpointHost } from '../s3/url';
 
 interface ConnectionDialogProps {
   db: AppDB;
@@ -28,13 +30,20 @@ const INPUT_CLASS =
   'w-full px-3 py-2 bg-zinc-50 dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent dark:text-zinc-100 transition-shadow text-sm';
 const LABEL_CLASS = 'block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5';
 
-/** Adds a scheme if missing and strips trailing slashes. */
+/**
+ * Adds a scheme if missing and strips trailing slashes.
+ *
+ * Local endpoints default to http, not https: self-hosted MinIO and
+ * LocalStack almost always serve plain HTTP, and forcing https there is a
+ * silent cause of "Failed to fetch".
+ */
 export function normalizeEndpoint(raw: string): string {
-  let endpoint = raw.trim().replace(/\/+$/, '');
-  if (!/^https?:\/\//i.test(endpoint)) {
-    endpoint = `https://${endpoint}`;
-  }
-  return endpoint;
+  const endpoint = raw.trim().replace(/\/+$/, '');
+  if (/^https?:\/\//i.test(endpoint)) return endpoint;
+
+  const hostPart = endpoint.split('/')[0] ?? '';
+  const scheme = isLocalEndpointHost(hostPart) ? 'http' : 'https';
+  return `${scheme}://${endpoint}`;
 }
 
 interface FormState {
@@ -63,6 +72,7 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
   const [test, setTest] = useState<TestState>({ status: 'idle' });
   const [cors, setCors] = useState<CorsState>({ status: 'idle' });
   const [testedTarget, setTestedTarget] = useState<S3ProfileConfig | null>(null);
+  const [diagnosis, setDiagnosis] = useState<CorsDiagnostic | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -71,6 +81,8 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
       setError(null);
       setTest({ status: 'idle' });
       setCors({ status: 'idle' });
+      setTestedTarget(null);
+      setDiagnosis(null);
       setSaving(false);
     }
   }, [open]);
@@ -107,10 +119,12 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
     }
 
     setTest({ status: 'testing' });
-    setCors({ status: 'testing' });
+    setCors({ status: 'idle' });
+    setDiagnosis(null);
 
+    const rawEndpoint = form.endpoint.trim();
     const profile = {
-      endpoint: normalizeEndpoint(form.endpoint),
+      endpoint: normalizeEndpoint(rawEndpoint),
       region: form.region.trim() || 'us-east-1',
       bucket: form.bucket.trim(),
       pathStyle: form.pathStyle,
@@ -122,50 +136,68 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
       },
     };
 
+    // Remember the target either way: the CORS helper is most useful exactly
+    // when the connection test fails.
+    setTestedTarget(profile);
+
+    // 1. Can we reach the host at all? This probe is CORS-free, so it separates
+    //    DNS/port/TLS problems from browser CORS blocks.
+    let reachable = true;
+    let probeUrl = profile.endpoint;
+    try {
+      const probe = await vaultService.call('s3.probe', { profile });
+      reachable = probe.reachable;
+      probeUrl = probe.url;
+    } catch {
+      reachable = false;
+    }
+
+    // 2. Real signed request.
+    let requestSucceeded: boolean | undefined;
+    let failureMessage: string | null = null;
     try {
       const result = await vaultService.call('s3.test', { profile, credentials });
-
       if (result.ok) {
-        setTestedTarget(profile);
+        requestSucceeded = true;
         setTest({
           status: 'ok',
           message: `Connected — bucket reachable (${result.objectCount ?? 0} keys in first page).`,
         });
       } else {
-        setTest({
-          status: 'fail',
-          message: result.error ?? 'The bucket rejected the request (check credentials and policy).',
-        });
+        requestSucceeded = false;
+        failureMessage = result.error ?? null;
+        setTest({ status: 'fail', message: failureMessage ?? 'The bucket rejected the request.' });
       }
-
-      // CORS preflight runs in parallel with the credentialed test above.
-      void (async () => {
-        try {
-          const corsResult = await vaultService.call('s3.cors', { profile });
-          if (corsResult.allowed) {
-            setCors({
-              status: 'ok',
-              message: `CORS preflight passed — allowed methods: ${corsResult.methods.join(', ') || 'not reported'}.`,
-            });
-          } else {
-            setCors({
-              status: 'fail',
-              message:
-                'CORS preflight rejected this origin. Add a CORS policy allowing ' +
-                `${window.location.origin} with methods GET, HEAD, PUT, POST, DELETE, ` +
-                'expose header ETag, and allowed headers * — otherwise the browser blocks all requests.',
-            });
-          }
-        } catch (err) {
-          setCors({
-            status: 'fail',
-            message: `CORS preflight failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-      })();
     } catch (err) {
-      setTest({ status: 'fail', message: err instanceof Error ? err.message : String(err) });
-      setCors({ status: 'idle' });
+      requestSucceeded = false;
+      failureMessage = err instanceof Error ? err.message : String(err);
+      setTest({ status: 'fail', message: failureMessage });
+    }
+
+    // 3. Turn the two signals into one actionable verdict.
+    const verdict = diagnoseCors(
+      {
+        probeUrl,
+        requestSucceeded,
+        endpoint: profile.endpoint,
+        rawEndpoint,
+        pathStyle: form.pathStyle,
+      },
+      reachable,
+    );
+    setDiagnosis(verdict);
+
+    if (verdict.reason === 'cors-blocked' || verdict.reason === 'host-unreachable') {
+      setCors({ status: 'fail', message: `${verdict.detail}${verdict.hint ? ` ${verdict.hint}` : ''}` });
+    } else {
+      // For addressing problems, try to repair automatically: an IP endpoint
+      // simply cannot use virtual-hosted addressing.
+      if (verdict.reason === 'addressing-unsupported') {
+        setField('pathStyle', true);
+        setCors({ status: 'fail', message: `${verdict.detail} Switching to path-style addressing — test again.` });
+      } else {
+        setCors({ status: 'idle' });
+      }
     }
   }, [buildPayload, form]);
 
@@ -392,7 +424,8 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
                 accessKeyId: form.accessKeyId.trim(),
                 secretAccessKey: form.secretAccessKey.trim(),
               }}
-              onApplied={() => setCors({ status: 'testing' })}
+              onApplied={() => setCors({ status: 'ok', message: 'CORS policy applied — run the test again to confirm.' })}
+              diagnosis={diagnosis}
             />
           )}
 

@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { S3Client, type CorsConfiguration, type CorsRule } from '../s3/client';
 import { corsRuleToXml, evaluateCors, type CorsVerdict } from '../s3/corsPolicy';
+import { canUseVirtualHosting } from '../s3/url';
+import type { CorsDiagnostic } from '../s3/diagnostics';
 import type { CredentialPlaintext } from '../vault/protocol';
 import { vaultService } from '../vault/vaultService';
 
@@ -19,6 +21,8 @@ interface CorsHelperProps {
   credentials: CredentialPlaintext;
   /** Existing policy, if the wizard already fetched it. */
   initialConfig?: CorsConfiguration | null;
+  /** Verdict from the connection attempt, when one has been made. */
+  diagnosis?: CorsDiagnostic | null;
   onApplied?: () => void;
 }
 
@@ -55,7 +59,13 @@ const VERDICT_COPY: Record<CorsVerdict, { title: string; detail: string; tone: '
  * Interactive CORS diagnostics + remediation (roadmap 5.1). Appending keeps
  * other applications' rules intact; removal is opt-in and explicit.
  */
-export function CorsHelper({ profile, credentials, initialConfig, onApplied }: CorsHelperProps) {
+export function CorsHelper({
+  profile,
+  credentials,
+  initialConfig,
+  diagnosis,
+  onApplied,
+}: CorsHelperProps) {
   const origin = window.location.origin;
   const [config, setConfig] = useState<CorsConfiguration | null>(initialConfig ?? null);
   const [loading, setLoading] = useState(false);
@@ -139,6 +149,7 @@ export function CorsHelper({ profile, credentials, initialConfig, onApplied }: C
   }, [recommended]);
 
   const copy = VERDICT_COPY[verdict ?? 'none'];
+  const needsPathStyle = !canUseVirtualHosting(profile.endpoint) && !profile.pathStyle;
 
   return (
     <div className="p-3 text-sm rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 space-y-3">
@@ -161,13 +172,40 @@ export function CorsHelper({ profile, credentials, initialConfig, onApplied }: C
         </button>
       </div>
 
-      <p
-        className={`text-xs leading-relaxed ${
-          copy.tone === 'ok' ? 'text-green-700 dark:text-green-400' : 'text-amber-700 dark:text-amber-400'
-        }`}
-      >
-        <strong className="font-semibold">{copy.title}.</strong> {copy.detail}
-      </p>
+      {diagnosis && diagnosis.reason !== 'ok' ? (
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+            {diagnosis.reason === 'cors-blocked'
+              ? 'CORS is blocking this connection'
+              : diagnosis.reason === 'host-unreachable'
+                ? 'Cannot reach the endpoint'
+                : 'Addressing problem'}
+          </p>
+          <p className="text-[11px] text-zinc-600 dark:text-zinc-300 leading-relaxed">
+            {diagnosis.detail}
+          </p>
+          {diagnosis.hint && (
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+              {diagnosis.hint}
+            </p>
+          )}
+        </div>
+      ) : (
+        <p
+          className={`text-xs leading-relaxed ${
+            copy.tone === 'ok' ? 'text-green-700 dark:text-green-400' : 'text-amber-700 dark:text-amber-400'
+          }`}
+        >
+          <strong className="font-semibold">{copy.title}.</strong> {copy.detail}
+        </p>
+      )}
+
+      {needsPathStyle && (
+        <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+          This endpoint is an IP address, so the bucket cannot be part of the hostname. Tick
+          &ldquo;Path-style addressing&rdquo; in the form above.
+        </p>
+      )}
 
       {evaluation && evaluation.missing.length > 0 && (
         <p className="text-[11px] text-zinc-500 dark:text-zinc-400">

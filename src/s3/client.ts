@@ -362,34 +362,27 @@ export class S3Client {
   }
 
   /**
-   * Sends a CORS preflight for the given method. Runs unauthenticated, so the
-   * worker can supply its own origin (workers have no `window`).
+   * Probes the bucket endpoint *without* triggering CORS, so callers can tell
+   * "the host is unreachable" apart from "the browser blocked the response".
+   *
+   * The previous implementation replayed a preflight by hand, which could never
+   * succeed and therefore reported failure even for correctly configured
+   * buckets. See src/s3/diagnostics.ts for the reasoning.
    */
-  public async checkCors(
-    method = 'GET',
-    origin = globalThis.location?.origin ?? '',
-  ): Promise<CorsCheckResult> {
-    const url = this.buildUrl();
-    const res = await fetch(url.toString(), {
-      method: 'OPTIONS',
-      headers: {
-        'Origin': origin,
-        'Access-Control-Request-Method': method,
-      },
-    });
-
-    if (!res.ok) {
-      return { allowed: false, methods: [] };
+  public async probeReachable(key?: string): Promise<{ reachable: boolean; url: string; error?: string }> {
+    const url = this.buildUrl(key);
+    try {
+      // NOTE: do not add `redirect: 'manual'` here — Chrome rejects that
+      // combination with a TypeError, which would make every reachable host
+      // look unreachable (verified in a real browser).
+      await fetch(url.toString(), { method: 'GET', mode: 'no-cors' });
+      return { reachable: true, url: url.toString() };
+    } catch (err) {
+      return {
+        reachable: false,
+        url: url.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
-
-    const allowOrigin = res.headers.get('Access-Control-Allow-Origin');
-    const originAllowed =
-      allowOrigin === '*' || (allowOrigin !== null && allowOrigin === origin);
-    const methods = res.headers.get('Access-Control-Allow-Methods');
-
-    return {
-      allowed: originAllowed,
-      methods: methods ? methods.split(',').map((m) => m.trim()) : [],
-    };
   }
 }

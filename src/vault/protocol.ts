@@ -85,7 +85,7 @@ export type VaultMethod =
   | 'vault.attachTransferPort'
   | 'creds.encrypt'
   | 's3.test'
-  | 's3.cors'
+  | 's3.probe'
   | 's3.cors.get'
   | 's3.cors.put'
   | 's3.cors.delete'
@@ -113,7 +113,8 @@ export interface VaultParams {
   'vault.attachTransferPort': { port: MessagePort };
   'creds.encrypt': { credentials: CredentialPlaintext };
   's3.test': { profile: S3ProfileConfig; credentials: Credentials };
-  's3.cors': { profile: S3ProfileConfig; method?: string };
+  /** CORS-free reachability probe so failures can be classified. */
+  's3.probe': { profile: S3ProfileConfig };
   's3.cors.get': { profile: S3ProfileConfig; credentials: Credentials };
   's3.cors.put': {
     profile: S3ProfileConfig;
@@ -170,7 +171,7 @@ export type VaultResults = {
   'vault.attachTransferPort': { attached: true };
   'creds.encrypt': { payload: EncryptedPayload };
   's3.test': TestConnectionResult;
-  's3.cors': CorsResult;
+  's3.probe': { reachable: boolean; url: string; error?: string };
   's3.cors.get': CorsConfiguration;
   's3.cors.put': { applied: true };
   's3.cors.delete': { deleted: true };
