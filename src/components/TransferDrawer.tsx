@@ -37,6 +37,8 @@ export function TransferDrawer(_props: TransferDrawerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingResumeRef = useRef<TransferTaskRow | null>(null);
   const previousActiveRef = useRef(0);
+  const [graphs, setGraphs] = useState<Map<string, number[]>>(() => new Map());
+  const GRAPH_POINTS = 60;
 
   const tasks = useLiveQuery<TransferTaskRow>(
     `SELECT id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred,
@@ -65,6 +67,29 @@ export function TransferDrawer(_props: TransferDrawerProps) {
     }
     previousActiveRef.current = activeCount;
   }, [activeCount]);
+
+  // Rolling byte-progress samples power the bandwidth sparkline per task.
+  useEffect(
+    () =>
+      transferManager.subscribe((event) => {
+        if (event.type === 'progress' || event.type === 'done' || event.type === 'paused') {
+          const bytes =
+            event.type === 'progress'
+              ? event.bytesTransferred
+              : event.type === 'paused'
+                ? event.bytesTransferred
+                : event.totalBytes;
+          setGraphs((prev) => {
+            const next = new Map(prev);
+            const series = [...(next.get(event.taskId) ?? []), bytes];
+            if (series.length > GRAPH_POINTS) series.shift();
+            next.set(event.taskId, series);
+            return next;
+          });
+        }
+      }),
+    [],
+  );
 
   const run = useCallback(async (fn: () => Promise<void> | void) => {
     setError(null);
@@ -223,6 +248,12 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           />
                         </div>
 
+                        {isActive && (graphs.get(task.id)?.length ?? 0) > 1 && (
+                          <div className="mt-1" title="Throughput over the last few updates">
+                            <Sparkline values={graphs.get(task.id) ?? []} />
+                          </div>
+                        )}
+
                         <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-zinc-400 dark:text-zinc-500">
                           <span className="tabular-nums">
                             {formatBytes(done)} / {formatBytes(total)}
@@ -331,5 +362,46 @@ export function TransferDrawer(_props: TransferDrawerProps) {
         </button>
       </div>
     </>
+  );
+}
+
+/** Tiny inline throughput graph: cumulative bytes over recent updates. */
+function Sparkline({ values }: { values: number[] }) {
+  const width = 100;
+  const height = 18;
+
+  const first = values[0] ?? 0;
+  const last = values[values.length - 1] ?? 0;
+  const span = Math.max(1, last - first);
+  const step = values.length > 1 ? width / (values.length - 1) : width;
+
+  const points = values
+    .map((value, i) => {
+      const x = i * step;
+      const y = height - ((value - first) / span) * (height - 2) - 1;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(' ');
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      className="w-full h-[18px] block"
+      aria-hidden="true"
+    >
+      <polyline
+        points={`0,${height} ${points} ${width},${height}`}
+        className="fill-teal-500/10 stroke-none"
+      />
+      <polyline
+        points={points}
+        fill="none"
+        className="stroke-teal-500"
+        strokeWidth="1.25"
+        vectorEffect="non-scaling-stroke"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }

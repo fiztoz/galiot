@@ -89,40 +89,60 @@ class PortSigner {
   }
 }
 
-/** OPFS staging file for resumable downloads. */
-class StagedDownload {
+/**
+ * Byte-addressable write target for a download. Backed by OPFS staging (with
+ * sync access handles where available) or by a file inside a user-granted local
+ * directory, so a resumed transfer continues from whatever is already on disk.
+ */
+class DownloadTarget {
   private constructor(
     private readonly handle: FileSystemFileHandle,
     private readonly sync: SyncAccessHandle | null,
     private readonly writable: FileSystemWritableFileStream | null,
     public size: number,
+    public readonly staged: boolean,
   ) {}
 
-  static async open(taskId: string): Promise<StagedDownload> {
-    const root = await navigator.storage.getDirectory();
-    const dir = await root.getDirectoryHandle(STAGING_DIR, { create: true });
-    const handle = (await dir.getFileHandle(`download-${taskId}`, {
-      create: true,
-    })) as SyncCapableFileHandle;
+  static async open(job: DownloadJob): Promise<DownloadTarget> {
+    const destination = job.destination;
+    let handle: FileSystemFileHandle;
+
+    if (destination.kind === 'directory') {
+      handle = await destination.handle.getFileHandle(destination.filename, { create: true });
+    } else {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle(STAGING_DIR, { create: true });
+      handle = await dir.getFileHandle(`download-${job.taskId}`, { create: true });
+    }
+
     const file = await handle.getFile();
+    const syncCapable = handle as SyncCapableFileHandle;
 
     let sync: SyncAccessHandle | null = null;
     let writable: FileSystemWritableFileStream | null = null;
 
-    if (typeof handle.createSyncAccessHandle === 'function') {
-      sync = await handle.createSyncAccessHandle();
+    // Sync access handles are OPFS-only, so local-directory files always use
+    // the writable-stream path.
+    if (destination.kind === 'staged' && typeof syncCapable.createSyncAccessHandle === 'function') {
+      sync = await syncCapable.createSyncAccessHandle();
     } else {
       writable = await handle.createWritable({ keepExistingData: true });
       await writable.seek(file.size);
     }
 
-    return new StagedDownload(handle, sync, writable, file.size);
+    return new DownloadTarget(
+      handle,
+      sync,
+      writable,
+      file.size,
+      destination.kind === 'staged',
+    );
   }
 
   async write(chunk: Uint8Array, offset: number): Promise<void> {
     if (this.sync) {
       // Streamed chunks are typed as Uint8Array<ArrayBufferLike>; OPFS wants a
-      // plain BufferSource view. No copy — this is the same underlying buffer.
+      // plain BufferSource view. No copy - this is the same underlying buffer.
       this.sync.write(chunk as unknown as BufferSource, { at: offset });
       this.sync.flush();
     } else if (this.writable) {
@@ -143,7 +163,7 @@ class StagedDownload {
     if (this.writable) await this.writable.close();
   }
 
-  /** Flushes and returns a File backed by OPFS (no full read into memory). */
+  /** Flushes and returns a File backed by the target (no full read into RAM). */
   async finish(): Promise<File> {
     await this.close();
     return this.handle.getFile();
@@ -527,15 +547,20 @@ class TransferEngine {
 
   async download(job: DownloadJob): Promise<void> {
     const rt = this.runtime(job.taskId);
-    const staged = await StagedDownload.open(job.taskId);
-    let offset = staged.size;
+    const target = await DownloadTarget.open(job);
+    let offset = target.size;
     rt.bytesTransferred = offset;
 
     try {
       if (job.expectedSize !== null && offset > 0 && offset >= job.expectedSize) {
         // Already fully staged from an earlier session.
-        const file = await staged.finish();
-        this.emit({ type: 'done', taskId: job.taskId, totalBytes: offset, stagedFile: file });
+        const file = await target.finish();
+        this.emit({
+          type: 'done',
+          taskId: job.taskId,
+          totalBytes: offset,
+          stagedFile: target.staged ? file : undefined,
+        });
         return;
       }
 
@@ -550,7 +575,7 @@ class TransferEngine {
 
         if (offset > 0 && res.status === 200) {
           // Server ignored the range header — restart from zero.
-          await staged.reset();
+          await target.reset();
           offset = 0;
           rt.bytesTransferred = 0;
           continue;
@@ -577,7 +602,7 @@ class TransferEngine {
           }
 
           if (value) {
-            await staged.write(value, offset);
+            await target.write(value, offset);
             offset += value.byteLength;
             this.advance(rt, value.byteLength);
           }
@@ -605,8 +630,13 @@ class TransferEngine {
         );
       }
 
-      const file = await staged.finish();
-      this.emit({ type: 'done', taskId: job.taskId, totalBytes: offset, stagedFile: file });
+      const file = await target.finish();
+      this.emit({
+        type: 'done',
+        taskId: job.taskId,
+        totalBytes: offset,
+        stagedFile: target.staged ? file : undefined,
+      });
     } catch (err) {
       this.emit({ type: 'error', taskId: job.taskId, message: errorText(err) });
     }

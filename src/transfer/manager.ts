@@ -5,6 +5,7 @@ import { vaultService } from '../vault/vaultService';
 import { DEFAULT_PART_SIZE, clampConcurrency } from './planner';
 import type {
   CompletedPart,
+  DownloadDestination,
   DownloadJob,
   TransferCommand,
   TransferEvent,
@@ -155,17 +156,27 @@ class TransferManager {
     return taskIds;
   }
 
-  /** Queues a resumable download to OPFS staging. */
-  async enqueueDownload(profile: ConnectionRow, key: string, size: number | null): Promise<string> {
+  /**
+   * Queues a resumable download. `destination` decides where bytes land: OPFS
+   * staging (handed to the browser on completion) or straight into a local
+   * folder for dual-pane mode.
+   */
+  async enqueueDownload(
+    profile: ConnectionRow,
+    key: string,
+    size: number | null,
+    destination: DownloadDestination = { kind: 'staged' },
+    localPath: string | null = null,
+  ): Promise<string> {
     const db = this.requireDb();
     const credentials = await getSealedCredentials(db, profile.id);
     const taskId = crypto.randomUUID();
 
     await db.query(
       `INSERT INTO transfer_tasks
-         (id, profile_id, direction, remote_key, file_size, bytes_transferred, status)
-       VALUES ($1, $2, 'download', $3, $4, 0, 'queued')`,
-      [taskId, profile.id, key, size ?? 0],
+         (id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred, status)
+       VALUES ($1, $2, 'download', $3, $4, $5, 0, 'queued')`,
+      [taskId, profile.id, key, localPath, size ?? 0],
     );
 
     const job: DownloadJob = {
@@ -175,6 +186,7 @@ class TransferManager {
       credentials,
       key,
       expectedSize: size,
+      destination,
     };
     this.post({ type: 'download', job });
     return taskId;
@@ -242,7 +254,11 @@ class TransferManager {
     this.post({ type: 'upload', job });
   }
 
-  /** Restarts a paused download; the worker resumes from the staged byte offset. */
+  /**
+   * Restarts a paused download; the worker resumes from the target's current
+   * byte offset. Resumes from the drawer always target OPFS staging, since the
+   * local-folder handle from a previous session is not retained.
+   */
   async resumeDownload(profile: ConnectionRow, task: TransferTaskRow): Promise<void> {
     const db = this.requireDb();
     const credentials = await getSealedCredentials(db, profile.id);
@@ -254,6 +270,7 @@ class TransferManager {
       credentials,
       key: task.remote_key,
       expectedSize: Number(task.file_size) || null,
+      destination: { kind: 'staged' },
     };
 
     await db.query(

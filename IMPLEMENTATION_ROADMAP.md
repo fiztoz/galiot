@@ -60,10 +60,11 @@
   - Enable automatic pause, resume, and cancellation across network disconnects or page reloads.
 - [x] **3.2 Resumable Range-Based Downloads**:
   - Stream downloads using HTTP `Range` headers into OPFS temporary files or directly into writable streams.
-- [ ] **3.3 Dual-Pane Mode with File System Access API**:
+- [x] **3.3 Dual-Pane Mode with File System Access API**:
   - Mount user-selected computer folders (`window.showDirectoryPicker()`) into the left pane.
   - Enable bidirectional drag-and-drop between the local folder and the remote cloud bucket.
-- [ ] **3.4 Transfer Drawer**:
+  - Read-only `<input webkitdirectory>` fallback where the File System Access API is missing.
+- [x] **3.4 Transfer Drawer**:
   - Render a slide-out transfer monitor displaying active speeds, ETA, bandwidth graphs, and error retry actions.
 
 ---

@@ -41,14 +41,25 @@ export interface UploadJob {
   completedParts?: CompletedPart[];
 }
 
+/**
+ * Where a finished download should land.
+ * - `staged`: stream into OPFS staging, then hand a File to the browser.
+ * - `directory`: stream straight into a user-granted local folder
+ *   (dual-pane mode), resuming from that file's current size.
+ */
+export type DownloadDestination =
+  | { kind: 'staged' }
+  | { kind: 'directory'; handle: FileSystemDirectoryHandle; filename: string };
+
 export interface DownloadJob {
   taskId: string;
   profileId: string;
   target: S3Target;
   credentials: import('../vault/crypto').EncryptedPayload;
   key: string;
-  /** Used to verify completeness and to resume from the staged OPFS size. */
+  /** Used to verify completeness and to resume from the written byte offset. */
   expectedSize: number | null;
+  destination: DownloadDestination;
 }
 
 export type TransferCommand =
