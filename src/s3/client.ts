@@ -51,6 +51,46 @@ export interface CorsCheckResult {
   methods: string[];
 }
 
+export interface CorsRule {
+  allowedOrigins: string[];
+  allowedMethods: string[];
+  allowedHeaders: string[];
+  exposeHeaders: string[];
+  maxAgeSeconds: number;
+}
+
+export interface CorsConfiguration {
+  rules: CorsRule[];
+}
+
+const XML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&apos;',
+};
+
+function escapeXml(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => XML_ESCAPES[ch] ?? ch);
+}
+
+function serializeCorsRule(rule: CorsRule): string {
+  const values = (items: string[], tag: string): string =>
+    items.map((item) => `<${tag}>${escapeXml(item)}</${tag}>`).join('');
+
+  return (
+    '<CORSRule>' +
+    `<ID>${escapeXml(`galiot-${rule.maxAgeSeconds}s`)}</ID>` +
+    values(rule.allowedOrigins, 'AllowedOrigin') +
+    values(rule.allowedMethods, 'AllowedMethod') +
+    values(rule.allowedHeaders, 'AllowedHeader') +
+    values(rule.exposeHeaders, 'ExposeHeader') +
+    `<MaxAgeSeconds>${rule.maxAgeSeconds}</MaxAgeSeconds>` +
+    '</CORSRule>'
+  );
+}
+
 export class S3Client {
   private awsClient: AwsClient;
   private endpoint: string;
@@ -239,6 +279,81 @@ export class S3Client {
     const url = this.buildUrl(key, { uploadId });
     const res = await this.awsClient.fetch(url, { method: 'DELETE' });
     if (!res.ok && res.status !== 204) throw new Error(`AbortMultipartUpload failed: ${res.statusText}`);
+  }
+
+
+  /** Reads the bucket's current CORS configuration. */
+  public async getBucketCors(): Promise<CorsConfiguration> {
+    const url = this.buildUrl(undefined, { cors: '' });
+    const res = await this.awsClient.fetch(url, { method: 'GET' });
+
+    // No CORSConfiguration element is the documented "not configured" case.
+    if (res.status === 404) return { rules: [] };
+    if (!res.ok) throw new Error(`GetBucketCors failed: ${res.status} ${res.statusText}`);
+
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/xml');
+    const rules: CorsRule[] = [];
+
+    doc.querySelectorAll('CORSRule').forEach((node) => {
+      const collect = (tag: string): string[] =>
+        Array.from(node.querySelectorAll(tag)).map((el) => el.textContent ?? '').filter(Boolean);
+
+      rules.push({
+        allowedOrigins: collect('AllowedOrigin'),
+        allowedMethods: collect('AllowedMethod'),
+        allowedHeaders: collect('AllowedHeader'),
+        exposeHeaders: collect('ExposeHeader'),
+        maxAgeSeconds: parseInt(node.querySelector('MaxAgeSeconds')?.textContent ?? '0', 10),
+      });
+    });
+
+    return { rules };
+  }
+
+  /** Replaces the bucket's CORS configuration. */
+  public async putBucketCors(config: CorsConfiguration): Promise<void> {
+    if (config.rules.length === 0) {
+      await this.deleteBucketCors();
+      return;
+    }
+
+    const xml =
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<CORSConfiguration>' +
+      config.rules.map(serializeCorsRule).join('') +
+      '</CORSConfiguration>';
+
+    const url = this.buildUrl(undefined, { cors: '' });
+    const res = await this.awsClient.fetch(url, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/xml' },
+      body: xml,
+    });
+    if (!res.ok) throw new Error(`PutBucketCors failed: ${res.status} ${res.statusText}`);
+  }
+
+  /** Removes the bucket's CORS configuration. */
+  public async deleteBucketCors(): Promise<void> {
+    const url = this.buildUrl(undefined, { cors: '' });
+    const res = await this.awsClient.fetch(url, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) {
+      throw new Error(`DeleteBucketCors failed: ${res.status} ${res.statusText}`);
+    }
+  }
+
+  /**
+   * Browser-compatible policy for this app: the given origin, the methods
+   * Galiot uses, ETag exposed (multipart uploads depend on reading it), and
+   * headers needed by presigned PUTs.
+   */
+  public static recommendedCorsRule(origin: string): CorsRule {
+    return {
+      allowedOrigins: [origin],
+      allowedMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE'],
+      allowedHeaders: ['*'],
+      exposeHeaders: ['ETag', 'x-amz-request-id', 'x-amz-id-2'],
+      maxAgeSeconds: 3600,
+    };
   }
 
   /**

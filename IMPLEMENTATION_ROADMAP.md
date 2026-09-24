@@ -89,7 +89,7 @@
 
 **Goal**: Ensure enterprise-grade transfer integrity, security verification, and release to GitHub Pages.
 
-- [ ] **5.1 1-Click CORS Helper**:
+- [x] **5.1 1-Click CORS Helper**:
   - Add interactive CORS diagnostics tool to test bucket settings and generate/apply CORS policies automatically.
 - [ ] **5.2 Transfer Integrity Test Suite**:
   - Automated MinIO test suite verifying MD5/SHA256 checksums on parallel uploads, aborted parts, and network blip resumes.

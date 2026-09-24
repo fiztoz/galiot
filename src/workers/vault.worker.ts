@@ -264,6 +264,26 @@ async function dispatch<M extends VaultMethod>(
       return client.checkCors(p.method ?? 'GET');
     }
 
+    case 's3.cors.get': {
+      const p = params as NonNullable<VaultRequest<'s3.cors.get'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return makeS3Client(p.profile, creds).getBucketCors();
+    }
+
+    case 's3.cors.put': {
+      const p = params as NonNullable<VaultRequest<'s3.cors.put'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      await makeS3Client(p.profile, creds).putBucketCors(p.config);
+      return { applied: true as const };
+    }
+
+    case 's3.cors.delete': {
+      const p = params as NonNullable<VaultRequest<'s3.cors.delete'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      await makeS3Client(p.profile, creds).deleteBucketCors();
+      return { deleted: true as const };
+    }
+
     case 's3.list': {
       const p = params as NonNullable<VaultRequest<'s3.list'>['params']>;
       const creds = await resolveCredentials(p.credentials);

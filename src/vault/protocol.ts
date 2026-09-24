@@ -1,5 +1,5 @@
 import type { EncryptedPayload } from './crypto';
-import type { ListObjectsResult } from '../s3/client';
+import type { CorsConfiguration, ListObjectsResult } from '../s3/client';
 
 /**
  * Shared message protocol between the main thread and the vault worker.
@@ -86,6 +86,9 @@ export type VaultMethod =
   | 'creds.encrypt'
   | 's3.test'
   | 's3.cors'
+  | 's3.cors.get'
+  | 's3.cors.put'
+  | 's3.cors.delete'
   | 's3.list'
   | 's3.delete'
   | 's3.folderStats'
@@ -111,6 +114,13 @@ export interface VaultParams {
   'creds.encrypt': { credentials: CredentialPlaintext };
   's3.test': { profile: S3ProfileConfig; credentials: Credentials };
   's3.cors': { profile: S3ProfileConfig; method?: string };
+  's3.cors.get': { profile: S3ProfileConfig; credentials: Credentials };
+  's3.cors.put': {
+    profile: S3ProfileConfig;
+    credentials: Credentials;
+    config: CorsConfiguration;
+  };
+  's3.cors.delete': { profile: S3ProfileConfig; credentials: Credentials };
   's3.list': {
     profile: S3ProfileConfig;
     credentials: Credentials;
@@ -161,6 +171,9 @@ export type VaultResults = {
   'creds.encrypt': { payload: EncryptedPayload };
   's3.test': TestConnectionResult;
   's3.cors': CorsResult;
+  's3.cors.get': CorsConfiguration;
+  's3.cors.put': { applied: true };
+  's3.cors.delete': { deleted: true };
   's3.list': ListObjectsResult;
   's3.delete': { deleted: string[]; errors: { key: string; code: string; message: string }[] };
   's3.folderStats': FolderStatsResult;

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { X, Loader2, Plug, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import type { AppDB } from '../db/client';
+import type { S3ProfileConfig } from '../vault/protocol';
 import { createConnection } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
+import { CorsHelper } from './CorsHelper';
 
 interface ConnectionDialogProps {
   db: AppDB;
@@ -60,6 +62,7 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: 'idle' });
   const [cors, setCors] = useState<CorsState>({ status: 'idle' });
+  const [testedTarget, setTestedTarget] = useState<S3ProfileConfig | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -123,6 +126,7 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
       const result = await vaultService.call('s3.test', { profile, credentials });
 
       if (result.ok) {
+        setTestedTarget(profile);
         setTest({
           status: 'ok',
           message: `Connected — bucket reachable (${result.objectCount ?? 0} keys in first page).`,
@@ -379,6 +383,17 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
                 </>
               )}
             </div>
+          )}
+
+          {testedTarget && form.accessKeyId.trim() && form.secretAccessKey.trim() && (
+            <CorsHelper
+              profile={testedTarget}
+              credentials={{
+                accessKeyId: form.accessKeyId.trim(),
+                secretAccessKey: form.secretAccessKey.trim(),
+              }}
+              onApplied={() => setCors({ status: 'testing' })}
+            />
           )}
 
           <div className="flex items-center justify-between pt-2">
