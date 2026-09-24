@@ -509,6 +509,62 @@ merge 6.12.2, aws4fetch 1.0.20 (still stale), @huggingface/transformers 4.3.0.
 Spike list §9 updated: added spike #8 (TS 7.0 + typescript-eslint bridge, 0.25d) and
 expanded spike #5 to include `s3-lite-client` evaluation. Total: ~5.75d.
 
+## 13. Re-verification log — 2026-09-24 (pass 5: hosting target + cost)
+
+**The "GitHub Pages" hosting claim carried by the original specs is obsolete.
+Galiot ships to Cloudflare Workers Static Assets.** This entry is the
+authoritative statement; the spec docs keep their original prose (per the
+no-retroactive-edits rule) and now carry a banner pointing here.
+
+Evidence in this repository — configuration, not inference:
+- `wrangler.jsonc`: `assets.directory: "./dist"` plus
+  `not_found_handling: "single-page-application"` — the Workers Static Assets
+  config shape (SPA fallback serves `index.html` for unmatched routes).
+- `.github/workflows/deploy.yml`: `cloudflare/wrangler-action@v3` running
+  `command: deploy`.
+- `public/_headers`: CSP with `frame-ancestors 'none'`, `COOP: same-origin`,
+  `COEP: credentialless`, HSTS preload, Permissions-Policy. GitHub Pages ignores
+  `_headers` entirely, so this file only has meaning on Workers (or Pages).
+- 2026-09-24 CI run on the private repo reached the wrangler step and failed
+  only on a missing `CLOUDFLARE_API_TOKEN` — the deploy path is real, merely
+  unconfigured.
+
+Cost facts (verified 2026-09-24 against Cloudflare's docs):
+- "Requests to static assets are free and unlimited."
+- The Workers **Free** plan meter is 100,000 requests/day and applies to Worker
+  *code* invocations — not to static asset requests.
+- No data-transfer (egress) or bandwidth charges on any plan.
+- The **Paid** plan starts at $5/month minimum and is not needed here.
+
+**Therefore: Galiot costs $0 to host, requires no card, and its bill does not
+scale with user traffic** for as long as it ships static assets only (no Worker
+script). Cost only re-opens if a dynamic Worker is introduced (e.g. a presign
+proxy) and exceeds the free 100k req/day meter.
+
+Superseded / narrowed by this entry:
+1. §6's "GitHub Pages for v1 launch" and its "GitHub Pages as docs mirror"
+   fallback. GitHub Pages is no longer in the deploy path; documentation lives
+   in this repository. A future public docs site should be a second Workers
+   Static Assets deployment, not a `*.github.io` mirror.
+2. SECURITY_DEEP_DIVE §3.2 "Origin isolation on GitHub Pages". On a Workers
+   domain (`*.workers.dev` or a custom domain) the app gets its own first-party
+   origin, so the shared-sibling-origin risk and the "dedicate the root user
+   site" mitigation no longer apply.
+3. Conversely, the header-based constraints §6 attributed to GitHub Pages are
+   now enforceable: `public/_headers` delivers real CSP (including
+   `frame-ancestors`), COOP/COEP and HSTS headers — closing gaps that were
+   previously accepted as unavoidable.
+4. README (the front door) now states the actual host and cost. The original
+   specs are banner-noted rather than rewritten.
+5. Unchanged by this pass: the bucket-side CORS requirement, the 100%
+   client-side/no-backend architecture, and the "no secrets in the main thread"
+   vault rule.
+
+Sources:
+- https://developers.cloudflare.com/workers/static-assets/ (assets config, SPA fallback, automatic edge caching)
+- https://developers.cloudflare.com/workers/platform/pricing/ (static assets free & unlimited; Free 100k req/day; no egress charges; Paid $5/mo minimum)
+- https://developers.cloudflare.com/workers/platform/limits/ (free plan limits)
+
 ---
 
 *End of stack decision. Update this file when spikes close; do not edit the

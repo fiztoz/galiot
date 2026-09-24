@@ -1,5 +1,11 @@
 # Galiot — Free Hosting Comparison (public OSS, non-commercial)
 
+> **⚠️ Hosting correction (2026-09-24):** this document predates the hosting
+> decision and still describes **GitHub Pages**. Galiot ships to **Cloudflare
+> Workers Static Assets** (free tier, $0, static requests free & unlimited).
+> See [STACK_DECISION.md](STACK_DECISION.md) §6, §12 and §13 for the verified decision and sources.
+> This file is kept as the original spec; corrections live in that log.
+
 > **Status:** Research pass — hosting alternatives to GitHub Pages, restricted to **free tiers
 > usable by a public open-source project with no commercial intent**.
 > **Date:** 2026-09-18

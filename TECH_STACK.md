@@ -1,5 +1,11 @@
 # Galiot — Technology Stack & Toolchain
 
+> **⚠️ Hosting correction (2026-09-24):** this document predates the hosting
+> decision and still describes **GitHub Pages**. Galiot ships to **Cloudflare
+> Workers Static Assets** (free tier, $0, static requests free & unlimited).
+> See [docs/STACK_DECISION.md](docs/STACK_DECISION.md) §6, §12 and §13 for the verified decision and sources.
+> This file is kept as the original spec; corrections live in that log.
+
 > *A deep dive into the modern web and build stack powering Galiot, focusing on **Bun 1.4**, **PGlite**, and modern browser APIs.*
 
 ---

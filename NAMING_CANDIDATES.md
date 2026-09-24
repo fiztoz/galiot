@@ -1,5 +1,11 @@
 # Galeon Web — Name Decision & Candidate History
 
+> **⚠️ Hosting correction (2026-09-24):** this document predates the hosting
+> decision and still describes **GitHub Pages**. Galiot ships to **Cloudflare
+> Workers Static Assets** (free tier, $0, static requests free & unlimited).
+> See [docs/STACK_DECISION.md](docs/STACK_DECISION.md) §6, §12 and §13 for the verified decision and sources.
+> This file is kept as the original spec; corrections live in that log.
+
 > *The naming evaluation record for the 100% client-side web counterpart to **Galeon**.*
 
 ---
