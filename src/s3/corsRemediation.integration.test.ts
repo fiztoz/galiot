@@ -17,7 +17,7 @@ import type { CorsConfiguration } from './client';
 
 const ACCESS_KEY = 'AKIATESTVERIFY0000';
 const SECRET_KEY = 'test-verify-secret';
-const BUCKET = 'erc2_tpa_dev';
+const BUCKET = 'example-bucket';
 const ORIGIN = 'http://localhost:5173';
 
 const encoder = new TextEncoder();

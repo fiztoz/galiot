@@ -42,11 +42,11 @@ describe('buildS3Url addressing regression', () => {
     // Regression: the URL API silently ignores `hostname = 'bucket.127.0.0.1'`,
     // which used to produce a URL with NO bucket at all.
     const url = buildS3Url(
-      { endpoint: 'http://127.0.0.1:9000', bucket: 'erc2_tpa_dev', pathStyle: false },
+      { endpoint: 'http://127.0.0.1:9000', bucket: 'example-bucket', pathStyle: false },
       'photos/a.jpg',
     );
-    expect(url.toString()).toBe('http://127.0.0.1:9000/erc2_tpa_dev/photos/a.jpg');
-    expect(url.pathname.startsWith('/erc2_tpa_dev/')).toBe(true);
+    expect(url.toString()).toBe('http://127.0.0.1:9000/example-bucket/photos/a.jpg');
+    expect(url.pathname.startsWith('/example-bucket/')).toBe(true);
   });
 
   test('IP endpoint bucket root is correct', () => {

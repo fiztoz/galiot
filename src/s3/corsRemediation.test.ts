@@ -113,10 +113,10 @@ describe('shell quoting', () => {
 const ctx = {
   endpoint: 'http://127.0.0.1:9000',
   region: 'us-east-1',
-  bucket: 'erc2_tpa_dev',
+  bucket: 'example-bucket',
   config: config(),
   presignedUrl:
-    'https://s3.example.com/erc2_tpa_dev/?cors=&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef',
+    'https://s3.example.com/example-bucket/?cors=&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef',
   accessKeyId: 'AKIAEXAMPLE',
   secretAccessKey: 'secret/with+chars=',
   includeSecrets: false,
@@ -156,7 +156,7 @@ describe('buildCorsRemediation', () => {
     // No key arguments: mc asks for them interactively.
     expect(mc.script).not.toContain(ctx.accessKeyId);
     expect(mc.script).not.toContain(ctx.secretAccessKey);
-    expect(mc.script).toContain('mc cors set galiot/erc2_tpa_dev');
+    expect(mc.script).toContain('mc cors set galiot/example-bucket');
     // The alias it creates is removed again.
     expect(mc.script).toContain('mc alias rm galiot');
     expect(mc.containsSecret).toBe(false);
@@ -166,7 +166,7 @@ describe('buildCorsRemediation', () => {
     const aws = option('aws');
     expect(aws.script).toContain('--endpoint-url');
     expect(aws.script).toContain("'http://127.0.0.1:9000'");
-    expect(aws.script).toContain("'erc2_tpa_dev'");
+    expect(aws.script).toContain("'example-bucket'");
     expect(aws.script).toContain("read -rsp 'Secret access key: '");
     expect(aws.script).toContain('unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY');
     expect(aws.script).not.toContain(ctx.secretAccessKey);

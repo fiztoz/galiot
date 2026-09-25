@@ -39,7 +39,7 @@ describe('origin allowlist', () => {
 describe('checkForwardRequest', () => {
   test('accepts a signed request from an allowed origin', () => {
     const result = checkForwardRequest(
-      { target: 'http://127.0.0.1:9000/erc2_tpa_dev/?cors', method: 'PUT', headers: SIGNED_HEADERS },
+      { target: 'http://127.0.0.1:9000/example-bucket/?cors', method: 'PUT', headers: SIGNED_HEADERS },
       options,
     );
     expect(result.ok).toBe(true);
