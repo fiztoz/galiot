@@ -7,7 +7,7 @@
  * credential. They are checked here because they are cheap to check.
  */
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -117,4 +117,147 @@ describe('CI', () => {
     expect(verify!).not.toContain('secrets.CLOUDFLARE_API_TOKEN');
     expect(deploy!).toContain('secrets.CLOUDFLARE_API_TOKEN');
   });
+});
+
+/**
+ * Every policy the app ships, as a directive -> value map.
+ *
+ * `default-src 'none'` means any directive that is *absent* silently blocks that
+ * resource class. Three features were broken this way in production — the PWA
+ * manifest, <audio>/<video> preview and the PDF <iframe> — with no visible
+ * error anywhere except the browser console, so the set is asserted explicitly.
+ */
+function directives(policy: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const part of policy.split(';')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const space = trimmed.indexOf(' ');
+    if (space === -1) map.set(trimmed, '');
+    else map.set(trimmed.slice(0, space), trimmed.slice(space + 1));
+  }
+  return map;
+}
+
+const HEADER_CSP = /Content-Security-Policy:\s*(.+)/m.exec(read('public', '_headers'))![1]!.trim();
+const VERCEL_CSP = (
+  JSON.parse(read('vercel.json')) as {
+    headers: { headers: { key: string; value: string }[] }[];
+  }
+).headers[0]!.headers.find((h) => h.key === 'Content-Security-Policy')!.value;
+const META_CSP =
+  /<meta[^>]*http-equiv="Content-Security-Policy"[^>]*content="([^"]+)"/s.exec(read('index.html'))![1]!;
+
+/**
+ * Resource classes the UI actually loads. Each must be named explicitly;
+ * relying on the default-src fallback is how these broke.
+ *   manifest-src  <link rel=manifest>  — without it the app is not installable
+ *   media-src     <audio>/<video> preview, fed a presigned https URL
+ *   frame-src     the PDF <iframe>, also fed a presigned https URL
+ *   img-src       image preview
+ *   worker-src    the PGlite / vault / transfer workers
+ *   connect-src   every S3 request
+ */
+const REQUIRED_DIRECTIVES = [
+  'default-src',
+  'script-src',
+  'img-src',
+  'media-src',
+  'frame-src',
+  'worker-src',
+  'connect-src',
+  'manifest-src',
+  'object-src',
+  'base-uri',
+] as const;
+
+describe('CSP completeness', () => {
+  const policies = {
+    'index.html meta': META_CSP,
+    'public/_headers': HEADER_CSP,
+    'vercel.json': VERCEL_CSP,
+  };
+
+  for (const [name, policy] of Object.entries(policies)) {
+    test(`${name} names every directive the UI needs`, () => {
+      const d = directives(policy);
+      for (const required of REQUIRED_DIRECTIVES) {
+        expect(d.has(required), `${name} is missing ${required}, so it falls back to default-src 'none'`).toBe(true);
+      }
+      // The preview features need more than 'self': they load presigned S3 URLs.
+      expect(d.get('media-src'), `${name} media-src cannot stream presigned URLs`).toContain('https:');
+      expect(d.get('frame-src'), `${name} frame-src cannot render a presigned PDF`).toContain('https:');
+      expect(d.get('manifest-src'), `${name} manifest-src`).toBe("'self'");
+    });
+  }
+
+  test('the two response-header policies are byte-identical', () => {
+    // They are served by different hosts; if they drift, behaviour differs per
+    // deployment and a regression only reproduces on one of them.
+    expect(HEADER_CSP).toBe(VERCEL_CSP);
+  });
+
+  test('the meta policy is never looser than the response header', () => {
+    const meta = directives(META_CSP);
+    const header = directives(HEADER_CSP);
+
+    for (const [name, headerValue] of header) {
+      // frame-ancestors is ignored inside a <meta> CSP, so the header carries it
+      // alone. Asserting its *absence* keeps that dead config from creeping in
+      // and implying the meta tag does something it cannot.
+      if (name === 'frame-ancestors') {
+        expect(meta.has(name), 'frame-ancestors is inert in a meta CSP — do not add it').toBe(false);
+        continue;
+      }
+
+      expect(meta.has(name), `meta policy is missing ${name}`).toBe(true);
+      if (name === 'connect-src') {
+        // The one deliberate difference: the meta allows the local bridge so it
+        // works in development, while the header stays strict.
+        expect(meta.get(name)!.replace(` ${BRIDGE_ORIGIN}`, '')).toBe(headerValue);
+        expect(meta.get(name)!).toContain(BRIDGE_ORIGIN);
+      } else {
+        expect(meta.get(name), `${name} drifted between the meta and header policies`).toBe(headerValue);
+      }
+    }
+
+    for (const name of meta.keys()) {
+      expect(
+        header.has(name),
+        `meta policy has directive ${name} that the header does not — it would only apply on hosts without header support`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe('files served verbatim from public/', () => {
+  // public/ is copied into dist/ untouched — it is never transpiled. TypeScript
+  // syntax in a .js file there is a runtime SyntaxError, and for a service worker
+  // the only symptom is "ServiceWorker script evaluation failed". sw.js shipped
+  // with two `as Promise<Response>` casts, so the worker never once registered.
+  const jsFiles = readdirSync(join(ROOT, 'public')).filter((f) => f.endsWith('.js'));
+
+  test('there is at least one file to check', () => {
+    expect(jsFiles.length).toBeGreaterThan(0);
+  });
+
+  for (const file of jsFiles) {
+    test(`public/${file} is valid plain JavaScript`, () => {
+      const target = join(ROOT, 'public', file);
+      const proc = Bun.spawnSync(['node', '--check', target]);
+      if (proc.exitCode === null) {
+        // node absent — do not pretend the file was verified.
+        throw new Error('node is not available to syntax-check public/*.js');
+      }
+      expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+    });
+
+    test(`public/${file} carries no TypeScript-only syntax`, () => {
+      const src = read('public', file);
+      expect(src).not.toMatch(/\bas\s+[A-Z][A-Za-z0-9_]*(<[^>]*>)?/); // `x as Foo<T>`
+      expect(src).not.toMatch(/^\s*(interface|type)\s+\w+/m);
+      expect(src).not.toMatch(/:\s*(Promise|string|number|boolean|Response)<</); // annotations
+      expect(src).not.toMatch(/\w!\s*[).;,)]/); // non-null assertion
+    });
+  }
 });
