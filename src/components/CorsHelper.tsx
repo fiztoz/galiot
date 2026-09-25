@@ -69,6 +69,21 @@ const VERDICT_COPY: Record<CorsVerdict, { title: string; detail: string; tone: '
 };
 
 /**
+ * Copy for a server that exposes no readable bucket-CORS policy.
+ *
+ * MinIO answers `GET ?cors` with 404 and has no per-bucket CORS API at all,
+ * while allowing every origin by default. So "no configuration found" there
+ * does not mean requests will be blocked — and saying so would be wrong. A
+ * successful signed request is the real evidence, and when we have one the
+ * verdict is reported as fine rather than as a problem to fix.
+ */
+const UNREADABLE_BUT_WORKING = {
+  title: 'CORS is working',
+  detail:
+    'This server does not report a per-bucket CORS policy, but your signed request from this origin succeeded — so the browser is being allowed through.',
+};
+
+/**
  * Interactive CORS diagnostics + remediation (roadmap 5.1). Appending keeps
  * other applications' rules intact; removal is opt-in and explicit.
  */
@@ -95,6 +110,9 @@ export function CorsHelper({
   const [remediationBusy, setRemediationBusy] = useState(false);
   const [activeOption, setActiveOption] = useState<RemediationOption['id']>('curl');
   const [copiedScript, setCopiedScript] = useState(false);
+  // Set once the endpoint proves it has no bucket-CORS API (MinIO answers
+  // 501 NotImplemented, and `mc cors set` fails there too on current releases).
+  const [corsApiUnsupported, setCorsApiUnsupported] = useState(false);
 
   // Derived before the callbacks below, which depend on them.
   const recommended = S3Client.recommendedCorsRule(origin);
@@ -176,11 +194,20 @@ export function CorsHelper({
           rules: append ? [...withoutGaliot, recommended] : [recommended],
         };
 
-        await vaultService.call('s3.cors.put', {
+        const result = await vaultService.call('s3.cors.put', {
           profile,
           credentials,
           config: next,
         });
+
+        if (!result.applied) {
+          // Remembered so the guidance below stops offering paths this endpoint
+          // cannot execute.
+          if (result.unsupported) setCorsApiUnsupported(true);
+          setError(result.error ?? 'The bucket rejected the CORS policy.');
+          return;
+        }
+
         setConfig(next);
         onApplied?.();
       } catch (err) {
@@ -251,6 +278,14 @@ export function CorsHelper({
         setConfig(next);
         setBridgeStatus({ state: 'up' });
         onApplied?.();
+      } else if (result.status === 501 || /NotImplemented/i.test(result.body ?? '')) {
+        // The bridge reaches MinIO perfectly well — the server simply has no
+        // bucket-CORS API, so the request cannot succeed by any route.
+        setCorsApiUnsupported(true);
+        setBridgeStatus({
+          state: 'down',
+          message: `The bridge reached the server, which answered 501 NotImplemented (HTTP ${result.status}).`,
+        });
       } else {
         setBridgeStatus({
           state: 'down',
@@ -285,17 +320,23 @@ export function CorsHelper({
     }
   }, []);
 
-  const copy = VERDICT_COPY[verdict ?? 'none'];
-  const needsPathStyle = !canUseVirtualHosting(profile.endpoint) && !profile.pathStyle;
-  // Verified in a real browser: when CORS is broken the browser blocks the
-  // PutBucketCors request too, so the one-click fix cannot bootstrap itself.
-  //
   // A 'request-rejected' verdict (the bucket answered and refused — wrong key,
   // missing bucket) must not land here: the policy is not the problem, and
   // offering to rewrite it would send the user after the wrong fix.
+  //
+  // Likewise, when no policy is readable *and* the signed request succeeded,
+  // CORS is demonstrably fine (MinIO's default is to allow every origin), so
+  // there is nothing to fix and nothing to claim.
+  const requestSucceeded = diagnosis?.reason === 'ok';
   const corsBlocksTheFix =
+    !requestSucceeded &&
     (diagnosis?.reason === 'cors-blocked' || verdict === 'none') &&
     diagnosis?.reason !== 'request-rejected';
+  const unreadableButWorking = requestSucceeded && verdict === 'none';
+  const copy = unreadableButWorking
+    ? { ...UNREADABLE_BUT_WORKING, tone: 'ok' as const }
+    : VERDICT_COPY[verdict ?? 'none'];
+  const needsPathStyle = !canUseVirtualHosting(profile.endpoint) && !profile.pathStyle;
   // Local development only: a deployed build's visitors have no bridge to use.
   const bridgeOffered = corsBlocksTheFix && shouldOfferBridge();
 
@@ -396,7 +437,35 @@ export function CorsHelper({
         </div>
       )}
 
-      {corsBlocksTheFix && (
+      {corsBlocksTheFix && corsApiUnsupported && (
+        <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/25 p-2.5 space-y-2">
+          <p className="text-[11px] font-medium text-amber-800 dark:text-amber-300 leading-relaxed">
+            This server does not implement the S3 bucket-CORS API.
+          </p>
+          <p className="text-[11px] text-zinc-600 dark:text-zinc-300 leading-relaxed">
+            It answered <code className="font-mono">501 NotImplemented</code> to the policy write, so
+            none of the commands below can change it — and on current MinIO releases{' '}
+            <code className="font-mono">mc cors set</code> fails the same way. MinIO controls CORS
+            for the whole server instead:
+          </p>
+          <pre className="p-2 rounded bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900 overflow-x-auto text-[10px] leading-relaxed whitespace-pre-wrap break-all">
+            {`# at server start
+MINIO_API_CORS_ALLOW_ORIGIN=${origin}
+
+# or on a running server (needs admin credentials, then restarts it)
+mc admin config set <alias> api cors_allow_origin=${origin}
+mc admin service restart <alias>`}
+          </pre>
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+            MinIO allows every origin by default, so a blocked request is more often something
+            else — the wrong port, an http/https mismatch, or credentials the bucket rejects. Run{' '}
+            <em>Test connection</em> again after changing the setting; if it still fails, the
+            verdict there names the actual cause.
+          </p>
+        </div>
+      )}
+
+      {corsBlocksTheFix && !corsApiUnsupported && (
         <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/25 p-2.5 space-y-2">
           <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
             Writing a CORS policy is itself a signed cross-origin request, so the browser blocks

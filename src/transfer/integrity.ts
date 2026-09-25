@@ -61,7 +61,8 @@ export class Md5 {
     return this;
   }
 
-  digest(): string {
+  /** The 16 raw digest bytes, for APIs that want binary rather than hex. */
+  digestBytes(): Uint8Array {
     const bitLength = this.totalLength * 8;
     const padded = new Uint8Array(this.bufferLength < 56 ? 64 : 128);
     padded.set(this.buffer.subarray(0, this.bufferLength));
@@ -80,7 +81,11 @@ export class Md5 {
     for (let i = 0; i < 4; i += 1) {
       outView.setUint32(i * 4, this.state[i]! >>> 0, true);
     }
-    return toHex(out);
+    return out;
+  }
+
+  digest(): string {
+    return toHex(this.digestBytes());
   }
 
   private processBlock(block: Uint8Array, offset: number): void {
@@ -143,6 +148,17 @@ export class Md5 {
 
 export function md5Hex(data: Uint8Array): string {
   return new Md5().update(data).digest();
+}
+
+/**
+ * Base64 of the raw MD5 digest, which is what the S3 `Content-MD5` header wants
+ * (hex is a different encoding of the same bytes).
+ */
+export function md5Base64(data: Uint8Array): string {
+  const bytes = new Md5().update(data).digestBytes();
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 /** Splits `"abc-3"` into its hex digest and part count. */

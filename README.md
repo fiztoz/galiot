@@ -208,9 +208,56 @@ the secret.
 The generated policy always uses your current origin, so a local build suggests
 `http://localhost:5173` and a deployed one suggests your real hostname.
 
+**MinIO is different, and Galiot tells you so.** MinIO has no per-bucket CORS
+API — `PutBucketCors` answers `501 NotImplemented`, and `mc cors set` fails the
+same way — because it configures CORS for the whole server and allows every
+origin by default. When Galiot sees that response it stops offering the commands
+that cannot work and points at the real setting instead:
+
+```bash
+# at server start
+MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:5173
+
+# or on a running server (needs admin credentials, then restarts it)
+mc admin config set <alias> api cors_allow_origin=http://localhost:5173
+mc admin service restart <alias>
+```
+
+Because MinIO is permissive by default, a "Failed to fetch" there is usually
+something else — the wrong port, an `http`/`https` mismatch, or credentials the
+bucket rejects — and the connection test says which.
+
 ---
 
-## 9. Optional local bridge (`bun run bridge`, local development only)
+## 9. Verifying against a real server
+
+```bash
+./scripts/minio-test.sh
+```
+
+That starts MinIO in a container, creates the buckets, runs both live suites
+against it and removes it again. It needs Docker (colima or Docker Desktop) and
+pulls `quay.io/minio/minio` and `quay.io/minio/mc` — MinIO no longer publishes to
+Docker Hub.
+
+- `bun run test:integrity` — uploads round-trip byte-for-byte, multipart ETags are
+  recomputed and compared with the bucket's own, interrupted uploads resume,
+  range requests return exactly the requested slice, and the checker is proved
+  non-vacuous by corrupting a byte.
+- `bun run test:minio` — CORS handling, presigned links, listing past the
+  1000-key page boundary, keys with spaces and non-ASCII text, and multi-delete.
+
+Worth knowing why the second suite exists: the unit tests and every mock missed
+four real defects that a live server caught immediately — an empty
+`continuation-token` that MinIO rejects (which made *every* listing fail there), a
+double-encoded canonical URI that broke *every* key containing a space or a
+non-ASCII character, a missing `Content-MD5` that broke multi-delete, and an
+error-code loss that reported a `501` as a permissions problem. Details in
+`docs/STACK_DECISION.md` §15.
+
+---
+
+## 10. Optional local bridge (`bun run bridge`, local development only)
 
 A browser cannot fix a bucket's CORS policy: the request that would write it is
 itself blocked by the missing policy. That is why a browser *worker* cannot do
@@ -245,7 +292,7 @@ Without it, apply the same policy with `mc cors set` / `aws s3api put-bucket-cor
 
 ---
 
-## 10. Known Limitations
+## 11. Known Limitations
 
 | Area | Limitation | Why |
 |---|---|---|

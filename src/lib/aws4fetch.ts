@@ -53,6 +53,38 @@ const UNSIGNABLE_HEADERS = new Set([
   'connection',
 ]);
 
+/** RFC 3986 encoding: like encodeURIComponent, but also escapes !'()* */
+function encodeRfc3986(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+/**
+ * Canonical URI for SigV4: the path percent-encoded exactly once, with `/` kept
+ * as a separator (S3's rule).
+ *
+ * The URL parser has *already* encoded the path by the time we see it, so
+ * running `encodeURI` over it encodes every `%` again: a key of
+ * ` leading-space.txt` became `%20` in the URL and `%2520` in the signature,
+ * while the request that went out carried `%20`. MinIO answered every such
+ * upload with `403 SignatureDoesNotMatch` (verified against
+ * quay.io/minio/minio RELEASE.2025-09-07), which meant any key with a space or
+ * a non-ASCII character — "Q3 report.pdf", "写真.jpg" — could not be uploaded,
+ * fetched or deleted.
+ *
+ * Decoding first and re-encoding per segment is idempotent, so a key that
+ * literally contains `%20` is still encoded once and matches what is sent.
+ */
+export function canonicalUri(pathname: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // A stray '%' that is not a valid escape: use the path as we received it.
+    decoded = pathname;
+  }
+  return decoded.split('/').map((segment) => encodeRfc3986(segment)).join('/');
+}
+
 export class AwsClient {
   public accessKeyId: string;
   public secretAccessKey: string;
@@ -162,7 +194,7 @@ export class AwsClient {
     });
     queryStr = queryParams.map(([k, v]) => `${k}=${v}`).join('&');
 
-    const uri = awsOptions.singleEncode ? encodeURI(url.pathname).replace(/[!'()*]/g, escape) : encodeURI(url.pathname).replace(/[!'()*]/g, escape).replace(/%2F/g, '/');
+    const uri = canonicalUri(url.pathname);
     const canonicalRequest = `${method}\n${uri}\n${queryStr}\n${canonicalHeadersStr}\n${signedHeadersStr}\n${payloadHash}`;
 
     const canonicalRequestHash = await hash(canonicalRequest);
