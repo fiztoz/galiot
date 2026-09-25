@@ -42,7 +42,7 @@ fi
 
 echo "Starting MinIO on ${ENDPOINT} (permissive CORS, so the suites can run)…"
 docker run -d --name "${CONTAINER}" \
-  -p "${PORT}:9000" -p "$((PORT + 1)):9001" \
+  -p "127.0.0.1:${PORT}:9000" -p "127.0.0.1:$((PORT + 1)):9001" \
   -e MINIO_ROOT_USER="${ROOT_USER}" \
   -e MINIO_ROOT_PASSWORD="${ROOT_PASSWORD}" \
   -e MINIO_API_CORS_ALLOW_ORIGIN='*' \
