@@ -3,9 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      This meta policy is the only CSP on hosts that cannot set response headers,
+      so it ships with every build. It deliberately allows the optional local
+      CORS bridge on 127.0.0.1:8787, which shouldOfferBridge() only ever surfaces
+      on a local hostname — without it the page's own CSP blocks the bridge in
+      development.
+
+      Production is not weakened by that: vercel.json and public/_headers send a
+      stricter connect-src, and a request must satisfy *every* policy that
+      applies, so the header still blocks the bridge once deployed. Keep those
+      two files strict; do not add the bridge origin to them.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https:; connect-src 'self' https:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; worker-src 'self' blob:;"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https:; connect-src 'self' https: http://127.0.0.1:8787; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; worker-src 'self' blob:;"
     />
     <title>Galiot — The Agile Cloud Explorer</title>
     <meta name="description" content="A 100% client-side cloud storage explorer powered by PGlite WASM Postgres" />
