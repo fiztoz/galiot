@@ -80,6 +80,30 @@ const lightTheme = EditorView.theme({
   '.cm-activeLine': { backgroundColor: '#00000006' },
 });
 
+export interface EditorMountState {
+  loading: boolean;
+  error: string | null;
+  media: 'image' | 'pdf' | 'audio' | 'video' | null;
+  /** Whether language resolution has finished — *not* whether it found a grammar. */
+  langResolved: boolean;
+}
+
+/**
+ * Whether the CodeMirror view may mount.
+ *
+ * Extracted and pure so the decision is unit-testable: the bug this replaces
+ * gated on `langSupport === undefined`, which is also the *correct* value for
+ * plain text, so every `.txt`, `.log`, `.csv` and unknown extension opened a
+ * dead panel with no editor, no spinner and no error. "Not loaded yet" and
+ * "nothing to load" have to stay distinct.
+ */
+export function canMountEditor(state: EditorMountState): boolean {
+  if (state.loading) return false;
+  if (state.error) return false;
+  if (state.media !== null) return false;
+  return state.langResolved;
+}
+
 function baseExtensions(support: Extension | undefined): Extension[] {
   return [
     lineNumbers(),
@@ -119,6 +143,17 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const [original, setOriginal] = useState('');
   const [media, setMedia] = useState<'image' | 'pdf' | 'audio' | 'video' | null>(null);
   const [langSupport, setLangSupport] = useState<Extension | undefined>(undefined);
+  /**
+   * Whether language resolution has finished.
+   *
+   * `langSupport === undefined` cannot serve as the "still loading" signal:
+   * plain text has no grammar, so `languageSupport('text')` resolves to
+   * `undefined` on purpose. Conflating the two meant every `.txt`, `.log`,
+   * `.csv` and unknown-extension file opened a dead panel — no editor, no
+   * spinner, no error — because the mount effect bailed on a value that was
+   * never going to change.
+   */
+  const [langResolved, setLangResolved] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -144,6 +179,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      setLangResolved(true);
       setLoading(false);
     }
   }, [db, profile, file.key, filename]);
@@ -154,10 +190,11 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
 
   // Mount the CodeMirror view for the loaded text.
   useEffect(() => {
-    if (loading || error || media !== null || langSupport === undefined) return;
+    // `langSupport` may legitimately be undefined (plain text has no grammar),
+    // so the gate is `canMountEditor` — resolution finished — not the extension.
+    if (!canMountEditor({ loading, error, media, langResolved })) return;
     const container = containerRef.current;
     if (!container || viewRef.current) return;
-    if (detectLanguage(filename) === 'text' && langSupport === undefined) return;
 
     const state = EditorState.create({
       doc: original,
@@ -181,11 +218,13 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
       view.destroy();
       viewRef.current = null;
     };
-  }, [loading, error, media, original, filename, langSupport]);
+  }, [loading, error, media, original, filename, langSupport, langResolved]);
 
   // Mount the side-by-side merge view on demand.
   useEffect(() => {
-    if (mode !== 'diff' || !viewRef.current || langSupport === undefined) return;
+    // Same reasoning as the editor mount: "resolution finished", not "a grammar
+    // was found", so Diff works for plain text too.
+    if (mode !== 'diff' || !viewRef.current || !langResolved) return;
     const container = containerRef.current;
     if (!container || mergeRef.current) return;
 

@@ -656,6 +656,41 @@ exercised here, so no compatibility claim is made for them beyond §5. The
 multipart **transfer worker** path was verified through the client and through a
 live browser listing, not by driving a multi-part upload through the browser UI.
 
+### Follow-up in the same pass: browser coverage of the worker paths
+
+Driving the real UI against the same container closed the gaps the Bun suites
+cannot reach, and found one more defect:
+
+6. **Every plain-text file opened a dead editor.** The editor's mount effect
+   waited for a CodeMirror language grammar, but `languageSupport('text')`
+   resolves to `undefined` *on purpose* — plain text has no grammar. The gate
+   therefore never opened for `.txt`, `.log`, `.csv` or any unknown extension:
+   no editor, no spinner, no error, just an inert panel. The same guard blocked
+   the Diff view. Fixed by separating "resolution finished" from "a grammar was
+   found" (`canMountEditor`, with unit tests, since the repository has no DOM
+   test environment).
+
+Verified in the browser against MinIO, all through workers:
+
+- a 40 MiB file (three 16 MiB parts, above the 32 MiB single-PUT threshold)
+  uploaded through the transfer drawer, then downloaded with MinIO's own client
+  and compared byte-for-byte; the app's multipart ETag recomputation matched the
+  server's exactly;
+- the editor loading, editing and saving a file whose name contains spaces,
+  unicode and parentheses, with the change confirmed server-side;
+- a Galeon export imported into a real bucket and browsed, with the
+  credential-less profile skipped and the reason shown;
+- the explorer listing and navigating into a subfolder;
+- a change made through the app appearing in the already-open listing with no
+  reload.
+
+One observation, not a defect: PGlite's `live` extension logs
+`invalid byte sequence for encoding "UTF8": 0x00` from its BroadcastChannel in
+this environment. It is not data-dependent (identical with and without binary
+objects in the bucket) and reactivity is unaffected — uploads, edits and imports
+all reach the open UI without a reload. Recorded here so a future report of
+stale listings starts from this rather than re-investigating it.
+
 ---
 
 *End of stack decision. Update this file when spikes close; do not edit the
