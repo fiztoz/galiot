@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import { VaultManager } from '../vault/vault';
-import { S3Client } from '../s3/client';
+import { S3Client, S3RequestError } from '../s3/client';
 import { AwsClient } from '../lib/aws4fetch';
 import { presignGetUrl, presignPutBucketCors, presignPutUrl } from '../s3/presign';
 import { corsConfigToXml } from '../s3/corsPolicy';
@@ -371,8 +371,24 @@ async function dispatch<M extends VaultMethod>(
     case 's3.cors.put': {
       const p = params as NonNullable<VaultRequest<'s3.cors.put'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      await makeS3Client(p.profile, creds).putBucketCors(p.config);
-      return { applied: true as const };
+      try {
+        await makeS3Client(p.profile, creds).putBucketCors(p.config);
+        return { applied: true as const };
+      } catch (err) {
+        // The distinction the UI needs: this endpoint has no bucket-CORS API
+        // (MinIO answers 501 NotImplemented), which no amount of retrying or
+        // different credentials will fix.
+        if (err instanceof S3RequestError) {
+          return {
+            applied: false,
+            error: err.message,
+            status: err.status,
+            code: err.code,
+            unsupported: err.unsupported,
+          };
+        }
+        throw err;
+      }
     }
 
     case 'bridge.health': {

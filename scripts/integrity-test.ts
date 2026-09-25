@@ -84,6 +84,27 @@ async function getBytes(client: S3Client, key: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer());
 }
 
+/**
+ * Fetches an object *and* the ETag the bucket reported for it.
+ *
+ * Verifying against the bucket's real ETag is the whole point of the integrity
+ * claims below. An earlier version of this suite built the expected ETag string
+ * itself and compared our computation against our own input, which passes
+ * whether or not the server agrees — and, when it did fail, printed
+ * "bucket said …" for a value the suite had just invented.
+ */
+async function getWithEtag(
+  client: S3Client,
+  key: string,
+): Promise<{ bytes: Uint8Array; etag: string }> {
+  const res = await client.getObject(key);
+  if (!res.ok) throw new Error(`GET ${key} failed: ${res.status}`);
+  return {
+    bytes: new Uint8Array(await res.arrayBuffer()),
+    etag: res.headers.get('etag') ?? '',
+  };
+}
+
 async function testSinglePut(client: S3Client, id: string): Promise<void> {
   console.log('\n1. single-PUT upload round-trip');
   const key = `${config.prefix}${id}-single.bin`;
@@ -125,21 +146,32 @@ async function testMultipart(client: S3Client, id: string): Promise<void> {
     parts.map((part, i) => ({ PartNumber: part.partNumber, ETag: `"${digests[i]}"` })),
   );
 
-  const downloaded = await getBytes(client, key);
+  const { bytes: downloaded, etag } = await getWithEtag(client, key);
   check('size matches', downloaded.length === size, `${downloaded.length} vs ${size}`);
   check(
     'content is byte-identical',
     Buffer.compare(Buffer.from(downloaded), Buffer.from(data)) === 0,
   );
 
-  const expected = multipartEtag(digests);
-  const verified = verifyAgainstEtag(downloaded, `${expected}-${parts.length}`, parts.map((p) => p.size));
+  // Compare against the ETag the bucket actually reported, not a string this
+  // suite assembled — and note multipartEtag() already appends the part count.
+  check('bucket reported a multipart ETag', /-\d+$/.test(etag.replace(/"/g, '')), etag);
+  const verified = verifyAgainstEtag(
+    downloaded,
+    etag,
+    parts.map((p) => p.size),
+  );
   check('composite ETag matches our recomputation', verified.ok, verified.reason);
+  check(
+    'our recomputation is what the bucket reported',
+    multipartEtag(digests) === etag.replace(/"/g, ''),
+    `ours ${multipartEtag(digests)}, bucket ${etag}`,
+  );
 
   // Prove the checker is not vacuous.
   const corrupted = new Uint8Array(downloaded);
   corrupted[0] = corrupted[0]! ^ 0xff;
-  const negative = verifyAgainstEtag(corrupted, `${expected}-${parts.length}`, parts.map((p) => p.size));
+  const negative = verifyAgainstEtag(corrupted, etag, parts.map((p) => p.size));
   check('corruption is detected', !negative.ok);
 
   await client.deleteObject(key);
@@ -207,7 +239,13 @@ async function testResume(client: S3Client, id: string): Promise<void> {
     region: config.region,
     service: 's3',
   }).sign(url, { method: 'GET' });
-  const listRes = await fetch(signed.url, { method: 'GET' });
+  // Send the signed Request itself. Fetching `signed.url` with a fresh init
+  // drops the Authorization and x-amz-* headers, so a real bucket correctly
+  // answers 403 and the suite used to blame the server's ListParts format.
+  const listRes = await fetch(signed);
+  if (!listRes.ok) {
+    throw new Error(`ListParts failed: ${listRes.status} ${await listRes.text()}`);
+  }
   const listXml = await listRes.text();
   const serverParts = new Set(xmlTextValues(listXml, 'PartNumber'));
   check('ListParts returned well-formed parts', xmlBlocks(listXml, 'Part').length > 0);
@@ -254,10 +292,9 @@ async function testRangeRequests(client: S3Client, id: string): Promise<void> {
     service: 's3',
   }).sign(url, { method: 'GET', headers: new Headers({ Range: `bytes=${start}-${end}` }) });
 
-  const res = await fetch(signed.url, {
-    method: 'GET',
-    headers: { Range: `bytes=${start}-${end}` },
-  });
+  // The signed Request carries the Range header *and* the signature over it;
+  // rebuilding the request by hand would send the header unsigned.
+  const res = await fetch(signed);
 
   check('range request returns 206', res.status === 206, `status ${res.status}`);
   const slice = new Uint8Array(await res.arrayBuffer());

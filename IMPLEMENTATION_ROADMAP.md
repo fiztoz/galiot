@@ -29,6 +29,14 @@
 - [ ] **1.4 Direct S3 Client**:
   - Implement lightweight, streaming S3 client utilizing AWS SigV4 fetch.
   - Test connection and CORS preflight against Cloudflare R2 and MinIO.
+  - **MinIO half verified 2026-09-25** against a live container
+    (`./scripts/minio-test.sh`): connection test, CORS diagnosis and remediation,
+    SigV4 signing, listing, multipart, resume, ranges, presigned links and
+    multi-delete. It surfaced four real defects, now fixed and recorded in
+    `docs/STACK_DECISION.md` §15 — including two that broke MinIO completely
+    (an empty `continuation-token` and a double-encoded canonical URI).
+  - **Still open: Cloudflare R2**, which needs real account credentials. Left
+    unticked deliberately rather than claiming a provider that was not exercised.
 
 ---
 

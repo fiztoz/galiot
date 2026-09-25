@@ -1,5 +1,6 @@
 import { AwsClient } from '../lib/aws4fetch';
 import { buildS3Url } from './url';
+import { md5Base64 } from '../transfer/integrity';
 import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
 
 export interface S3ClientOptions {
@@ -92,6 +93,72 @@ function serializeCorsRule(rule: CorsRule): string {
   );
 }
 
+/**
+ * Query parameters for ListObjectsV2, with empty values omitted.
+ *
+ * An empty `continuation-token=` is not the same as no token: AWS S3 ignores it,
+ * but MinIO answers **400 InvalidArgument** (verified against
+ * `quay.io/minio/minio` RELEASE.2025-09-07). Since the explorer sends this on
+ * every listing, that one empty parameter made every bucket unlistable on MinIO
+ * — a failure no mock server reproduced, because mocks happily accept it.
+ *
+ * Subresource parameters such as `?cors=` or `?uploads=` are the opposite case
+ * and must keep their empty value; that is how S3 identifies them.
+ */
+export function listObjectsQuery(
+  prefix?: string,
+  options?: { delimiter?: string; maxKeys?: number; continuationToken?: string },
+): Record<string, string> {
+  const query: Record<string, string> = { 'list-type': '2' };
+  if (prefix) query.prefix = prefix;
+  if (options?.delimiter) query.delimiter = options.delimiter;
+  if (options?.maxKeys !== undefined) query['max-keys'] = options.maxKeys.toString();
+  if (options?.continuationToken) query['continuation-token'] = options.continuationToken;
+  return query;
+}
+
+/**
+ * An S3 error response, with the server's own error code preserved.
+ *
+ * The code is what makes the difference between "you lack permission" and
+ * "this server does not implement that API at all", and the UI cannot tell them
+ * apart from a status line alone. MinIO answers `501 NotImplemented` for
+ * PutBucketCors (and for `mc cors set`), so treating that as a permissions
+ * problem sends the user after a policy change that cannot help.
+ */
+export class S3RequestError extends Error {
+  constructor(
+    readonly operation: string,
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(`${operation} failed: ${code} (${status}) — ${message}`);
+    this.name = 'S3RequestError';
+  }
+
+  /** True when the endpoint does not implement the API that was called. */
+  public get unsupported(): boolean {
+    return this.status === 501 || this.code === 'NotImplemented';
+  }
+}
+
+/** Parses an S3 error body (`<Error><Code>…</Code>…`) and throws a typed error. */
+async function throwS3Error(res: Response, operation: string): Promise<never> {
+  let code = res.statusText || `HTTP ${res.status}`;
+  let message = '';
+  try {
+    const body = await res.text();
+    const parsedCode = xmlFirst(body, 'Code');
+    const parsedMessage = xmlFirst(body, 'Message');
+    if (parsedCode) code = parsedCode;
+    if (parsedMessage) message = parsedMessage;
+  } catch {
+    // A body we cannot read still leaves a usable status.
+  }
+  throw new S3RequestError(operation, res.status, code, message || res.statusText);
+}
+
 export class S3Client {
   private awsClient: AwsClient;
   private endpoint: string;
@@ -111,7 +178,7 @@ export class S3Client {
     this.pathStyle = options.pathStyle ?? false;
   }
 
-  /** Public accessor for the endpoint/bucket/addressing (used by tooling). */
+/** Public accessor for the endpoint/bucket/addressing (used by tooling). */
   public objectUrl(key?: string, queryParams?: Record<string, string>): URL {
     return this.buildUrl(key, queryParams);
   }
@@ -125,16 +192,10 @@ export class S3Client {
   }
 
   public async listObjects(prefix?: string, options?: { delimiter?: string; maxKeys?: number; continuationToken?: string }): Promise<ListObjectsResult> {
-    const url = this.buildUrl(undefined, {
-      'list-type': '2',
-      prefix: prefix || '',
-      delimiter: options?.delimiter || '',
-      'max-keys': options?.maxKeys?.toString() || '1000',
-      'continuation-token': options?.continuationToken || '',
-    });
+    const url = this.buildUrl(undefined, listObjectsQuery(prefix, options));
 
     const res = await this.awsClient.fetch(url);
-    if (!res.ok) throw new Error(`ListObjects failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'ListObjects');
 
     const text = await res.text();
 
@@ -160,7 +221,7 @@ export class S3Client {
   public async headObject(key: string): Promise<ObjectMeta> {
     const url = this.buildUrl(key);
     const res = await this.awsClient.fetch(url, { method: 'HEAD' });
-    if (!res.ok) throw new Error(`HeadObject failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'HeadObject');
 
     return {
       contentLength: parseInt(res.headers.get('content-length') || '0', 10),
@@ -173,7 +234,7 @@ export class S3Client {
   public async getObject(key: string): Promise<Response> {
     const url = this.buildUrl(key);
     const res = await this.awsClient.fetch(url);
-    if (!res.ok) throw new Error(`GetObject failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'GetObject');
     return res;
   }
 
@@ -189,7 +250,7 @@ export class S3Client {
       headers,
       body,
     });
-    if (!res.ok) throw new Error(`PutObject failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'PutObject');
     
     return {
       eTag: res.headers.get('etag') || '',
@@ -216,11 +277,15 @@ export class S3Client {
       headers: {
         'content-type': 'application/xml',
         'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
+        // DeleteObjects requires a Content-MD5 of the request body; without it
+        // both MinIO and AWS S3 answer `400 MissingContentMD5`, so deleting a
+        // selection failed outright (found against MinIO RELEASE.2025-09-07).
+        'content-md5': md5Base64(new TextEncoder().encode(xml)),
       },
       body: xml,
     });
     
-    if (!res.ok) throw new Error(`DeleteObjects failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'DeleteObjects');
     
     const text = await res.text();
 
@@ -240,7 +305,7 @@ export class S3Client {
     if (contentType) headers['content-type'] = contentType;
 
     const res = await this.awsClient.fetch(url, { method: 'POST', headers });
-    if (!res.ok) throw new Error(`CreateMultipartUpload failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'CreateMultipartUpload');
     
     const text = await res.text();
     const uploadId = xmlFirst(text, 'UploadId');
@@ -257,7 +322,7 @@ export class S3Client {
       },
       body,
     });
-    if (!res.ok) throw new Error(`UploadPart failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'UploadPart');
     return res.headers.get('etag') || '';
   }
 
@@ -276,7 +341,7 @@ export class S3Client {
       },
       body: xml,
     });
-    if (!res.ok) throw new Error(`CompleteMultipartUpload failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'CompleteMultipartUpload');
   }
 
   public async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
@@ -293,7 +358,7 @@ export class S3Client {
 
     // No CORSConfiguration element is the documented "not configured" case.
     if (res.status === 404) return { rules: [] };
-    if (!res.ok) throw new Error(`GetBucketCors failed: ${res.status} ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'GetBucketCors');
 
     const text = await res.text();
     const rules: CorsRule[] = xmlBlocks(text, 'CORSRule').map((block) => ({
@@ -326,15 +391,17 @@ export class S3Client {
       headers: { 'content-type': 'application/xml' },
       body: xml,
     });
-    if (!res.ok) throw new Error(`PutBucketCors failed: ${res.status} ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'PutBucketCors');
   }
 
   /** Removes the bucket's CORS configuration. */
   public async deleteBucketCors(): Promise<void> {
     const url = this.buildUrl(undefined, { cors: '' });
     const res = await this.awsClient.fetch(url, { method: 'DELETE' });
+    // 204 is MinIO's and Ceph's success answer for removing a policy that is
+    // not there; anything else non-ok carries a code worth surfacing.
     if (!res.ok && res.status !== 204) {
-      throw new Error(`DeleteBucketCors failed: ${res.status} ${res.statusText}`);
+      await throwS3Error(res, 'DeleteBucketCors');
     }
   }
 

@@ -594,5 +594,69 @@ presigned in the vault worker.
 
 ---
 
+## 15. Re-verification log — 2026-09-25 (pass 7: a real S3 server)
+
+**Method.** Ran the app against a real MinIO container
+(`quay.io/minio/minio:latest`, RELEASE.2025-09-07T16-13-09Z, arm64) instead of
+only mocks and Bun. Reproducible with `./scripts/minio-test.sh`, which starts
+the container, creates the buckets, runs `bun run test:integrity` and
+`bun run test:minio`, then removes it. MinIO validates SigV4 independently, so
+agreement between the two is not circular. MinIO no longer publishes to Docker
+Hub; the images are at `quay.io/minio/minio` and `quay.io/minio/mc`.
+
+### Corrections to §5 (S3 client) and §14 (worker parsing)
+
+Five defects were invisible to the unit suite and to every mock, and each broke
+a core capability against a real server:
+
+1. **An empty `continuation-token` broke every listing on MinIO.** The client
+   sent `continuation-token=` on every ListObjectsV2. AWS S3 ignores it; MinIO
+   answers `400 InvalidArgument` — isolated by varying one parameter at a time,
+   where only the empty token fails and an empty `delimiter` is fine. The
+   explorer could not list any MinIO bucket. Empty parameters are now omitted,
+   except subresources such as `?cors=` where the empty value *is* the
+   identifier.
+2. **The canonical URI was double-encoded.** The vendored signer ran `encodeURI`
+   over a path the URL parser had already encoded, so `%20` became `%2520` in the
+   signature while the request carried `%20`. MinIO answered
+   `403 SignatureDoesNotMatch` for *every* key containing a space or a non-ASCII
+   character — "Q3 report.pdf", "写真.jpg", "a&b.csv". `canonicalUri()` now
+   decodes and re-encodes per segment, which is idempotent, so a key containing a
+   literal `%20` is still encoded exactly once.
+3. **`DeleteObjects` never sent `Content-MD5`.** The multi-object delete API
+   requires it; MinIO and AWS S3 both answer `400 MissingContentMD5`, so deleting
+   a selection failed outright.
+4. **S3 error codes were discarded.** Every failure surfaced as a bare status
+   line, which is why a `501 NotImplemented` read as a permissions problem.
+   `S3RequestError` now carries the server's own code and the UI branches on it.
+5. **MinIO has no per-bucket CORS API.** `GET ?cors` answers
+   `404 NoSuchCORSConfiguration`, `PUT`/`DELETE ?cors` answer
+   `501 NotImplemented`, and `mc cors set` reports the same. CORS is configured
+   server-wide with `MINIO_API_CORS_ALLOW_ORIGIN`, or at runtime with
+   `mc admin config set api cors_allow_origin=…` plus a restart. The remediation
+   UI now detects the unsupported API and says so, instead of offering a curl,
+   AWS CLI or bridge path that cannot succeed — and it no longer claims "the
+   browser will block every request" once a signed request has succeeded, which is
+   the normal state on MinIO because it allows every origin by default.
+
+### Corrections to the transfer-integrity suite itself
+
+Partly vacuous and partly broken, and only a real server showed it: the suite
+signed a request and then fetched `signed.url` with a fresh init, dropping the
+`Authorization` header (the 403s on ListParts and Range); it appended a part
+count to an ETag that `multipartEtag()` had already suffixed; and it verified a
+multipart ETag string it had constructed itself, printing "bucket said" for a
+value it had invented. It now sends the signed `Request` and verifies against
+the ETag the bucket actually reported.
+
+### Scope
+
+MinIO is one implementation. R2, AWS S3, B2, Wasabi, Ceph and SeaweedFS were not
+exercised here, so no compatibility claim is made for them beyond §5. The
+multipart **transfer worker** path was verified through the client and through a
+live browser listing, not by driving a multi-part upload through the browser UI.
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*

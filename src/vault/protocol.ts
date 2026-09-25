@@ -61,6 +61,25 @@ export interface CorsResult {
   methods: string[];
 }
 
+/**
+ * Outcome of writing a bucket CORS policy.
+ *
+ * `unsupported` is the case that matters: MinIO (and other servers that expose
+ * no per-bucket CORS API) answer `501 NotImplemented`, which is not a
+ * permissions problem and cannot be fixed by retrying with different
+ * credentials.
+ */
+export interface CorsPutResult {
+  applied: boolean;
+  error?: string;
+  /** HTTP status, when the request reached the server. */
+  status?: number;
+  /** The server's own error code, e.g. NotImplemented, AccessDenied. */
+  code?: string;
+  /** True when the endpoint does not implement the bucket-CORS API. */
+  unsupported?: boolean;
+}
+
 export interface FolderStatsResult {
   /** Every directory key in the subtree (including nested levels). */
   directories: string[];
@@ -205,7 +224,7 @@ export type VaultResults = {
   's3.test': TestConnectionResult;
   's3.probe': { reachable: boolean; url: string; error?: string };
   's3.cors.get': CorsConfiguration;
-  's3.cors.put': { applied: true };
+  's3.cors.put': CorsPutResult;
   's3.cors.putViaBridge': { applied: boolean; status: number; body?: string; via: 'bridge' };
   'bridge.health': { reachable: boolean; error?: string };
   's3.cors.presign': { url: string; expiresIn: number };
