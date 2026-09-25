@@ -1,4 +1,10 @@
 /* Galiot service worker — static shell caching; S3 traffic is never cached. */
+/*
+ * This file is plain JavaScript, served verbatim from public/. It is NOT
+ * transpiled, so TypeScript syntax here is a runtime SyntaxError that kills
+ * registration with an opaque "ServiceWorker script evaluation failed".
+ * src/deployConfig.test.ts runs `node --check` over public/*.js to catch that.
+ */
 
 
 const CACHE_NAME = 'galiot-v1';
@@ -75,7 +81,7 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => {
-          return caches.match('/') as Promise<Response>;
+          return caches.match('/');
         })
     );
     return;
@@ -83,6 +89,6 @@ self.addEventListener('fetch', (event) => {
 
   // Default: Network First
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request) as Promise<Response>)
+    fetch(event.request).catch(() => caches.match(event.request))
   );
 });
