@@ -10,6 +10,7 @@ import {
   X,
   Settings,
   FileDown,
+  Pencil,
 } from 'lucide-react';
 import type { AppDB, ConnectionRow } from '../db/client';
 import { deleteConnection } from '../vault/repository';
@@ -39,6 +40,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const connections = useLiveQuery<ConnectionRow>(
     `SELECT ${CONNECTION_COLUMNS} FROM profiles ORDER BY name ASC`,
@@ -46,6 +48,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
 
   const rows = connections?.rows ?? [];
   const active = activeId ? rows.find((r) => r.id === activeId) ?? null : null;
+  const editing = editingId ? rows.find((r) => r.id === editingId) ?? null : null;
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -195,14 +198,26 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                       </button>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => setPendingDeleteId(row.id)}
-                      className="p-2 -mt-1 -mr-1 rounded-md text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all"
-                      aria-label={`Delete ${row.name}`}
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="flex items-center gap-1 flex-none">
+                      <button
+                        type="button"
+                        onClick={() => setEditingId(row.id)}
+                        className="p-2 -mt-1 rounded-md text-zinc-400 hover:text-teal-600 hover:bg-teal-50 dark:hover:bg-teal-900/20 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all"
+                        aria-label={`Edit ${row.name}`}
+                        title="Edit connection"
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingDeleteId(row.id)}
+                        className="p-2 -mt-1 -mr-1 rounded-md text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all"
+                        aria-label={`Delete ${row.name}`}
+                        title="Delete connection"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -227,7 +242,16 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
         )}
       </div>
 
-      <ConnectionDialog db={db} open={dialogOpen} onClose={() => setDialogOpen(false)} />
+      <ConnectionDialog
+        db={db}
+        open={dialogOpen || editing !== null}
+        onClose={() => {
+          setDialogOpen(false);
+          setEditingId(null);
+        }}
+        editing={editing}
+        onSaved={() => setEditingId(null)}
+      />
 
       <GaleonImportDialog db={db} open={importOpen} onClose={() => setImportOpen(false)} />
 

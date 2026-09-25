@@ -28,6 +28,9 @@ export async function classifyConnectionFailure(
     {
       probeUrl,
       requestSucceeded: false,
+      // The real error is what separates a CORS block from a bucket that
+      // answered and said no (403 AccessDenied, 404 NoSuchBucket, …).
+      requestError: error instanceof Error ? error.message : String(error ?? ''),
       endpoint: profile.endpoint,
       rawEndpoint: profile.endpoint,
       pathStyle: profile.path_style,

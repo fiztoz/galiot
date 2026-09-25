@@ -18,6 +18,7 @@ export type CorsVerdictReason =
   | 'ok'
   | 'host-unreachable'
   | 'cors-blocked'
+  | 'request-rejected'
   | 'addressing-unsupported'
   | 'unknown';
 
@@ -31,6 +32,23 @@ export interface CorsDiagnostic {
   hint?: string;
   /** The URL that was probed. */
   probedUrl: string;
+}
+
+/**
+ * Whether a failure means the browser refused to hand us the response, as
+ * opposed to the server sending one we did not like.
+ *
+ * A CORS block is a network-level `TypeError: Failed to fetch` — the response
+ * never reaches script. An HTTP error (403, 404, 400…) arrives intact, status
+ * and all, because the CORS headers were present. Conflating the two sent users
+ * with a wrong key or a missing bucket off to fix CORS, which cannot help.
+ *
+ * With no error text at all we keep the conservative CORS verdict, which is
+ * what an opaque failure has always meant.
+ */
+export function isBlockedByBrowser(error?: string | null): boolean {
+  if (error === undefined || error === null || error === '') return true;
+  return /typeerror|failed to fetch|load failed|networkerror/i.test(error);
 }
 
 /**
@@ -55,6 +73,12 @@ export interface DiagnoseInput {
   probeUrl: string;
   /** Result of the real signed request, when one was attempted. */
   requestSucceeded?: boolean;
+  /**
+   * The error text from the failed request. This is what separates "the browser
+   * blocked the response" (CORS) from "the server answered and refused"
+   * (wrong key, missing bucket, denied permission).
+   */
+  requestError?: string;
   /** Endpoint, used to check whether virtual-hosting is even possible. */
   endpoint?: string;
   /** How the user typed the endpoint (may lack a scheme). */
@@ -67,7 +91,7 @@ export interface DiagnoseInput {
  * Pure — no network — so it is directly unit-testable.
  */
 export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiagnostic {
-  const { probeUrl, requestSucceeded, endpoint, rawEndpoint, pathStyle } = input;
+  const { probeUrl, requestSucceeded, requestError, endpoint, rawEndpoint, pathStyle } = input;
 
   // 1. Addressing mistakes produce wrong URLs; catch them before blaming CORS.
   if (endpoint && !canUseVirtualHosting(endpoint) && !pathStyle) {
@@ -104,12 +128,27 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
   }
 
   if (requestSucceeded === false) {
+    // The host answered, so the failure is either a browser block (the response
+    // never reached us) or a real HTTP error we can actually read. Only the
+    // former is CORS.
+    if (isBlockedByBrowser(requestError)) {
+      return {
+        reachable: true,
+        reason: 'cors-blocked',
+        detail:
+          'The endpoint answered, but the browser blocked the response. Signed requests preflight because they carry Authorization and x-amz-* headers, so the bucket must allow those headers as well as the methods.',
+        hint: 'Apply the recommended CORS policy below, or add AllowedHeaders "*" and ExposeHeader "ETag" for this origin.',
+        probedUrl: probeUrl,
+      };
+    }
+
     return {
       reachable: true,
-      reason: 'cors-blocked',
-      detail:
-        'The endpoint answered, but the browser blocked the response. Signed requests preflight because they carry Authorization and x-amz-* headers, so the bucket must allow those headers as well as the methods.',
-      hint: 'Apply the recommended CORS policy below, or add AllowedHeaders "*" and ExposeHeader "ETag" for this origin.',
+      reason: 'request-rejected',
+      detail: `The bucket received the request and refused it${
+        requestError ? `: ${requestError}` : ''
+      }. The browser did not block anything, so this is not a CORS problem.`,
+      hint: 'Check the access key and secret, that the bucket name is correct, and that the key is allowed to list it.',
       probedUrl: probeUrl,
     };
   }
