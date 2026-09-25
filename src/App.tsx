@@ -6,6 +6,7 @@ import { VaultGate } from './components/VaultGate';
 import { ConnectionsView } from './components/ConnectionsView';
 import { TransferDrawer } from './components/TransferDrawer';
 import { transferManager } from './transfer/manager';
+import { purgeExpiredLinks } from './s3/links';
 
 function Splash({ label }: { label: string }) {
   return (
@@ -43,6 +44,13 @@ function Shell({ db }: { db: AppDB }) {
   // progress is persisted, so the panel survives navigation and reloads.
   useEffect(() => {
     void transferManager.init(db);
+
+    // A presigned URL is a bearer token, and `presigned_history.url` stores it in
+    // cleartext — unlike S3 credentials, which are sealed. Expired links used to
+    // survive indefinitely unless the user clicked purge in the share dialog, so
+    // drop them on every boot. Best-effort: a failure here (e.g. a database from
+    // before the table existed) must not block the UI.
+    purgeExpiredLinks(db).catch(() => {});
   }, [db]);
 
   return (
