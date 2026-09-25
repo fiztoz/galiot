@@ -2,13 +2,17 @@ import { describe, expect, test } from 'bun:test';
 import { Glob } from 'bun';
 
 /**
- * Repository hygiene: no real hostnames in source.
+ * Repository hygiene: no real hostnames or bucket names in source.
  *
  * A real third-party endpoint's name ended up in a comment and two test files
  * while documenting a genuine bug. Debugging notes are exactly where a real
  * hostname leaks in — the endpoint is the first thing you paste — and once it
  * is in a commit it is in the history forever, where renaming a variable does
  * not help. This turns the convention into a build failure.
+ *
+ * Bucket names get the same treatment because a hostname scan cannot see them:
+ * a real customer bucket survived the hostname scrub in four test files, since
+ * `bucket: 'x'` contains no host at all.
  *
  * Docs are exempt: they are required to cite vendor documentation, so real URLs
  * belong there. `src/` should only ever contain documentation-reserved names,
@@ -33,6 +37,65 @@ const VENDOR_SUFFIXES = ['amazonaws.com', 'cloudflarestorage.com'];
 
 /** Public code hosts, for source citations in comments. */
 const CODE_HOSTS = ['github.com', 'raw.githubusercontent.com'];
+
+/**
+ * Bucket names permitted in fixtures. Kept literal, like the host allowlists
+ * above, so widening it is a visible, reviewable edit rather than a silent one.
+ * Every entry is either an RFC 2606 flavoured placeholder, a generic English
+ * word, or a name this repo's own throwaway MinIO container creates.
+ */
+const ALLOWED_BUCKET_NAMES = [
+  'archive',
+  'assets',
+  'b',
+  'bench',
+  'data',
+  'example-bucket',
+  'galiot-cors',
+  'galiot-test',
+  'imported-bucket',
+  'my-bucket',
+  'my-new-bucket',
+  'other-bucket',
+  'some-bucket',
+  'staging-bucket',
+];
+
+/**
+ * Shapes a bucket name takes in source. Deliberately narrow: each pattern names
+ * a place a bucket is declared or signed for, so ordinary prose and unrelated
+ * string literals are not swept in.
+ */
+const BUCKET_PATTERNS: RegExp[] = [
+  /\bbucket:\s*'([^']+)'/g, // TS fixture object
+  /\bBUCKET\s*=\s*'([^']+)'/g, // TS fixture constant
+  /--bucket[= ]+'?([A-Za-z0-9._-]+)'?/g, // aws CLI
+  /\bmc\s+(?:cors\s+set|mb|rb|cp|rm)\s+\S*?\/([A-Za-z0-9._-]+)/g, // mc alias/bucket
+  // The first path segment of a URL that is unmistakably an S3 request.
+  /https?:\/\/[^/\s'"`]+\/([A-Za-z0-9._-]+)\/[^\s'"`]*(?:X-Amz-|[?&](?:cors|list-type|location))/g,
+];
+
+/** `BUCKETS=(a b c)` in the shell harness — one pattern, several names. */
+const SHELL_BUCKET_ARRAY = /\bBUCKETS=\(([^)]*)\)/g;
+
+/** The only file exempt from its own scan; see `hygieneFiles`. */
+const SELF = 'src/repoHostnames.test.ts';
+
+function bucketNamesIn(line: string): string[] {
+  const found: string[] = [];
+  for (const pattern of BUCKET_PATTERNS) {
+    for (const match of line.matchAll(pattern)) {
+      const name = match[1];
+      if (name) found.push(name);
+    }
+  }
+  for (const match of line.matchAll(SHELL_BUCKET_ARRAY)) {
+    for (const name of (match[1] ?? '').split(/\s+/)) {
+      if (name) found.push(name);
+    }
+  }
+  return found;
+}
 
 /** Strips everything a hostname cannot contain, e.g. a trailing `…` or `<`. */
 function cleanHost(raw: string): string {
@@ -81,6 +144,18 @@ async function sourceFiles(): Promise<string[]> {
   return files;
 }
 
+/** Source plus the shell/TS harnesses, which also carry bucket fixtures. */
+async function hygieneFiles(): Promise<string[]> {
+  const files = await sourceFiles();
+  for await (const file of new Glob('scripts/**/*.{ts,sh}').scan('.')) files.push(file);
+  // This file is exempt from its own bucket scan: a guard has to spell out the
+  // shapes it rejects, and those counter-examples are exactly what the extractor
+  // looks for. The exemption is asserted below to stay a single file so it
+  // cannot quietly grow into a hole.
+  const exempt = new Set([SELF, `./${SELF}`]);
+  return files.filter((file) => !exempt.has(file));
+}
+
 describe('repository hostnames', () => {
   test('src/ contains no real third-party or customer hostname', async () => {
     const offenders: string[] = [];
@@ -121,5 +196,60 @@ describe('repository hostnames', () => {
     expect(isAllowed('acct.r2.cloudflarestorage.com')).toBe(true);
     expect(isAllowed('bucket.s3.example.com')).toBe(true);
     expect(isAllowed('http://localhost:9000')).toBe(true);
+  });
+});
+
+describe('repository bucket names', () => {
+  test('src/ and scripts/ contain no real customer bucket name', async () => {
+    const offenders: string[] = [];
+
+    for (const file of await hygieneFiles()) {
+      const lines = (await Bun.file(file).text()).split('\n');
+
+      lines.forEach((line, index) => {
+        for (const name of bucketNamesIn(line)) {
+          if (ALLOWED_BUCKET_NAMES.includes(name)) continue;
+          offenders.push(`${file}:${index + 1}  ${name}  —  ${line.trim().slice(0, 90)}`);
+        }
+      });
+    }
+
+    expect(offenders).toEqual([]);
+  }, 30_000);
+
+  test('the extractor actually sees the shapes it claims to', () => {
+    // Without these the guard passes vacuously — a regex that matches nothing
+    // looks exactly like a clean repository.
+    expect(bucketNamesIn(`  bucket: 'example-bucket',`)).toEqual(['example-bucket']);
+    expect(bucketNamesIn(`const BUCKET = 'example-bucket';`)).toEqual(['example-bucket']);
+    expect(bucketNamesIn(`aws s3api get-bucket-cors --bucket 'example-bucket'`)).toEqual([
+      'example-bucket',
+    ]);
+    expect(bucketNamesIn(`mc cors set galiot/example-bucket`)).toEqual(['example-bucket']);
+    expect(bucketNamesIn(`BUCKETS=(galiot-test galiot-cors)`)).toEqual([
+      'galiot-test',
+      'galiot-cors',
+    ]);
+    expect(
+      bucketNamesIn(`'https://s3.example.com/example-bucket/?cors=&X-Amz-Algorithm=AWS4-HMAC-SHA256'`),
+    ).toEqual(['example-bucket']);
+    // Ordinary prose and non-S3 URLs must not be swept in.
+    expect(bucketNamesIn(`const bucket = computeBucket(x); // no literal here`)).toEqual([]);
+    expect(bucketNamesIn(`see https://github.com/electric-sql/pglite/releases`)).toEqual([]);
+  });
+
+  test('a real-looking bucket name is rejected', () => {
+    const real = 'example-bucket';
+    expect(ALLOWED_BUCKET_NAMES.includes(real)).toBe(false);
+    expect(bucketNamesIn(`  bucket: '${real}',`)).toEqual([real]);
+  });
+
+  test('only this guard file is exempt from the scan', async () => {
+    // If the exemption ever widens, the guard has a hole in it.
+    const all = await sourceFiles();
+    const scanned = await hygieneFiles();
+    expect(all.length - scanned.filter((f) => f.startsWith('src/')).length).toBe(1);
+    expect(all.filter((f) => !scanned.includes(f))).toEqual([SELF]);
+    expect(SELF).toBe('src/repoHostnames.test.ts');
   });
 });
