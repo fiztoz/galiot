@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS profiles (
     path_style BOOLEAN NOT NULL DEFAULT false,
     encrypted_credentials JSONB NOT NULL,
     storage_class TEXT,
+    -- Extra headers sent on every request to this connection. Cleartext by
+    -- design: credential-looking names are refused at the door (see
+    -- src/s3/customHeaders.ts), so nothing secret should land here.
+    custom_headers JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

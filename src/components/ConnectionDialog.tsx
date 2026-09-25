@@ -5,6 +5,12 @@ import type { S3ProfileConfig, Credentials } from '../vault/protocol';
 import { createConnection, getSealedCredentials, updateConnection } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 import { CorsHelper } from './CorsHelper';
+import { CustomHeadersField } from './CustomHeadersField';
+import {
+  normalizeCustomHeaders,
+  parseStoredHeaders,
+  type HeaderDraft,
+} from '../s3/customHeaders';
 import { diagnoseCors, type CorsDiagnostic } from '../s3/diagnostics';
 import { normalizeEndpoint } from '../s3/url';
 
@@ -42,6 +48,8 @@ interface FormState {
   accessKeyId: string;
   secretAccessKey: string;
   pathStyle: boolean;
+  /** Extra request headers, as editable rows. Validated on save and on test. */
+  headers: HeaderDraft[];
 }
 
 const EMPTY_FORM: FormState = {
@@ -52,6 +60,7 @@ const EMPTY_FORM: FormState = {
   accessKeyId: '',
   secretAccessKey: '',
   pathStyle: false,
+  headers: [],
 };
 
 export function ConnectionDialog({ db, open, onClose, editing, onSaved }: ConnectionDialogProps) {
@@ -86,6 +95,11 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
             accessKeyId: '',
             secretAccessKey: '',
             pathStyle: editing.path_style,
+            // Read through the same screening the request path uses, so a row
+            // written before a rule existed is not shown back as editable.
+            headers: Object.entries(parseStoredHeaders(editing.custom_headers)).map(
+              ([name, value]) => ({ name, value }),
+            ),
           }
         : EMPTY_FORM,
     );
@@ -114,10 +128,25 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
     setCors({ status: 'idle' });
   }, []);
 
-  const buildPayload = useCallback((): { ok: true } | { ok: false; error: string } => {
+  const buildPayload = useCallback(():
+    | { ok: true; headers: Record<string, string> }
+    | { ok: false; error: string } => {
     if (!form.name.trim()) return { ok: false, error: 'Connection name is required.' };
     if (!form.endpoint.trim()) return { ok: false, error: 'Endpoint is required.' };
     if (!form.bucket.trim()) return { ok: false, error: 'Bucket name is required.' };
+
+    // Validated here so neither Save nor Test can proceed with a header the
+    // repository would refuse. The field shows the reason while typing; this is
+    // the gate that makes it impossible to submit anyway.
+    const normalized = normalizeCustomHeaders(form.headers);
+    if (!normalized.ok) {
+      const first = normalized.issues[0];
+      return {
+        ok: false,
+        error: `Custom header "${first?.name}" was refused — ${first?.reason}.`,
+      };
+    }
+    const headers = normalized.headers;
 
     const accessKey = form.accessKeyId.trim();
     const secretKey = form.secretAccessKey.trim();
@@ -131,12 +160,12 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
       if (secretKey && !accessKey) {
         return { ok: false, error: 'Enter an access key ID too, or clear both to keep the stored keys.' };
       }
-      return { ok: true };
+      return { ok: true, headers };
     }
 
     if (!accessKey) return { ok: false, error: 'Access key ID is required.' };
     if (!secretKey) return { ok: false, error: 'Secret access key is required.' };
-    return { ok: true };
+    return { ok: true, headers };
   }, [form, isEdit]);
 
   const handleTest = useCallback(async () => {
@@ -156,6 +185,10 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
       region: form.region.trim() || 'us-east-1',
       bucket: form.bucket.trim(),
       pathStyle: form.pathStyle,
+      // Included so "Test" exercises the connection as it will actually be
+      // used. A header the gateway requires is exactly the kind of thing that
+      // only shows up on a real signed request.
+      headers: check.headers,
     };
     const typedKeys = {
       accessKeyId: form.accessKeyId.trim(),
@@ -282,6 +315,7 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
           region: form.region.trim() || 'us-east-1',
           bucket: form.bucket.trim(),
           pathStyle: form.pathStyle,
+          customHeaders: check.headers,
         };
 
         if (isEdit && editing) {
@@ -459,6 +493,13 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
               </span>
             </span>
           </label>
+
+          <CustomHeadersField
+            rows={form.headers}
+            onChange={(headers) => setField('headers', headers)}
+            inputClass={INPUT_CLASS}
+            labelClass={LABEL_CLASS}
+          />
 
           {error && (
             <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-900/30">

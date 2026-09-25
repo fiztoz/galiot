@@ -15,6 +15,12 @@ export interface S3Target {
   region: string;
   bucket: string;
   pathStyle: boolean;
+  /**
+   * Custom headers for this connection, forwarded to the vault worker so they
+   * can be folded into the signature. Non-secret by policy — see
+   * `src/s3/customHeaders.ts`, which refuses credential-looking names.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface CompletedPart {
@@ -93,6 +99,12 @@ export type SignRequest = {
   method: string;
   url: string;
   headers: Record<string, string>;
+  /**
+   * The connection's custom headers, from `S3Target.headers`. Kept separate from
+   * `headers` so the vault worker can apply the usual precedence — per-call
+   * headers win — and screen them again before they reach the signature.
+   */
+  customHeaders?: Record<string, string>;
   /**
    * Only for small text bodies (multipart completion XML) that must be hashed
    * into the signature. Binary payloads use `x-amz-content-sha256:

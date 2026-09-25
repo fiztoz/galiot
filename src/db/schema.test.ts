@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import { runMigrations } from './migrations';
+import { runMigrations, SCHEMA_VERSION } from './migrations';
 import { wipeVaultData } from '../vault/repository';
 import { replaceListing } from './objects';
 import type { AppDB } from './client';
@@ -33,7 +33,10 @@ describe('schema migrations', () => {
     const version = await db.query<{ value: string }>(
       `SELECT value FROM _meta WHERE key = 'schema_version'`,
     );
-    expect(version.rows[0]?.value).toBe('1');
+    expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION));
+    // Pinned so bumping the schema is a deliberate, reviewed edit: a new version
+    // needs a migration step for every vault already in the field.
+    expect(SCHEMA_VERSION).toBe(2);
 
     const tables = await db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
@@ -55,6 +58,110 @@ describe('schema migrations', () => {
       `SELECT indexname FROM pg_indexes WHERE indexname = 'objects_cache_filename_trgm_idx'`,
     );
     expect(indexes.rows.length).toBe(1);
+
+    await db.close();
+  });
+
+  /**
+   * A vault lives in OPFS/IndexedDB and outlives every deploy, so the upgrade
+   * path matters more than the fresh-install path. This rebuilds the v1 shape by
+   * hand — column dropped, marker rolled back — and checks the migration puts it
+   * back without disturbing the rows already there.
+   */
+  async function columnNames(db: PGlite, table: string): Promise<string[]> {
+    const res = await db.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = $1 ORDER BY column_name`,
+      [table],
+    );
+    return res.rows.map((r) => r.column_name);
+  }
+
+  test('a v1 vault is upgraded in place and keeps its connections', async () => {
+    const db = await freshDb();
+    await runMigrations(db);
+    expect(await columnNames(db, 'profiles')).toContain('custom_headers');
+
+    // A connection created before the column existed.
+    const now = new Date().toISOString();
+    await db.query(
+      `INSERT INTO profiles
+         (id, name, protocol, endpoint, region, bucket, path_style, encrypted_credentials, created_at, updated_at)
+       VALUES ($1, 'existing', 's3', 'https://s3.example.com', 'us-east-1', 'example-bucket', false, $2, $3, $4)`,
+      ['44444444-4444-4444-8444-444444444444', JSON.stringify({ ciphertext: 'a', iv: 'b' }), now, now],
+    );
+
+    // Roll the database back to the v1 shape.
+    await db.exec(`ALTER TABLE profiles DROP COLUMN custom_headers`);
+    await db.query(`UPDATE _meta SET value = '1' WHERE key = 'schema_version'`);
+    expect(await columnNames(db, 'profiles')).not.toContain('custom_headers');
+
+    await runMigrations(db);
+
+    expect(await columnNames(db, 'profiles')).toContain('custom_headers');
+    const version = await db.query<{ value: string }>(
+      `SELECT value FROM _meta WHERE key = 'schema_version'`,
+    );
+    expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION));
+
+    // The row survived, and the new column is NULL rather than a bogus default —
+    // `parseStoredHeaders` reads NULL as "no custom headers".
+    const rows = await db.query<{ name: string; custom_headers: unknown }>(
+      `SELECT name, custom_headers FROM profiles`,
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]?.name).toBe('existing');
+    expect(rows.rows[0]?.custom_headers).toBe(null);
+
+    await db.close();
+  });
+
+  test('the migration is safe to re-run and against a corrupt marker', async () => {
+    const db = await freshDb();
+    await runMigrations(db);
+    await runMigrations(db);
+    await runMigrations(db);
+    expect(await columnNames(db, 'profiles')).toContain('custom_headers');
+
+    // A garbage marker must mean "oldest shape we know", not "skip everything".
+    await db.query(`UPDATE _meta SET value = 'not-a-number' WHERE key = 'schema_version'`);
+    await db.exec(`ALTER TABLE profiles DROP COLUMN custom_headers`);
+    await runMigrations(db);
+    expect(await columnNames(db, 'profiles')).toContain('custom_headers');
+
+    const version = await db.query<{ value: string }>(
+      `SELECT value FROM _meta WHERE key = 'schema_version'`,
+    );
+    expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION));
+
+    await db.close();
+  });
+
+  test('custom_headers round-trips a JSONB header map', async () => {
+    const db = await freshDb();
+    await runMigrations(db);
+
+    const now = new Date().toISOString();
+    const headers = { 'x-tenant-id': 'acme', 'x-request-id': 'fixed' };
+    await db.query(
+      `INSERT INTO profiles
+         (id, name, protocol, endpoint, region, bucket, path_style, encrypted_credentials, custom_headers, created_at, updated_at)
+       VALUES ($1, 'h', 's3', 'https://s3.example.com', 'us-east-1', 'example-bucket', false, $2, $3, $4, $5)`,
+      [
+        '55555555-5555-4555-8555-555555555555',
+        JSON.stringify({ ciphertext: 'a', iv: 'b' }),
+        JSON.stringify(headers),
+        now,
+        now,
+      ],
+    );
+
+    const rows = await db.query<{ custom_headers: unknown }>(
+      `SELECT custom_headers FROM profiles`,
+    );
+    const stored = rows.rows[0]?.custom_headers;
+    // PGlite may hand back JSONB parsed or as text; both must read identically.
+    expect(typeof stored === 'string' ? JSON.parse(stored) : stored).toEqual(headers);
 
     await db.close();
   });
