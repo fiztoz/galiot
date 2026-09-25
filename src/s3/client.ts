@@ -1,7 +1,9 @@
-import { AwsClient } from '../lib/aws4fetch';
+import { AwsClient, type AwsSignOptions } from '../lib/aws4fetch';
 import { buildS3Url } from './url';
 import { md5Base64 } from '../transfer/integrity';
+import { withCustomHeaders } from './customHeaders';
 import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
+import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
 
 export interface S3ClientOptions {
   endpoint: string;
@@ -11,6 +13,26 @@ export interface S3ClientOptions {
   secretAccessKey: string;
   sessionToken?: string;
   pathStyle?: boolean;
+  /**
+   * Extra headers sent on every request, already screened by
+   * `src/s3/customHeaders.ts`. Folded in *before* signing so they become part of
+   * the canonical request.
+   */
+  headers?: Record<string, string>;
+}
+
+/** Normalises the three `HeadersInit` shapes to a plain record. */
+function headersToRecord(init: HeadersInit | undefined): Record<string, string> {
+  if (!init) return {};
+  if (init instanceof Headers) {
+    const out: Record<string, string> = {};
+    init.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  if (Array.isArray(init)) return Object.fromEntries(init);
+  return { ...init };
 }
 
 export interface ListObjectsResult {
@@ -174,11 +196,36 @@ async function throwS3Error(res: Response, operation: string): Promise<never> {
   throw new S3RequestError(operation, res.status, code, message || res.statusText);
 }
 
+/**
+ * Builds the client every worker request path uses.
+ *
+ * Extracted from the vault worker so the profile-to-client mapping is testable
+ * without a worker harness. This is the line that decides whether a connection's
+ * custom headers are applied at all, so it is the one most worth having a test
+ * on — and a worker-local function cannot have one.
+ */
+export function s3ClientForProfile(
+  profile: S3ProfileConfig,
+  creds: CredentialPlaintext,
+): S3Client {
+  return new S3Client({
+    endpoint: profile.endpoint,
+    region: profile.region,
+    bucket: profile.bucket,
+    pathStyle: profile.pathStyle,
+    accessKeyId: creds.accessKeyId,
+    secretAccessKey: creds.secretAccessKey,
+    sessionToken: creds.sessionToken,
+    headers: profile.headers,
+  });
+}
+
 export class S3Client {
   private awsClient: AwsClient;
   private endpoint: string;
   private bucket: string;
   private pathStyle: boolean;
+  private customHeaders: Record<string, string>;
 
   constructor(options: S3ClientOptions) {
     this.awsClient = new AwsClient({
@@ -191,6 +238,30 @@ export class S3Client {
     this.endpoint = options.endpoint.replace(/\/$/, '');
     this.bucket = options.bucket;
     this.pathStyle = options.pathStyle ?? false;
+    this.customHeaders = options.headers ?? {};
+  }
+
+  /**
+   * The single path every request takes, so a connection's custom headers are
+   * folded in before the request is signed.
+   *
+   * Order matters: `AwsClient.sign` hashes whatever headers it is handed into
+   * the canonical request, so injecting them here makes them part of the
+   * signature. A header added after signing goes out unsigned — some gateways
+   * ignore it, S3 rejects the request outright.
+   *
+   * Call-specific headers still win over stored ones (`withCustomHeaders`), so a
+   * resumed download's `Range` and an upload's `Content-Type` cannot be
+   * displaced by a stale row that predates the screening rule.
+   */
+  private request(url: URL, init?: RequestInit & AwsSignOptions): Promise<Response> {
+    if (Object.keys(this.customHeaders).length === 0) {
+      return this.awsClient.fetch(url, init);
+    }
+    return this.awsClient.fetch(url, {
+      ...init,
+      headers: withCustomHeaders(this.customHeaders, headersToRecord(init?.headers)),
+    });
   }
 
 /** Public accessor for the endpoint/bucket/addressing (used by tooling). */
@@ -209,7 +280,7 @@ export class S3Client {
   public async listObjects(prefix?: string, options?: { delimiter?: string; maxKeys?: number; continuationToken?: string }): Promise<ListObjectsResult> {
     const url = this.buildUrl(undefined, listObjectsQuery(prefix, options));
 
-    const res = await this.awsClient.fetch(url);
+    const res = await this.request(url);
     if (!res.ok) await throwS3Error(res, 'ListObjects');
 
     const text = await res.text();
@@ -235,7 +306,7 @@ export class S3Client {
 
   public async headObject(key: string): Promise<ObjectMeta> {
     const url = this.buildUrl(key);
-    const res = await this.awsClient.fetch(url, { method: 'HEAD' });
+    const res = await this.request(url, { method: 'HEAD' });
     if (!res.ok) await throwS3Error(res, 'HeadObject');
 
     return {
@@ -248,7 +319,7 @@ export class S3Client {
 
   public async getObject(key: string): Promise<Response> {
     const url = this.buildUrl(key);
-    const res = await this.awsClient.fetch(url);
+    const res = await this.request(url);
     if (!res.ok) await throwS3Error(res, 'GetObject');
     return res;
   }
@@ -260,7 +331,7 @@ export class S3Client {
     };
     if (contentType) headers['content-type'] = contentType;
 
-    const res = await this.awsClient.fetch(url, {
+    const res = await this.request(url, {
       method: 'PUT',
       headers,
       body,
@@ -274,7 +345,7 @@ export class S3Client {
 
   public async deleteObject(key: string): Promise<void> {
     const url = this.buildUrl(key);
-    const res = await this.awsClient.fetch(url, { method: 'DELETE' });
+    const res = await this.request(url, { method: 'DELETE' });
     if (!res.ok && res.status !== 204) throw new Error(`DeleteObject failed: ${res.statusText}`);
   }
 
@@ -287,7 +358,7 @@ export class S3Client {
   ${keys.map(k => `<Object><Key>${k.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')}</Key></Object>`).join('\n  ')}
 </Delete>`;
 
-    const res = await this.awsClient.fetch(url, {
+    const res = await this.request(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/xml',
@@ -319,7 +390,7 @@ export class S3Client {
     const headers: Record<string, string> = {};
     if (contentType) headers['content-type'] = contentType;
 
-    const res = await this.awsClient.fetch(url, { method: 'POST', headers });
+    const res = await this.request(url, { method: 'POST', headers });
     if (!res.ok) await throwS3Error(res, 'CreateMultipartUpload');
     
     const text = await res.text();
@@ -330,7 +401,7 @@ export class S3Client {
 
   public async uploadPart(key: string, uploadId: string, partNumber: number, body: Blob): Promise<string> {
     const url = this.buildUrl(key, { uploadId, partNumber: partNumber.toString() });
-    const res = await this.awsClient.fetch(url, {
+    const res = await this.request(url, {
       method: 'PUT',
       headers: {
         'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
@@ -348,7 +419,7 @@ export class S3Client {
   ${parts.map(p => `<Part><PartNumber>${p.PartNumber}</PartNumber><ETag>${p.ETag}</ETag></Part>`).join('\n  ')}
 </CompleteMultipartUpload>`;
 
-    const res = await this.awsClient.fetch(url, {
+    const res = await this.request(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/xml',
@@ -361,7 +432,7 @@ export class S3Client {
 
   public async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
     const url = this.buildUrl(key, { uploadId });
-    const res = await this.awsClient.fetch(url, { method: 'DELETE' });
+    const res = await this.request(url, { method: 'DELETE' });
     if (!res.ok && res.status !== 204) throw new Error(`AbortMultipartUpload failed: ${res.statusText}`);
   }
 
@@ -369,7 +440,7 @@ export class S3Client {
   /** Reads the bucket's current CORS configuration. */
   public async getBucketCors(): Promise<CorsConfiguration> {
     const url = this.buildUrl(undefined, { cors: '' });
-    const res = await this.awsClient.fetch(url, { method: 'GET' });
+    const res = await this.request(url, { method: 'GET' });
 
     // No CORSConfiguration element is the documented "not configured" case.
     if (res.status === 404) return { rules: [] };
@@ -401,7 +472,7 @@ export class S3Client {
       '</CORSConfiguration>';
 
     const url = this.buildUrl(undefined, { cors: '' });
-    const res = await this.awsClient.fetch(url, {
+    const res = await this.request(url, {
       method: 'PUT',
       headers: { 'content-type': 'application/xml' },
       body: xml,
@@ -412,7 +483,7 @@ export class S3Client {
   /** Removes the bucket's CORS configuration. */
   public async deleteBucketCors(): Promise<void> {
     const url = this.buildUrl(undefined, { cors: '' });
-    const res = await this.awsClient.fetch(url, { method: 'DELETE' });
+    const res = await this.request(url, { method: 'DELETE' });
     // 204 is MinIO's and Ceph's success answer for removing a policy that is
     // not there; anything else non-ok carries a code worth surfacing.
     if (!res.ok && res.status !== 204) {

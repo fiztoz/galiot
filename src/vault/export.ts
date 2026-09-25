@@ -26,6 +26,7 @@ const PROFILE_COLUMNS = [
   'path_style',
   'encrypted_credentials',
   'storage_class',
+  'custom_headers',
   'created_at',
   'updated_at',
 ] as const;
@@ -61,7 +62,10 @@ function profileValues(profile: Record<string, unknown>): unknown[] {
       }
     }
     // JSONB columns may come back parsed — re-serialize for the insert.
-    if (column === 'encrypted_credentials' && typeof value !== 'string') {
+    if (
+      (column === 'encrypted_credentials' || column === 'custom_headers') &&
+      typeof value !== 'string'
+    ) {
       return JSON.stringify(value);
     }
     return value;

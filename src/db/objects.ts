@@ -2,6 +2,7 @@ import type { AppDB, ConnectionRow } from './client';
 import type { S3ProfileConfig } from '../vault/protocol';
 import { vaultService } from '../vault/vaultService';
 import { getSealedCredentials } from '../vault/repository';
+import { parseStoredHeaders } from '../s3/customHeaders';
 import type { ListObjectsResult } from '../s3/client';
 
 /** Safety cap: 20 pages × 1000 keys = 20 000 entries per folder view. */
@@ -13,6 +14,10 @@ export function profileConfig(profile: ConnectionRow): S3ProfileConfig {
     region: profile.region,
     bucket: profile.bucket,
     pathStyle: profile.path_style,
+    // Re-screened on the way out of the database, not just on the way in: the
+    // column is cleartext and outlives upgrades, so a rule added later still has
+    // to hold for rows written before it existed.
+    headers: parseStoredHeaders(profile.custom_headers),
   };
 }
 

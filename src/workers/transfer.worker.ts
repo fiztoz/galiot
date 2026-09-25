@@ -241,6 +241,9 @@ class TransferEngine {
       method,
       url: url.toString(),
       headers: options.headers ?? {},
+      // Custom headers ride along so the vault worker can fold them into the
+      // signature. A resumed download's Range stays authoritative.
+      customHeaders: job.target.headers,
       ...(typeof options.body === 'string' ? { body: options.body } : {}),
     });
     return fetch(signed.url, {

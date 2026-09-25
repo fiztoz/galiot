@@ -47,6 +47,8 @@ export interface ConnectionRow {
   bucket: string;
   path_style: boolean;
   storage_class: string | null;
+  /** Extra request headers for this connection; null when none are set. */
+  custom_headers: Record<string, string> | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }

@@ -30,6 +30,16 @@ export interface S3ProfileConfig {
   region: string;
   bucket: string;
   pathStyle: boolean;
+  /**
+   * Extra headers to send on every signed request to this connection. Names are
+   * already lowercased and screened by `src/s3/customHeaders.ts`.
+   *
+   * Deliberately *not* applied to presigned URLs: a presigned URL is meant to
+   * work for whoever receives it, and they have no way to add these headers. A
+   * gateway that hard-requires one therefore cannot serve presigned traffic —
+   * see `src/s3/presign.ts`.
+   */
+  headers?: Record<string, string>;
 }
 
 /** Credentials either as user-typed plaintext or as vault ciphertext. */

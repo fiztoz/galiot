@@ -1,8 +1,9 @@
 /// <reference lib="webworker" />
 import { VaultManager } from '../vault/vault';
-import { S3Client, S3RequestError } from '../s3/client';
+import { S3Client, S3RequestError, s3ClientForProfile } from '../s3/client';
 import { AwsClient } from '../lib/aws4fetch';
 import { presignGetUrl, presignPutBucketCors, presignPutUrl } from '../s3/presign';
+import { mergeScreenedHeaders } from '../transfer/signing';
 import { corsConfigToXml } from '../s3/corsPolicy';
 import {
   buildGaleonPreview,
@@ -164,7 +165,11 @@ async function handleSignRequest(request: SignRequest): Promise<void> {
 
   try {
     const signer = await getSigner(request.profileId, request.credentials);
-    const headers = new Headers(request.headers);
+    // Screened again here rather than trusted from the port: the transfer worker
+    // is a separate realm and the stored column is cleartext, so a row written
+    // before a rule existed must not reach the signature unscreened. Per-call
+    // headers (a resumed download's Range) still win.
+    const headers = new Headers(mergeScreenedHeaders(request.customHeaders, request.headers));
     const signed = await signer.sign(new URL(request.url), {
       method: request.method,
       headers,
@@ -196,16 +201,13 @@ async function handleSignRequest(request: SignRequest): Promise<void> {
   }
 }
 
+/**
+ * Delegates to the shared factory in `src/s3/client.ts` so the profile-to-client
+ * mapping is unit-testable. This is the line that decides whether a connection's
+ * custom headers reach the signer at all.
+ */
 function makeS3Client(profile: S3ProfileConfig, creds: CredentialPlaintext): S3Client {
-  return new S3Client({
-    endpoint: profile.endpoint,
-    region: profile.region,
-    bucket: profile.bucket,
-    pathStyle: profile.pathStyle,
-    accessKeyId: creds.accessKeyId,
-    secretAccessKey: creds.secretAccessKey,
-    sessionToken: creds.sessionToken,
-  });
+  return s3ClientForProfile(profile, creds);
 }
 
 /**
@@ -405,7 +407,15 @@ async function dispatch<M extends VaultMethod>(
       // Sign here, forward there: the DEK and secret never leave this worker,
       // and the bridge only ever sees a normal SigV4-signed S3 request.
       const url = client.objectUrl(undefined, { cors: '' });
-      const signed = await signWith(signer, 'PUT', url, { 'content-type': 'application/xml' });
+      const signed = await signWith(
+        signer,
+        'PUT',
+        url,
+        // The bridge is the fallback for gateways that do not answer a preflight,
+        // which is exactly the kind of gateway that also needs a routing or
+        // tenancy header — so custom headers apply on this path too.
+        mergeScreenedHeaders(p.profile.headers, { 'content-type': 'application/xml' }),
+      );
       const body = corsConfigToXml(p.config);
 
       const result = await forwardViaBridge(p.origin, p.token, {

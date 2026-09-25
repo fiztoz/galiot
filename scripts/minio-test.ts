@@ -86,6 +86,10 @@ const signer = () =>
 const client = (b = bucket) =>
   new S3Client({ endpoint, region, bucket: b, pathStyle, accessKeyId, secretAccessKey });
 
+/** A client that sends extra headers on every request, as a connection can. */
+const clientWithHeaders = (headers: Record<string, string>) =>
+  new S3Client({ endpoint, region, bucket, pathStyle, accessKeyId, secretAccessKey, headers });
+
 const rule = (overrides: Partial<CorsRule> = {}): CorsRule => ({
   allowedOrigins: [origin],
   allowedMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE'],
@@ -390,6 +394,51 @@ async function getBytes(c: S3Client, key: string): Promise<string> {
   return res.text();
 }
 
+/**
+ * 8. Custom connection headers, against a real server.
+ *
+ * The unit suite proves a custom header is *signed*; only a real server can say
+ * whether it is *accepted*. SigV4 lists every signed header in `SignedHeaders`,
+ * and an implementation is free to reject one it does not expect — so "we signed
+ * it correctly" and "the endpoint took it" are different claims, and this is the
+ * only place the second one is made.
+ */
+async function testCustomHeaders(): Promise<void> {
+  console.log('\n8. custom connection headers');
+
+  const headers = { 'x-tenant-id': 'acme', 'x-request-id': 'galiot-real-server' };
+  const c = clientWithHeaders(headers);
+
+  const key = 'custom-headers/sample.txt';
+  const body = 'written with custom headers on the connection';
+
+  const put = await c.putObject(key, body, 'text/plain');
+  check('PUT is accepted with extra signed headers', put.eTag.length > 0, 'no ETag returned');
+
+  const head = await c.headObject(key);
+  check('HEAD is accepted', head.contentLength === body.length, `len ${head.contentLength}`);
+
+  const listed = await c.listObjects('custom-headers/');
+  check('LIST is accepted and finds the key', listed.objects.some((o) => o.key === key));
+
+  check('GET returns the right bytes', (await getBytes(c, key)) === body);
+
+  // A POST with a body and a Content-MD5 is the strictest case: the body hash,
+  // the digest header and the custom headers all have to agree.
+  const second = 'custom-headers/second.txt';
+  await c.putObject(second, 'x', 'text/plain');
+  const deleted = await c.deleteObjects([key, second]);
+  check('multi-delete is accepted', deleted.deleted.length === 2, JSON.stringify(deleted.deleted));
+
+  // The control: the same operations without custom headers, so a failure above
+  // cannot be blamed on the endpoint simply being unhappy.
+  const plain = client();
+  const controlKey = 'custom-headers/control.txt';
+  await plain.putObject(controlKey, 'no custom headers', 'text/plain');
+  check('the same operations work without custom headers', (await getBytes(plain, controlKey)) === 'no custom headers');
+  await plain.deleteObject(controlKey);
+}
+
 async function main(): Promise<void> {
   if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
     console.error(
@@ -442,6 +491,7 @@ async function main(): Promise<void> {
   await testPagination(c);
   await testAwkwardKeys(c);
   await testDeleteObjects(c);
+  await testCustomHeaders();
 
   console.log(`\n${checks - failures}/${checks} checks passed${skipped > 0 ? `, ${skipped} skipped` : ''}`);
   if (failures > 0) process.exit(1);

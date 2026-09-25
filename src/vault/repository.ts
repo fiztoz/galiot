@@ -2,9 +2,16 @@ import type { AppDB } from '../db/client';
 import type { EncryptedPayload } from './crypto';
 import type { CredentialPlaintext } from './protocol';
 import { vaultService } from './vaultService';
+import { SCHEMA_VERSION } from '../db/migrations';
+import { assertSafeCustomHeaders, parseStoredHeaders } from '../s3/customHeaders';
 
 const META_SALT = 'salt';
 const META_WRAPPED_DEK = 'wrapped_dek';
+
+/** The JSONB text to store for a header map, or null for "no custom headers". */
+function headersColumnValue(headers: Record<string, string>): string | null {
+  return Object.keys(headers).length > 0 ? JSON.stringify(headers) : null;
+}
 
 export interface VaultMeta {
   salt: string;
@@ -81,7 +88,9 @@ export async function wipeVaultData(db: AppDB): Promise<void> {
        DELETE FROM _meta;`,
     );
     // Migrations key off table existence, but keep the marker tidy.
-    await tx.query(`INSERT INTO _meta (key, value) VALUES ('schema_version', '1')`, []);
+    await tx.query(`INSERT INTO _meta (key, value) VALUES ('schema_version', $1)`, [
+      String(SCHEMA_VERSION),
+    ]);
   });
 }
 
@@ -112,6 +121,8 @@ export interface ConnectionInput {
   accessKeyId: string;
   secretAccessKey: string;
   sessionToken?: string;
+  /** Extra headers for every request. Re-validated here, not just in the UI. */
+  customHeaders?: Record<string, string>;
 }
 
 /**
@@ -130,10 +141,15 @@ export async function createConnection(db: AppDB, input: ConnectionInput): Promi
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
+  // The dialog validates too, but this is the last gate before cleartext reaches
+  // the database, and the repository is reachable from code paths that are not
+  // the dialog.
+  const headers = assertSafeCustomHeaders(input.customHeaders);
+
   await db.query(
     `INSERT INTO profiles
-       (id, name, protocol, endpoint, region, bucket, path_style, encrypted_credentials, created_at, updated_at)
-     VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9)`,
+       (id, name, protocol, endpoint, region, bucket, path_style, encrypted_credentials, custom_headers, created_at, updated_at)
+     VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       id,
       input.name,
@@ -142,6 +158,7 @@ export async function createConnection(db: AppDB, input: ConnectionInput): Promi
       input.bucket,
       input.pathStyle,
       JSON.stringify(payload),
+      headersColumnValue(headers),
       now,
       now,
     ],
@@ -167,6 +184,11 @@ export interface ConnectionUpdate {
    * — and without the secret ever being decrypted on the main thread.
    */
   credentials?: { accessKeyId: string; secretAccessKey: string };
+  /**
+   * Replacement custom headers. Omit to keep the stored ones; pass `{}` to clear
+   * them. Validated the same way as on create.
+   */
+  customHeaders?: Record<string, string>;
 }
 
 export interface ConnectionUpdateResult {
@@ -178,10 +200,10 @@ export interface ConnectionUpdateResult {
  * Updates a connection in place.
  *
  * The cached listing is dropped whenever the *target* changes (endpoint,
- * region, bucket or addressing): those rows were fetched from a different
- * bucket, and leaving them would let a later switch back to the old bucket name
- * show stale contents. A rename keeps the cache, because nothing about the
- * target moved.
+ * region, bucket, addressing or custom headers): those rows were fetched from a
+ * different bucket, or through a gateway that a header now routes differently,
+ * and leaving them would let a later switch back to the old name show stale
+ * contents. A rename keeps the cache, because nothing about the target moved.
  *
  * Presigned history is deliberately kept: those URLs are bearer tokens that
  * stay valid until they expire and cannot be revoked, so deleting the record
@@ -197,16 +219,25 @@ export async function updateConnection(
     region: string;
     bucket: string;
     path_style: boolean;
-  }>('SELECT endpoint, region, bucket, path_style FROM profiles WHERE id = $1', [id]);
+    custom_headers: unknown;
+  }>('SELECT endpoint, region, bucket, path_style, custom_headers FROM profiles WHERE id = $1', [
+    id,
+  ]);
 
   const current = existing.rows[0];
   if (!current) throw new Error('Connection not found');
+
+  const storedHeaders = parseStoredHeaders(current.custom_headers);
+  const nextHeaders =
+    input.customHeaders === undefined ? storedHeaders : assertSafeCustomHeaders(input.customHeaders);
+  const headersJson = headersColumnValue(nextHeaders);
 
   const targetChanged =
     current.endpoint !== input.endpoint ||
     current.region !== input.region ||
     current.bucket !== input.bucket ||
-    current.path_style !== input.pathStyle;
+    current.path_style !== input.pathStyle ||
+    headersJson !== headersColumnValue(storedHeaders);
 
   // Sealed in the worker, as on create; the plaintext goes no further.
   const payload = input.credentials
@@ -227,8 +258,8 @@ export async function updateConnection(
       await tx.query(
         `UPDATE profiles
             SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5,
-                encrypted_credentials = $6, updated_at = $7
-          WHERE id = $8`,
+                encrypted_credentials = $6, custom_headers = $7, updated_at = $8
+          WHERE id = $9`,
         [
           input.name,
           input.endpoint,
@@ -236,6 +267,7 @@ export async function updateConnection(
           input.bucket,
           input.pathStyle,
           JSON.stringify(payload),
+          headersJson,
           now,
           id,
         ],
@@ -243,9 +275,19 @@ export async function updateConnection(
     } else {
       await tx.query(
         `UPDATE profiles
-            SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5, updated_at = $6
-          WHERE id = $7`,
-        [input.name, input.endpoint, input.region, input.bucket, input.pathStyle, now, id],
+            SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5,
+                custom_headers = $6, updated_at = $7
+          WHERE id = $8`,
+        [
+          input.name,
+          input.endpoint,
+          input.region,
+          input.bucket,
+          input.pathStyle,
+          headersJson,
+          now,
+          id,
+        ],
       );
     }
 

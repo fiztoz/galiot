@@ -23,7 +23,7 @@ interface ConnectionsViewProps {
   db: AppDB;
 }
 
-const CONNECTION_COLUMNS = `id, name, protocol, endpoint, region, bucket, path_style, storage_class, created_at, updated_at`;
+const CONNECTION_COLUMNS = `id, name, protocol, endpoint, region, bucket, path_style, storage_class, custom_headers, created_at, updated_at`;
 
 function hostOf(endpoint: string): string {
   try {

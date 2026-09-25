@@ -1,6 +1,20 @@
 import { AwsClient } from '../lib/aws4fetch';
 import { buildS3Url } from './url';
 
+/**
+ * A connection's custom headers are deliberately NOT applied here.
+ *
+ * A presigned URL is a bearer token meant to work for whoever receives it, and
+ * the recipient has no way to add a header the signature expects. Signing one in
+ * would produce a URL that fails for everyone except this browser session —
+ * worse than not sending it at all, because it looks like it should work.
+ *
+ * The consequence is worth stating plainly: an endpoint that hard-requires a
+ * custom header cannot serve presigned traffic (share links, or the image /
+ * audio / video / PDF previews, which load through elements that cannot carry
+ * headers). Listing, upload, download, delete and the editor keep working,
+ * because those go through the signed request path.
+ */
 export interface PresignTarget {
   endpoint: string;
   bucket: string;
