@@ -239,7 +239,10 @@ describe('repository bucket names', () => {
   });
 
   test('a real-looking bucket name is rejected', () => {
-    const real = 'example-bucket';
+    // A structural placeholder, not a real customer name: this file is exempt
+    // from its own scan, so pasting the thing we scrubbed back in here would
+    // quietly undo the scrub.
+    const real = 'acme_prod_eu1';
     expect(ALLOWED_BUCKET_NAMES.includes(real)).toBe(false);
     expect(bucketNamesIn(`  bucket: '${real}',`)).toEqual([real]);
   });
