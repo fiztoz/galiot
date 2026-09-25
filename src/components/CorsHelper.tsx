@@ -21,12 +21,17 @@ import { buildCorsRemediation, type RemediationOption } from '../s3/corsRemediat
 import { canUseVirtualHosting } from '../s3/url';
 import type { CorsDiagnostic } from '../s3/diagnostics';
 import { shouldOfferBridge } from '../bridge/environment';
-import type { CredentialPlaintext } from '../vault/protocol';
+import type { Credentials } from '../vault/protocol';
 import { vaultService } from '../vault/vaultService';
 
 interface CorsHelperProps {
   profile: { endpoint: string; region: string; bucket: string; pathStyle: boolean };
-  credentials: CredentialPlaintext;
+  /**
+   * Either freshly typed keys or the connection's sealed blob. Accepting the
+   * sealed form is what lets an edit be verified without retyping the secret —
+   * the worker decrypts it where it already lives.
+   */
+  credentials: Credentials;
   /** Existing policy, if the wizard already fetched it. */
   initialConfig?: CorsConfiguration | null;
   /** Verdict from the connection attempt, when one has been made. */
@@ -109,7 +114,7 @@ export function CorsHelper({
       try {
         const { url } = await vaultService.call('s3.cors.presign', {
           profile,
-          credentials: { plain: credentials },
+          credentials,
           expiresIn: 3600,
         });
 
@@ -120,8 +125,13 @@ export function CorsHelper({
             bucket: profile.bucket,
             config: { rules: [recommended] },
             presignedUrl: url,
-            accessKeyId: credentials.accessKeyId,
-            secretAccessKey: credentials.secretAccessKey,
+            // Only present when the keys were typed; a sealed blob stays sealed.
+            ...('plain' in credentials
+              ? {
+                  accessKeyId: credentials.plain.accessKeyId,
+                  secretAccessKey: credentials.plain.secretAccessKey,
+                }
+              : {}),
             includeSecrets: withSecrets,
             shell: /windows/i.test(navigator.userAgent) ? 'powershell' : 'posix',
           }),
@@ -139,7 +149,7 @@ export function CorsHelper({
     setLoading(true);
     setError(null);
     try {
-      const result = await vaultService.call('s3.cors.get', { profile, credentials: { plain: credentials } });
+      const result = await vaultService.call('s3.cors.get', { profile, credentials });
       setConfig(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -168,7 +178,7 @@ export function CorsHelper({
 
         await vaultService.call('s3.cors.put', {
           profile,
-          credentials: { plain: credentials },
+          credentials,
           config: next,
         });
         setConfig(next);
@@ -186,7 +196,7 @@ export function CorsHelper({
     setLoading(true);
     setError(null);
     try {
-      await vaultService.call('s3.cors.delete', { profile, credentials: { plain: credentials } });
+      await vaultService.call('s3.cors.delete', { profile, credentials });
       setConfig({ rules: [] });
       setConfirmRemove(false);
     } catch (err) {
@@ -231,7 +241,7 @@ export function CorsHelper({
 
       const result = await vaultService.call('s3.cors.putViaBridge', {
         profile,
-        credentials: { plain: credentials },
+        credentials,
         config: next,
         origin: window.location.origin,
         token: bridgeToken,
@@ -279,7 +289,13 @@ export function CorsHelper({
   const needsPathStyle = !canUseVirtualHosting(profile.endpoint) && !profile.pathStyle;
   // Verified in a real browser: when CORS is broken the browser blocks the
   // PutBucketCors request too, so the one-click fix cannot bootstrap itself.
-  const corsBlocksTheFix = diagnosis?.reason === 'cors-blocked' || verdict === 'none';
+  //
+  // A 'request-rejected' verdict (the bucket answered and refused — wrong key,
+  // missing bucket) must not land here: the policy is not the problem, and
+  // offering to rewrite it would send the user after the wrong fix.
+  const corsBlocksTheFix =
+    (diagnosis?.reason === 'cors-blocked' || verdict === 'none') &&
+    diagnosis?.reason !== 'request-rejected';
   // Local development only: a deployed build's visitors have no bridge to use.
   const bridgeOffered = corsBlocksTheFix && shouldOfferBridge();
 
@@ -320,7 +336,9 @@ export function CorsHelper({
               ? 'CORS is blocking this connection'
               : diagnosis.reason === 'host-unreachable'
                 ? 'Cannot reach the endpoint'
-                : 'Addressing problem'}
+                : diagnosis.reason === 'request-rejected'
+                  ? 'The bucket refused the request'
+                  : 'Addressing problem'}
           </p>
           <p className="text-[11px] text-zinc-600 dark:text-zinc-300 leading-relaxed">
             {diagnosis.detail}
@@ -459,12 +477,16 @@ export function CorsHelper({
                   </button>
 
                   {option.id !== 'curl' && option.id !== 'dashboard' && (
-                    <label className="inline-flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400 cursor-pointer">
+                    <label
+                      className={`inline-flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-zinc-400 ${
+                        'plain' in credentials ? 'cursor-pointer' : 'opacity-60'
+                      }`}
+                    >
                       <input
                         type="checkbox"
                         checked={option.containsSecret}
                         onChange={(e) => void buildRemediation(e.target.checked)}
-                        disabled={remediationBusy}
+                        disabled={remediationBusy || !('plain' in credentials)}
                         className="h-3 w-3 rounded border-zinc-300 dark:border-zinc-600 text-teal-600 focus:ring-teal-500"
                       />
                       Fill in my keys

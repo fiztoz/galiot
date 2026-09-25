@@ -23,12 +23,18 @@ export interface CorsRemediationContext {
   config: CorsConfiguration;
   /** Presigned PutBucketCors URL, for the curl option. */
   presignedUrl: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+  /**
+   * The caller's keys, when it has them. Omitted when the credentials came
+   * from the vault as a sealed blob — the main thread never sees them, and the
+   * commands then prompt for the keys like the default does.
+   */
+  accessKeyId?: string;
+  secretAccessKey?: string;
   /**
    * Whether to embed the keys in the command. Off by default: a command
    * containing the secret key is written to the user's shell history, so the
    * default scripts prompt for the keys and never put them in the command.
+   * Ignored when no keys are available.
    */
   includeSecrets: boolean;
   shell: RemediationShell;
@@ -113,17 +119,34 @@ function fileUri(shell: RemediationShell, path: string): string {
 }
 
 /**
+ * Whether the keys can be embedded, i.e. the caller asked for it *and* has
+ * them. Written as a type predicate so the call sites narrow to non-optional.
+ */
+function canEmbedKeys(
+  ctx: CorsRemediationContext,
+): ctx is CorsRemediationContext & { accessKeyId: string; secretAccessKey: string } {
+  return (
+    ctx.includeSecrets &&
+    typeof ctx.accessKeyId === 'string' &&
+    ctx.accessKeyId.length > 0 &&
+    typeof ctx.secretAccessKey === 'string' &&
+    ctx.secretAccessKey.length > 0
+  );
+}
+
+/**
  * Environment setup for the AWS CLI.
  *
- * With `includeSecrets` off, the keys are prompted for and never appear in the
- * command — a `read -s` on POSIX, a masked `Read-Host -AsSecureString` on
- * PowerShell. That is the default because a command line is saved in shell
- * history.
+ * With the keys embedded, the command contains the secret. Otherwise they are
+ * prompted for and never appear in the command — a `read -s` on POSIX, a masked
+ * `Read-Host -AsSecureString` on PowerShell. That is the default both because a
+ * command line is saved in shell history and because the main thread may not
+ * hold the keys at all when they came out of the vault sealed.
  */
 function awsCredentialScript(shell: RemediationShell, ctx: CorsRemediationContext): string {
   const region = shell === 'powershell' ? psQuote(ctx.region) : posixQuote(ctx.region);
 
-  if (ctx.includeSecrets) {
+  if (canEmbedKeys(ctx)) {
     const quote = shell === 'powershell' ? psQuote : posixQuote;
     return [
       `${shell === 'powershell' ? '$env:' : 'export '}AWS_ACCESS_KEY_ID=${quote(ctx.accessKeyId)}`,
@@ -177,7 +200,7 @@ function mcCommand(shell: RemediationShell, ctx: CorsRemediationContext, xmlFile
   // `mc alias set <name> <url>` with no key arguments prompts for both keys
   // interactively. That is the "nothing configured yet" path, and the alias is
   // removed afterwards so nothing is left behind.
-  const aliasLine = ctx.includeSecrets
+  const aliasLine = canEmbedKeys(ctx)
     ? `mc alias set galiot ${quote(ctx.endpoint)} ${quote(ctx.accessKeyId)} ${quote(ctx.secretAccessKey)}`
     : `mc alias set galiot ${quote(ctx.endpoint)}`;
 
@@ -225,7 +248,7 @@ export function buildCorsRemediation(ctx: CorsRemediationContext): RemediationOp
       label: 'MinIO client (mc)',
       requires: 'The mc binary — no alias or profile configured',
       script: `${writeXml}\n\n${mcCommand(ctx.shell, ctx, xmlFile)}`,
-      containsSecret: ctx.includeSecrets,
+      containsSecret: canEmbedKeys(ctx),
     },
     {
       id: 'aws',
@@ -240,7 +263,7 @@ export function buildCorsRemediation(ctx: CorsRemediationContext): RemediationOp
         '',
         awsCleanupScript(ctx.shell),
       ].join('\n'),
-      containsSecret: ctx.includeSecrets,
+      containsSecret: canEmbedKeys(ctx),
     },
     {
       id: 'dashboard',

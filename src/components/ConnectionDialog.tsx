@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { X, Loader2, Plug, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
-import type { AppDB } from '../db/client';
-import type { S3ProfileConfig } from '../vault/protocol';
-import { createConnection } from '../vault/repository';
+import type { AppDB, ConnectionRow } from '../db/client';
+import type { S3ProfileConfig, Credentials } from '../vault/protocol';
+import { createConnection, getSealedCredentials, updateConnection } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 import { CorsHelper } from './CorsHelper';
 import { diagnoseCors, type CorsDiagnostic } from '../s3/diagnostics';
@@ -12,6 +12,10 @@ interface ConnectionDialogProps {
   db: AppDB;
   open: boolean;
   onClose: () => void;
+  /** When set, the dialog edits this connection instead of creating one. */
+  editing?: ConnectionRow | null;
+  /** Called after an edit is saved. */
+  onSaved?: () => void;
 }
 
 type TestState =
@@ -50,26 +54,50 @@ const EMPTY_FORM: FormState = {
   pathStyle: false,
 };
 
-export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
+export function ConnectionDialog({ db, open, onClose, editing, onSaved }: ConnectionDialogProps) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: 'idle' });
   const [cors, setCors] = useState<CorsState>({ status: 'idle' });
   const [testedTarget, setTestedTarget] = useState<S3ProfileConfig | null>(null);
   const [diagnosis, setDiagnosis] = useState<CorsDiagnostic | null>(null);
+  // The credentials the last test actually used, so the CORS helper works on
+  // an edit without ever needing the plaintext keys.
+  const [credentialsForTest, setCredentialsForTest] = useState<Credentials | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const isEdit = editing !== null && editing !== undefined;
+  // Keyed on the id, not the object: the connections list re-renders with fresh
+  // row objects on every live-query tick, and depending on those would wipe the
+  // user's half-typed edits while they type.
+  const editingId = editing?.id ?? null;
+
   useEffect(() => {
-    if (open) {
-      setForm(EMPTY_FORM);
-      setError(null);
-      setTest({ status: 'idle' });
-      setCors({ status: 'idle' });
-      setTestedTarget(null);
-      setDiagnosis(null);
-      setSaving(false);
-    }
-  }, [open]);
+    if (!open) return;
+    // Keys are deliberately left blank when editing: the sealed ones are never
+    // decrypted here, so "blank" means "keep what is stored".
+    setForm(
+      editing
+        ? {
+            name: editing.name,
+            endpoint: editing.endpoint,
+            region: editing.region,
+            bucket: editing.bucket,
+            accessKeyId: '',
+            secretAccessKey: '',
+            pathStyle: editing.path_style,
+          }
+        : EMPTY_FORM,
+    );
+    setError(null);
+    setTest({ status: 'idle' });
+    setCors({ status: 'idle' });
+    setTestedTarget(null);
+    setDiagnosis(null);
+    setCredentialsForTest(null);
+    setSaving(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editingId]);
 
   useEffect(() => {
     if (!open) return;
@@ -90,10 +118,26 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
     if (!form.name.trim()) return { ok: false, error: 'Connection name is required.' };
     if (!form.endpoint.trim()) return { ok: false, error: 'Endpoint is required.' };
     if (!form.bucket.trim()) return { ok: false, error: 'Bucket name is required.' };
-    if (!form.accessKeyId.trim()) return { ok: false, error: 'Access key ID is required.' };
-    if (!form.secretAccessKey.trim()) return { ok: false, error: 'Secret access key is required.' };
+
+    const accessKey = form.accessKeyId.trim();
+    const secretKey = form.secretAccessKey.trim();
+
+    if (isEdit) {
+      // Blank means "keep the stored keys". Half-typed is always a mistake:
+      // saving it would replace a working pair with a broken one.
+      if (accessKey && !secretKey) {
+        return { ok: false, error: 'Enter a secret access key too, or clear both to keep the stored keys.' };
+      }
+      if (secretKey && !accessKey) {
+        return { ok: false, error: 'Enter an access key ID too, or clear both to keep the stored keys.' };
+      }
+      return { ok: true };
+    }
+
+    if (!accessKey) return { ok: false, error: 'Access key ID is required.' };
+    if (!secretKey) return { ok: false, error: 'Secret access key is required.' };
     return { ok: true };
-  }, [form]);
+  }, [form, isEdit]);
 
   const handleTest = useCallback(async () => {
     const check = buildPayload();
@@ -113,16 +157,33 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
       bucket: form.bucket.trim(),
       pathStyle: form.pathStyle,
     };
-    const credentials = {
-      plain: {
-        accessKeyId: form.accessKeyId.trim(),
-        secretAccessKey: form.secretAccessKey.trim(),
-      },
+    const typedKeys = {
+      accessKeyId: form.accessKeyId.trim(),
+      secretAccessKey: form.secretAccessKey.trim(),
     };
+
+    // Editing without retyping: use the sealed credentials already in the vault,
+    // so the test exercises the connection exactly as it is stored.
+    let credentials: Credentials;
+    if (typedKeys.accessKeyId && typedKeys.secretAccessKey) {
+      credentials = { plain: typedKeys };
+    } else if (isEdit && editing) {
+      try {
+        credentials = { sealed: await getSealedCredentials(db, editing.id) };
+      } catch (err) {
+        setTest({ status: 'fail', message: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+    } else {
+      // buildPayload already rejected this; belt and braces.
+      setTest({ status: 'fail', message: 'Credentials are required.' });
+      return;
+    }
 
     // Remember the target either way: the CORS helper is most useful exactly
     // when the connection test fails.
     setTestedTarget(profile);
+    setCredentialsForTest(credentials);
 
     // 1. Can we reach the host at all? This probe is CORS-free, so it separates
     //    DNS/port/TLS problems from browser CORS blocks.
@@ -163,6 +224,8 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
       {
         probeUrl,
         requestSucceeded,
+        // Distinguishes "the browser blocked it" from "the bucket refused it".
+        requestError: failureMessage ?? undefined,
         endpoint: profile.endpoint,
         rawEndpoint,
         pathStyle: form.pathStyle,
@@ -173,6 +236,13 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
 
     if (verdict.reason === 'cors-blocked' || verdict.reason === 'host-unreachable') {
       setCors({ status: 'fail', message: `${verdict.detail}${verdict.hint ? ` ${verdict.hint}` : ''}` });
+    } else if (verdict.reason === 'request-rejected') {
+      // The bucket answered and said no. Showing CORS remediation here would
+      // send the user after a policy that is not the problem.
+      setCors({
+        status: 'fail',
+        message: `${verdict.detail}${verdict.hint ? ` ${verdict.hint}` : ''}`,
+      });
     } else {
       // For addressing problems, try to repair automatically: an IP endpoint
       // simply cannot use virtual-hosted addressing.
@@ -198,15 +268,34 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
 
       setSaving(true);
       try {
-        await createConnection(db, {
+        const shared = {
           name: form.name.trim(),
           endpoint: normalizeEndpoint(form.endpoint),
           region: form.region.trim() || 'us-east-1',
           bucket: form.bucket.trim(),
           pathStyle: form.pathStyle,
-          accessKeyId: form.accessKeyId.trim(),
-          secretAccessKey: form.secretAccessKey.trim(),
-        });
+        };
+
+        if (isEdit && editing) {
+          // Credentials are optional on edit: blank keeps the sealed blob, so
+          // re-pointing a connection never requires retyping a secret.
+          const accessKeyId = form.accessKeyId.trim();
+          const secretAccessKey = form.secretAccessKey.trim();
+          await updateConnection(db, editing.id, {
+            ...shared,
+            ...(accessKeyId && secretAccessKey
+              ? { credentials: { accessKeyId, secretAccessKey } }
+              : {}),
+          });
+          onSaved?.();
+        } else {
+          await createConnection(db, {
+            ...shared,
+            accessKeyId: form.accessKeyId.trim(),
+            secretAccessKey: form.secretAccessKey.trim(),
+          });
+        }
+
         // Plaintext credentials are no longer needed — wipe the form state.
         setForm(EMPTY_FORM);
         onClose();
@@ -216,8 +305,14 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
         setSaving(false);
       }
     },
-    [buildPayload, db, form, onClose],
+    [buildPayload, db, editing, form, isEdit, onClose, onSaved],
   );
+
+  // Either the keys are typed, or this is an edit where blank means "keep the
+  // stored ones" — both give the helper something usable to work with.
+  const hasUsableCredentials =
+    (form.accessKeyId.trim() !== '' && form.secretAccessKey.trim() !== '') ||
+    (isEdit && form.accessKeyId.trim() === '' && form.secretAccessKey.trim() === '');
 
   if (!open) return null;
 
@@ -231,9 +326,13 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Add Connection</h2>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+              {isEdit ? 'Edit Connection' : 'Add Connection'}
+            </h2>
             <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">
-              S3-compatible endpoint — R2, MinIO, AWS S3, B2, Spaces…
+              {isEdit
+                ? 'Change anything — the stored keys are kept unless you replace them.'
+                : 'S3-compatible endpoint — R2, MinIO, AWS S3, B2, Spaces…'}
             </p>
           </div>
           <button
@@ -297,25 +396,41 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
             </div>
 
             <div className="col-span-2">
-              <label htmlFor="conn-access-key" className={LABEL_CLASS}>Access Key ID</label>
+              <label htmlFor="conn-access-key" className={LABEL_CLASS}>
+                Access Key ID
+                {isEdit && (
+                  <span className="ml-1.5 font-normal text-zinc-400 dark:text-zinc-500">
+                    {form.accessKeyId.trim() ? 'will be replaced' : 'keeping the stored key'}
+                  </span>
+                )}
+              </label>
               <input
                 id="conn-access-key"
                 className={`${INPUT_CLASS} font-mono text-xs`}
                 value={form.accessKeyId}
                 onChange={(e) => setField('accessKeyId', e.target.value)}
+                placeholder={isEdit ? 'unchanged — type to replace' : 'AKIA…'}
                 autoComplete="off"
                 spellCheck={false}
               />
             </div>
 
             <div className="col-span-2">
-              <label htmlFor="conn-secret-key" className={LABEL_CLASS}>Secret Access Key</label>
+              <label htmlFor="conn-secret-key" className={LABEL_CLASS}>
+                Secret Access Key
+                {isEdit && (
+                  <span className="ml-1.5 font-normal text-zinc-400 dark:text-zinc-500">
+                    {form.secretAccessKey.trim() ? 'will be replaced' : 'keeping the stored key'}
+                  </span>
+                )}
+              </label>
               <input
                 id="conn-secret-key"
                 type="password"
                 className={`${INPUT_CLASS} font-mono text-xs`}
                 value={form.secretAccessKey}
                 onChange={(e) => setField('secretAccessKey', e.target.value)}
+                placeholder={isEdit ? 'unchanged — type to replace' : undefined}
                 autoComplete="new-password"
                 spellCheck={false}
               />
@@ -401,13 +516,10 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
             </div>
           )}
 
-          {testedTarget && form.accessKeyId.trim() && form.secretAccessKey.trim() && (
+          {testedTarget && hasUsableCredentials && (
             <CorsHelper
               profile={testedTarget}
-              credentials={{
-                accessKeyId: form.accessKeyId.trim(),
-                secretAccessKey: form.secretAccessKey.trim(),
-              }}
+              credentials={credentialsForTest ?? { plain: { accessKeyId: '', secretAccessKey: '' } }}
               onApplied={() => setCors({ status: 'ok', message: 'CORS policy applied — run the test again to confirm.' })}
               diagnosis={diagnosis}
             />
@@ -430,7 +542,7 @@ export function ConnectionDialog({ db, open, onClose }: ConnectionDialogProps) {
               className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 text-sm font-medium rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {saving && <Loader2 size={15} className="animate-spin" />}
-              Save connection
+              {isEdit ? 'Save changes' : 'Save connection'}
             </button>
           </div>
         </form>

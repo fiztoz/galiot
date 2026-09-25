@@ -151,7 +151,36 @@ thread. Galeon remains the tool for those connections.
 
 ---
 
-## 7. Fixing CORS from a terminal, with nothing pre-configured
+## 7. Editing a connection
+
+Every connection is editable — hover a card for the pencil icon. Name, endpoint,
+region, bucket, addressing and credentials can all change, and the same
+diagnostics, CORS helper and connection test run inside the editor.
+
+**The stored keys are kept unless you replace them.** The editor shows the key
+fields blank with an "unchanged — type to replace" placeholder, because the
+sealed credentials are never decrypted on the main thread just to populate an
+input. Type both to rotate them, leave both blank to keep them, and type only
+one and the save is refused rather than leaving a half-replaced pair.
+
+*Test connection* works without retyping: the worker uses the sealed blob already
+stored, so you can re-point a bucket and verify it in one go.
+
+Two consequences of editing, by design:
+
+- **The cached listing is dropped when the target changes** (endpoint, region,
+  bucket or addressing), since those rows came from a different bucket. Renaming
+  keeps the cache. Transfer history and presigned links are kept: a transfer
+  carries its own target snapshot, and a presigned URL stays valid until it
+  expires and cannot be revoked anyway.
+- **A refused request is no longer reported as CORS.** A `403` or `404` arrives
+  from the bucket with its CORS headers intact, so the browser did not block
+  anything; the diagnostics now say so, and point at the keys, the bucket name or
+  permissions instead of offering a CORS policy that cannot help.
+
+---
+
+## 8. Fixing CORS from a terminal, with nothing pre-configured
 
 When a bucket has no CORS policy, the browser blocks the very request that would
 write one — so Galiot cannot fix it from the page. The CORS helper offers
@@ -181,7 +210,7 @@ The generated policy always uses your current origin, so a local build suggests
 
 ---
 
-## 8. Optional local bridge (`bun run bridge`)
+## 9. Optional local bridge (`bun run bridge`, local development only)
 
 A browser cannot fix a bucket's CORS policy: the request that would write it is
 itself blocked by the missing policy. That is why a browser *worker* cannot do
@@ -216,7 +245,7 @@ Without it, apply the same policy with `mc cors set` / `aws s3api put-bucket-cor
 
 ---
 
-## 9. Known Limitations
+## 10. Known Limitations
 
 | Area | Limitation | Why |
 |---|---|---|

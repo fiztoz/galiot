@@ -155,6 +155,108 @@ export async function deleteConnection(db: AppDB, id: string): Promise<void> {
   await db.query(`DELETE FROM profiles WHERE id = $1`, [id]);
 }
 
+export interface ConnectionUpdate {
+  name: string;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  pathStyle: boolean;
+  /**
+   * New credentials. Omit to keep the sealed ones already in the vault, which
+   * is what lets a user rename or re-point a connection without retyping keys
+   * — and without the secret ever being decrypted on the main thread.
+   */
+  credentials?: { accessKeyId: string; secretAccessKey: string };
+}
+
+export interface ConnectionUpdateResult {
+  /** True when the cached listing was dropped because the target changed. */
+  clearedCache: boolean;
+}
+
+/**
+ * Updates a connection in place.
+ *
+ * The cached listing is dropped whenever the *target* changes (endpoint,
+ * region, bucket or addressing): those rows were fetched from a different
+ * bucket, and leaving them would let a later switch back to the old bucket name
+ * show stale contents. A rename keeps the cache, because nothing about the
+ * target moved.
+ *
+ * Presigned history is deliberately kept: those URLs are bearer tokens that
+ * stay valid until they expire and cannot be revoked, so deleting the record
+ * would only remove the user's copy of a link that still works.
+ */
+export async function updateConnection(
+  db: AppDB,
+  id: string,
+  input: ConnectionUpdate,
+): Promise<ConnectionUpdateResult> {
+  const existing = await db.query<{
+    endpoint: string;
+    region: string;
+    bucket: string;
+    path_style: boolean;
+  }>('SELECT endpoint, region, bucket, path_style FROM profiles WHERE id = $1', [id]);
+
+  const current = existing.rows[0];
+  if (!current) throw new Error('Connection not found');
+
+  const targetChanged =
+    current.endpoint !== input.endpoint ||
+    current.region !== input.region ||
+    current.bucket !== input.bucket ||
+    current.path_style !== input.pathStyle;
+
+  // Sealed in the worker, as on create; the plaintext goes no further.
+  const payload = input.credentials
+    ? (
+        await vaultService.call('creds.encrypt', {
+          credentials: {
+            accessKeyId: input.credentials.accessKeyId,
+            secretAccessKey: input.credentials.secretAccessKey,
+          },
+        })
+      ).payload
+    : null;
+
+  const now = new Date().toISOString();
+
+  await db.transaction(async (tx) => {
+    if (payload) {
+      await tx.query(
+        `UPDATE profiles
+            SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5,
+                encrypted_credentials = $6, updated_at = $7
+          WHERE id = $8`,
+        [
+          input.name,
+          input.endpoint,
+          input.region,
+          input.bucket,
+          input.pathStyle,
+          JSON.stringify(payload),
+          now,
+          id,
+        ],
+      );
+    } else {
+      await tx.query(
+        `UPDATE profiles
+            SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5, updated_at = $6
+          WHERE id = $7`,
+        [input.name, input.endpoint, input.region, input.bucket, input.pathStyle, now, id],
+      );
+    }
+
+    if (targetChanged) {
+      await tx.query('DELETE FROM objects_cache WHERE profile_id = $1', [id]);
+    }
+  });
+
+  return { clearedCache: targetChanged };
+}
+
 /**
  * Inserts connections whose credentials were already sealed by the vault
  * worker (used by the Galeon import, where the file's plaintext keys are
