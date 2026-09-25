@@ -14,12 +14,18 @@ export async function classifyConnectionFailure(
 ): Promise<CorsDiagnostic> {
   let reachable = true;
   let probeUrl = profile.endpoint;
+  let alternateReachable: boolean | undefined;
+  let alternateUrl: string | undefined;
 
   try {
-    // A CORS-free probe: this succeeds whenever the host answers at all.
+    // A CORS-free probe: this succeeds whenever the host answers at all, and
+    // also tries the other addressing form so a missing bucket subdomain is
+    // reported as the addressing problem it is.
     const probe = await vaultService.call('s3.probe', { profile: profileConfig(profile) });
     reachable = probe.reachable;
     probeUrl = probe.url;
+    alternateReachable = probe.alternateReachable;
+    alternateUrl = probe.alternateUrl;
   } catch {
     reachable = false;
   }
@@ -34,6 +40,8 @@ export async function classifyConnectionFailure(
       endpoint: profile.endpoint,
       rawEndpoint: profile.endpoint,
       pathStyle: profile.path_style,
+      alternateReachable,
+      alternateUrl,
     },
     reachable,
   );

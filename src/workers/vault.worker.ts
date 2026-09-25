@@ -359,7 +359,7 @@ async function dispatch<M extends VaultMethod>(
       const p = params as { profile: S3ProfileConfig };
       // No credentials needed: this only asks whether the host answers.
       const client = makeS3Client(p.profile, { accessKeyId: '', secretAccessKey: '' });
-      return client.probeReachable();
+      return client.probeAddressing();
     }
 
     case 's3.cors.get': {

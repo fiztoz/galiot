@@ -9,7 +9,8 @@
 
 ## 0. Scope
 
-Galiot is a 100% client-side S3 explorer hosted on GitHub Pages. This document compares
+Galiot is a 100% client-side S3 explorer shipped as a static bundle, hostable on
+any static or cloud host. This document compares
 each layer of the proposed stack with the realistic alternatives, records the decision,
 and corrects earlier docs where 2026 reality diverges from the original specs.
 
@@ -690,6 +691,111 @@ this environment. It is not data-dependent (identical with and without binary
 objects in the bucket) and reactivity is unaffected — uploads, edits and imports
 all reach the open UI without a reload. Recorded here so a future report of
 stale listings starts from this rather than re-investigating it.
+
+---
+
+## 16. Re-verification log — 2026-09-25 (pass 8: a third-party on-premises gateway)
+
+A user reported Galiot failing against a real corporate S3 endpoint. The
+endpoint's name is deliberately not recorded anywhere in this repository (see
+the Hostnames rule in `AGENTS.md`); it is described as *an on-premises
+converged-storage S3 gateway*, vendor ViPR, answering on a non-standard port
+over TLS with a public wildcard certificate.
+
+### What the endpoint actually is
+
+Every claim below was measured directly against the live service, not inferred
+from Galiot's behaviour.
+
+| Probe | Result | Consequence |
+|---|---|---|
+| DNS `A` | an RFC 1918 address | reachable only from inside the organisation's network or its VPN — not the cause of the failure below |
+| TCP to the service port | open; 9000/9001 closed | the port is correct |
+| TLS handshake | valid wildcard certificate, unexpired | `https://` is correct; plain HTTP on the same port returns an empty reply |
+| `GET /` | `403`, `Server: ViPR/1.0`, S3 XML `<Error><Code>AccessDenied</Code>` | it speaks the S3 protocol |
+| Signed `ListObjectsV2`, path-style, from Bun (no browser) | `403 InvalidAccessKeyId` | **SigV4 and path-style addressing both work**; the service is a complete S3 implementation |
+| Same request, virtual-hosted | `getaddrinfo ENOTFOUND` | **no wildcard DNS**, so bucket-subdomain addressing is impossible here |
+| `OPTIONS` with preflight headers | `405 Method Not Allowed` | the gateway does not implement CORS preflight at all |
+| `Access-Control-*` on any response | absent | a browser can never read a response from it |
+| Request via the local bridge | `403 InvalidAccessKeyId` (a real S3 error) | the bridge is a working path; only credentials remain |
+
+Two independent, unrelated blockers were therefore stacked behind one error
+message: **addressing** (path-style is mandatory) and **CORS** (the gateway
+sends no CORS headers and rejects preflight, so no browser can use it directly
+however the request is formed).
+
+A vendor-specific detail worth recording: anonymous requests are refused with
+*"Could not determine namespace from anonymous request. Please use a namespace
+BaseURL or include an `x-emc-namespace` header"*. No such header is needed — a
+signed path-style request carries the namespace in the bucket, which is why the
+signed request above reached the key check. The message is a red herring for a
+client that signs correctly.
+
+### Defect 1: a dead probe that reported every host as unreachable
+
+`src/s3/diagnostics.ts` contained a second copy of the reachability probe,
+unused by any caller and covered by no test. It passed `redirect: 'manual'`
+together with `mode: 'no-cors'` — the exact combination its own comment warned
+against. Measured in a real browser:
+
+| Target | `no-cors` + `redirect: 'manual'` | `no-cors` alone |
+|---|---|---|
+| the reported gateway | `TypeError: Failed to fetch` | opaque response |
+| a public site | `TypeError: Failed to fetch` | opaque response |
+| a refused port | `TypeError: Failed to fetch` | `TypeError` |
+
+Chrome rejects the combination outright, so that copy would have declared the
+entire internet unreachable. The live probe in `S3Client` was already correct;
+the dead copy was a trap for whoever reached for the documented helper next.
+Removed, with the browser constraint recorded where the verdict consumes it and
+pinned by a test.
+
+### Defect 2: a failed probe was reported as a network fault
+
+With the live probe, a failed reachability check was still shown as *"The
+endpoint did not respond at all… network, DNS, port or TLS — not CORS"*, with
+the hint to check the host and port or try `http://`. Against this gateway that
+advice had nothing to act on: the host answered fine, and the probe had dialled
+`bucket.<host>`, which does not resolve. A single failed `fetch` cannot tell
+those two situations apart.
+
+`S3Client.probeAddressing()` now tries the *other* addressing form whenever the
+first fails, which is decisive because addressing is the only variable.
+`diagnoseCors` then reports `addressing-unsupported`, naming the URL that
+responded — and the connection dialog already repaired that verdict
+automatically by switching the toggle and asking for a re-test, so the
+misconfiguration now fixes itself.
+
+### Defect 3: CORS advice that could not work
+
+The `cors-blocked` hint told the user to apply the generated policy. On a
+gateway that answers `OPTIONS` with `405` and emits no CORS headers, no policy
+can help. The hint now also points at the local bridge, which makes the same
+signed request from the user's machine where CORS does not apply — verified
+above against this endpoint.
+
+### Evidence
+
+```sh
+dig +short <host> A                                  # RFC 1918 address
+nc -vz -G 5 <host> <port>                            # TCP open
+curl -sv https://<host>:<port>/ 2>&1 | grep -E 'subject|SSL certificate|HTTP/'
+curl -s -X OPTIONS -D - -H 'Origin: http://localhost:5173' \
+  -H 'Access-Control-Request-Method: GET' \
+  -H 'Access-Control-Request-Headers: authorization' https://<host>:<port>/
+dig +short <bucket>.<host> A                         # no record
+```
+
+The browser behaviours in the tables above were measured in headless Chrome via
+the DevTools protocol; the signed-request rows were measured with the project's
+own client from Bun, where no browser and therefore no CORS is involved.
+
+### One correction to §0
+
+§0 still described Galiot as "hosted on GitHub Pages". Per the project's
+documentation rule, the deliverable is a static bundle hostable on any static
+or cloud host; the line now says so, without naming a provider or discussing
+hosting cost.
 
 ---
 

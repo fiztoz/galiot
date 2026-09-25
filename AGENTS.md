@@ -52,6 +52,12 @@
 - Add correction layers via `STACK_DECISION.md` re-verification logs
 - All claims must cite sources (vendor docs, npm, MDN)
 
+### Hostnames
+- **Never** put a real customer, third-party or internal hostname in code, tests or docs — not even in a comment explaining a bug that a real endpoint revealed
+- Use RFC 2606 reserved names instead (`example.com`, `s3.example.com`, `bucket.example.com`), or loopback/private addresses (`localhost`, `127.0.0.1`, `10.0.0.5`)
+- Describe the affected system generically ("an on-premises S3 gateway", "a corporate MinIO")
+- `src/repoHostnames.test.ts` enforces this for `src/`
+
 ### Commit Messages
 - Conventional Commits: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`
 - Reference component: `feat(vault): add export/import backup`

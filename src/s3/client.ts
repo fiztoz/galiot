@@ -118,6 +118,21 @@ export function listObjectsQuery(
 }
 
 /**
+ * The result of probing an endpoint for reachability.
+ *
+ * `alternate*` describe the *other* addressing form (path-style vs
+ * virtual-hosted). They are only meaningful when `reachable` is false: an
+ * alternate that answers proves the failure was the addressing, not the host.
+ */
+export interface ProbeResult {
+  reachable: boolean;
+  url: string;
+  error?: string;
+  alternateReachable: boolean;
+  alternateUrl: string;
+}
+
+/**
  * An S3 error response, with the server's own error code preserved.
  *
  * The code is what makes the difference between "you lack permission" and
@@ -433,7 +448,8 @@ export class S3Client {
     try {
       // NOTE: do not add `redirect: 'manual'` here — Chrome rejects that
       // combination with a TypeError, which would make every reachable host
-      // look unreachable (verified in a real browser).
+      // look unreachable (verified in a real browser against an on-premises
+      // gateway, a public site and a refused port alike).
       await fetch(url.toString(), { method: 'GET', mode: 'no-cors' });
       return { reachable: true, url: url.toString() };
     } catch (err) {
@@ -442,6 +458,39 @@ export class S3Client {
         url: url.toString(),
         error: err instanceof Error ? err.message : String(err),
       };
+    }
+  }
+
+  /**
+   * Probes the endpoint, and — only if that fails — the *other* addressing form.
+   *
+   * A failed probe is not evidence of a network problem. Virtual-hosted
+   * addressing dials `bucket.endpoint`, and most endpoints have no wildcard DNS
+   * for it, so the probe fails on a host that is perfectly reachable. Reporting
+   * that as "network, DNS, port or TLS" sends the user to check a network that
+   * was never broken.
+   *
+   * The two forms are the only variable here, so trying the other one is a
+   * decisive differential: if it answers, the addressing was the cause.
+   */
+  public async probeAddressing(key?: string): Promise<ProbeResult> {
+    const current = await this.probeReachable(key);
+    const alternateUrl = buildS3Url(
+      { endpoint: this.endpoint, bucket: this.bucket, pathStyle: !this.pathStyle },
+      key,
+    ).toString();
+
+    // Already answered: the addressing is fine, so do not spend a second probe.
+    if (current.reachable) {
+      return { ...current, alternateReachable: false, alternateUrl };
+    }
+
+    try {
+      await fetch(alternateUrl, { method: 'GET', mode: 'no-cors' });
+      return { ...current, alternateReachable: true, alternateUrl };
+    } catch {
+      // Neither form answered, so the host itself is the problem.
+      return { ...current, alternateReachable: false, alternateUrl };
     }
   }
 }

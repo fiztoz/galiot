@@ -32,6 +32,86 @@ describe('diagnoseCors', () => {
     expect(result.detail).toContain('not CORS');
   });
 
+  /**
+   * Regression guard for a real report: an on-premises S3 gateway answered
+   * perfectly well, but the probe had dialled `bucket.<host>`, which resolves
+   * to nothing, and the verdict blamed DNS, ports and TLS. "Check your network"
+   * was advice with nothing to act on; the actual fix was one checkbox.
+   *
+   * Hostnames are documentation-reserved; the endpoint that showed this up was
+   * a real third-party service and does not belong in this repository.
+   */
+  test('a failed probe with a working alternate form is an addressing problem', () => {
+    const result = diagnoseCors(
+      {
+        ...base,
+        probeUrl: 'https://s3.example.com:9021/',
+        endpoint: 'https://s3.example.com:9021',
+        rawEndpoint: 'https://s3.example.com:9021',
+        pathStyle: false,
+        alternateReachable: true,
+        alternateUrl: 'https://s3.example.com:9021/archive/',
+      },
+      false,
+    );
+    expect(result.reason).toBe('addressing-unsupported');
+    expect(result.hint).toContain('Path-style');
+    // The old wording — network, DNS, port, TLS — must not come back.
+    expect(result.detail).not.toContain('network');
+    expect(result.detail).toContain('subdomain');
+  });
+
+  test('the reverse case: path-style failed, virtual-hosting answered', () => {
+    const result = diagnoseCors(
+      {
+        ...base,
+        probeUrl: 'https://s3.example.com/archive/',
+        endpoint: 'https://s3.example.com',
+        rawEndpoint: 'https://s3.example.com',
+        pathStyle: true,
+        alternateReachable: true,
+        alternateUrl: 'https://archive.s3.example.com/',
+      },
+      false,
+    );
+    expect(result.reason).toBe('addressing-unsupported');
+    expect(result.hint).toContain('Turn off');
+  });
+
+  test('only the other addressing form counts — both failing is still the network', () => {
+    const result = diagnoseCors(
+      {
+        ...base,
+        // A DNS endpoint already in path-style, so the IP-addressing rule above
+        // does not pre-empt this: here neither form answered.
+        endpoint: 'https://s3.example.com:9021',
+        pathStyle: true,
+        rawEndpoint: 'https://s3.example.com:9021',
+        alternateReachable: false,
+        alternateUrl: 'https://archive.s3.example.com:9021/',
+      },
+      false,
+    );
+    expect(result.reason).toBe('host-unreachable');
+  });
+
+  test('addressing only matters when the current form failed', () => {
+    // The host answered as addressed; the alternate is irrelevant.
+    const result = diagnoseCors(
+      { ...base, pathStyle: true, alternateReachable: true, requestSucceeded: false, requestError: 'Failed to fetch' },
+      true,
+    );
+    expect(result.reason).toBe('cors-blocked');
+  });
+
+  test('the CORS hint offers the bridge for servers with no CORS support', () => {
+    // A gateway that answers preflight with 405 cannot be given a policy at all,
+    // so "apply the policy below" is a dead end on its own.
+    const result = diagnoseCors({ ...base, pathStyle: true, requestSucceeded: false, requestError: 'Failed to fetch' }, true);
+    expect(result.reason).toBe('cors-blocked');
+    expect(result.hint).toContain('bridge');
+  });
+
   test('reachable but blocked means CORS', () => {
     const result = diagnoseCors({ ...base, pathStyle: true, requestSucceeded: false }, true);
     expect(result.reason).toBe('cors-blocked');

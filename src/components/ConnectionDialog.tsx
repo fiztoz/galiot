@@ -186,13 +186,19 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
     setCredentialsForTest(credentials);
 
     // 1. Can we reach the host at all? This probe is CORS-free, so it separates
-    //    DNS/port/TLS problems from browser CORS blocks.
+    //    DNS/port/TLS problems from browser CORS blocks. It also tries the other
+    //    addressing form, so a bucket-subdomain that does not resolve is
+    //    reported as the addressing problem it is, not as a dead network.
     let reachable = true;
     let probeUrl = profile.endpoint;
+    let alternateReachable: boolean | undefined;
+    let alternateUrl: string | undefined;
     try {
       const probe = await vaultService.call('s3.probe', { profile });
       reachable = probe.reachable;
       probeUrl = probe.url;
+      alternateReachable = probe.alternateReachable;
+      alternateUrl = probe.alternateUrl;
     } catch {
       reachable = false;
     }
@@ -229,6 +235,8 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
         endpoint: profile.endpoint,
         rawEndpoint,
         pathStyle: form.pathStyle,
+        alternateReachable,
+        alternateUrl,
       },
       reachable,
     );
