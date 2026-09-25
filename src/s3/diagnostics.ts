@@ -56,17 +56,16 @@ export function isBlockedByBrowser(error?: string | null): boolean {
  * its own. `mode: 'no-cors'` with a simple GET yields an opaque response when
  * the host answers and a TypeError when it does not.
  *
- * Do not pass `redirect: 'manual'`: Chrome rejects that combination in no-cors
- * mode with a TypeError, which would report every host as unreachable.
+ * Do not pass `redirect: 'manual'` alongside `mode: 'no-cors'`: Chrome rejects
+ * that combination with a TypeError, which would report every host as
+ * unreachable. Verified in a real browser against an on-premises S3 gateway, a
+ * public site and a refused port: all three threw, while the same request
+ * without `redirect` resolved for both reachable hosts.
+ *
+ * The live implementation is `S3Client.probeAddressing` in src/s3/client.ts,
+ * which also tries the other addressing form. This note lives here because the
+ * reasoning belongs with the verdict that consumes it.
  */
-export async function probeReachability(url: string): Promise<{ reachable: boolean; error?: string }> {
-  try {
-    await fetch(url, { method: 'GET', mode: 'no-cors', redirect: 'manual' });
-    return { reachable: true };
-  } catch (err) {
-    return { reachable: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
 
 export interface DiagnoseInput {
   /** Bucket URL to probe (already built by the client). */
@@ -84,6 +83,16 @@ export interface DiagnoseInput {
   /** How the user typed the endpoint (may lack a scheme). */
   rawEndpoint?: string;
   pathStyle?: boolean;
+  /**
+   * Whether the *other* addressing form answered when this one did not.
+   *
+   * Set by the probe when a `no-cors` fetch to the current form failed but the
+   * opposite form resolved. That is proof the endpoint is alive and the
+   * addressing was wrong — a distinction a single failed probe cannot make.
+   */
+  alternateReachable?: boolean;
+  /** The URL that answered, for the explanation. */
+  alternateUrl?: string;
 }
 
 /**
@@ -91,7 +100,7 @@ export interface DiagnoseInput {
  * Pure — no network — so it is directly unit-testable.
  */
 export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiagnostic {
-  const { probeUrl, requestSucceeded, requestError, endpoint, rawEndpoint, pathStyle } = input;
+  const { probeUrl, requestSucceeded, requestError, endpoint, rawEndpoint, pathStyle, alternateReachable, alternateUrl } = input;
 
   // 1. Addressing mistakes produce wrong URLs; catch them before blaming CORS.
   if (endpoint && !canUseVirtualHosting(endpoint) && !pathStyle) {
@@ -117,6 +126,29 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
   }
 
   if (!reachable) {
+    // The opposite addressing form answered while this one did not. That is
+    // proof the endpoint is alive and the *addressing* was wrong — which a
+    // single failed probe cannot tell you, and which "check your DNS and your
+    // port" cannot fix.
+    if (alternateReachable) {
+      const usingVirtualHost = pathStyle !== true;
+      return {
+        reachable,
+        reason: 'addressing-unsupported',
+        detail: usingVirtualHost
+          ? `The endpoint is reachable, but not at the address this connection used. Virtual-hosted addressing asks for the bucket as a subdomain of the hostname, and this host does not resolve one. The path-style address${
+              alternateUrl ? ` ${alternateUrl}` : ''
+            } answered instead.`
+          : `The endpoint is reachable, but not at the address this connection used. Path-style addressing put the bucket in the request path and that address did not answer, while the virtual-hosted address${
+              alternateUrl ? ` ${alternateUrl}` : ''
+            } did.`,
+        hint: usingVirtualHost
+          ? 'Turn on "Path-style addressing". Most self-hosted and on-premises gateways publish no DNS for bucket subdomains.'
+          : 'Turn off "Path-style addressing" — this endpoint only answers with the bucket in the hostname.',
+        probedUrl: probeUrl,
+      };
+    }
+
     return {
       reachable,
       reason: 'host-unreachable',
@@ -137,7 +169,7 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
         reason: 'cors-blocked',
         detail:
           'The endpoint answered, but the browser blocked the response. Signed requests preflight because they carry Authorization and x-amz-* headers, so the bucket must allow those headers as well as the methods.',
-        hint: 'Apply the recommended CORS policy below, or add AllowedHeaders "*" and ExposeHeader "ETag" for this origin.',
+        hint: 'Apply the recommended CORS policy below, or add AllowedHeaders "*" and ExposeHeader "ETag" for this origin. If the server cannot be given a CORS policy at all — some on-premises gateways answer preflight with 405 and send no Access-Control headers — run the Galiot bridge (`bun run bridge`): it makes the same signed request from your machine, where CORS does not apply.',
         probedUrl: probeUrl,
       };
     }

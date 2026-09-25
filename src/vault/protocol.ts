@@ -222,7 +222,14 @@ export type VaultResults = {
   'vault.attachTransferPort': { attached: true };
   'creds.encrypt': { payload: EncryptedPayload };
   's3.test': TestConnectionResult;
-  's3.probe': { reachable: boolean; url: string; error?: string };
+  's3.probe': {
+    reachable: boolean;
+    url: string;
+    error?: string;
+    /** Whether the *other* addressing form answered, when this one did not. */
+    alternateReachable?: boolean;
+    alternateUrl?: string;
+  };
   's3.cors.get': CorsConfiguration;
   's3.cors.put': CorsPutResult;
   's3.cors.putViaBridge': { applied: boolean; status: number; body?: string; via: 'bridge' };
