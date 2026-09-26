@@ -852,5 +852,25 @@ The companion's allowed-origin and token requirements remain the same.
 
 ---
 
+## 19. Re-verification log — 2026-09-26 (one companion for all connections)
+
+The per-connection controls described in §§17–18 have been replaced by one
+companion panel above the connection list. Enabling it validates one token and
+routes signed requests for every connection in the current tab, including
+connections added afterward. The token remains in tab memory and is cleared
+when the vault locks or the user disables the companion. Connection tests,
+object operations, and transfer jobs all read the same session token; see
+[`src/bridge/session.ts`](../src/bridge/session.ts),
+[`src/db/objects.ts`](../src/db/objects.ts), and
+[`src/components/ConnectionDialog.tsx`](../src/components/ConnectionDialog.tsx).
+
+This changes only browser routing. The companion still binds loopback,
+requires its token and an explicitly allowed page origin, and cannot make
+presigned share links reachable to recipients. A global opt-in is visible
+before any connections are saved so a new connection can be tested through
+the companion immediately.
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*

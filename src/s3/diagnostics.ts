@@ -169,7 +169,7 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
         reason: 'cors-blocked',
         detail:
           'The endpoint answered, but the browser blocked the response. Signed requests preflight because they carry Authorization and x-amz-* headers, so the bucket must allow those headers as well as the methods.',
-        hint: 'If the bucket policy is missing, apply the recommended CORS rule below. If the policy already exists but the gateway still rejects anonymous preflight, save the connection and enable its local companion option. Start `bun run bridge` on your computer and use the command shown on the connection card for a deployed page.',
+        hint: 'If the bucket policy is missing, apply the recommended CORS rule below. If the policy already exists but the gateway still rejects anonymous preflight, enable the local companion above the connection list. Start `bun run bridge` on your computer and use the command shown there for a deployed page.',
         probedUrl: probeUrl,
       };
     }

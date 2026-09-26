@@ -1,21 +1,17 @@
 import { BRIDGE_DEFAULT_PORT, BRIDGE_TOKEN_HEADER } from './policy';
 
-/** Companion tokens live only in this tab's memory, never in PGlite. */
-const enabled = new Map<string, string>();
+/** The companion token lives only in this tab's memory, never in PGlite. */
+let enabledToken: string | undefined;
 
-export function bridgeTokenFor(profileId: string): string | undefined {
-  return enabled.get(profileId);
+export function getBridgeToken(): string | undefined {
+  return enabledToken;
 }
 
-export function disableBridgeFor(profileId: string): void {
-  enabled.delete(profileId);
+export function disableBridge(): void {
+  enabledToken = undefined;
 }
 
-export function disableAllBridgeSessions(): void {
-  enabled.clear();
-}
-
-export async function enableBridgeFor(profileId: string, token: string): Promise<void> {
+export async function enableBridge(token: string): Promise<void> {
   const trimmed = token.trim();
   if (!trimmed) throw new Error('Enter the token printed by bun run bridge.');
 
@@ -40,5 +36,5 @@ export async function enableBridgeFor(profileId: string, token: string): Promise
     throw new Error('This companion is too old for connection routing. Start the version from this Galiot checkout.');
   }
 
-  enabled.set(profileId, trimmed);
+  enabledToken = trimmed;
 }

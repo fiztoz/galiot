@@ -190,7 +190,7 @@ Galiot bridge listening on http://127.0.0.1:${server.port}
 
   Token: ${token}
 
-Paste this token into Galiot (Connections → Enable local companion) to route
+Paste this token into Galiot (Connections → Local companion) to route
 normal S3 traffic, or into the CORS helper to apply a policy. The bridge
 forwards SigV4-signed S3 requests only from the origins listed below.
 
