@@ -2,7 +2,7 @@
  * Where the app is running, from the browser's point of view.
  *
  * The CORS-helper repair action is offered only for a locally served page.
- * The separate per-connection companion mode supports deployed pages when
+ * The tab-wide companion mode supports deployed pages when
  * the user starts a companion on their own machine and allows that origin.
  */
 

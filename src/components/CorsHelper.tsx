@@ -21,6 +21,7 @@ import { buildCorsRemediation, type RemediationOption } from '../s3/corsRemediat
 import { canUseVirtualHosting } from '../s3/url';
 import type { CorsDiagnostic } from '../s3/diagnostics';
 import { shouldOfferBridge } from '../bridge/environment';
+import { getBridgeToken } from '../bridge/session';
 import type { Credentials } from '../vault/protocol';
 import { vaultService } from '../vault/vaultService';
 
@@ -101,6 +102,8 @@ export function CorsHelper({
   const [copied, setCopied] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [bridgeToken, setBridgeToken] = useState('');
+  const sharedBridgeToken = getBridgeToken();
+  const effectiveBridgeToken = sharedBridgeToken ?? bridgeToken;
   const [bridgeStatus, setBridgeStatus] = useState<
     | { state: 'unknown' | 'checking' | 'up' | 'down'; message?: string }
   >({ state: 'unknown' });
@@ -238,7 +241,7 @@ export function CorsHelper({
     try {
       const health = await vaultService.call('bridge.health', {
         origin: window.location.origin,
-        token: bridgeToken,
+        token: effectiveBridgeToken,
       });
       setBridgeStatus(
         health.reachable
@@ -251,7 +254,7 @@ export function CorsHelper({
         message: err instanceof Error ? err.message : String(err),
       });
     }
-  }, [bridgeToken]);
+  }, [effectiveBridgeToken]);
 
   /** Applies the policy from the machine, where CORS does not apply. */
   const applyViaBridge = useCallback(async () => {
@@ -271,7 +274,7 @@ export function CorsHelper({
         credentials,
         config: next,
         origin: window.location.origin,
-        token: bridgeToken,
+        token: effectiveBridgeToken,
       });
 
       if (result.applied) {
@@ -297,7 +300,7 @@ export function CorsHelper({
     } finally {
       setLoading(false);
     }
-  }, [bridgeToken, config, credentials, onApplied, profile, recommended]);
+  }, [effectiveBridgeToken, config, credentials, onApplied, profile, recommended]);
 
   const copyXml = useCallback(async () => {
     try {
@@ -338,7 +341,7 @@ export function CorsHelper({
     : VERDICT_COPY[verdict ?? 'none'];
   const needsPathStyle = !canUseVirtualHosting(profile.endpoint) && !profile.pathStyle;
   // Policy repair remains a local-development helper. Deployed pages use the
-  // separate per-connection companion control for ordinary S3 traffic.
+  // separate tab-wide companion control for ordinary S3 traffic.
   const bridgeOffered = corsBlocksTheFix && shouldOfferBridge();
 
   // Build the safe variant (no secret in the command) the first time the
@@ -585,32 +588,40 @@ mc admin service restart <alias>`}
             sends it from this machine, where the browser&rsquo;s CORS rules do not apply.
           </p>
 
-          <ol className="text-[11px] text-zinc-500 dark:text-zinc-400 list-decimal pl-4 space-y-1">
-            <li>
-              Start the bridge in your project:{' '}
-              <code className="font-mono px-1 py-0.5 rounded bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700">
-                bun run bridge
-              </code>
-            </li>
-            <li>Paste the token it prints below.</li>
-          </ol>
+          {sharedBridgeToken ? (
+            <p className="text-[11px] text-teal-700 dark:text-teal-300">
+              Using the companion enabled for all connections.
+            </p>
+          ) : (
+            <ol className="text-[11px] text-zinc-500 dark:text-zinc-400 list-decimal pl-4 space-y-1">
+              <li>
+                Start the bridge in your project:{' '}
+                <code className="font-mono px-1 py-0.5 rounded bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700">
+                  bun run bridge
+                </code>
+              </li>
+              <li>Paste the token it prints below.</li>
+            </ol>
+          )}
 
           <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={bridgeToken}
-              onChange={(e) => {
-                setBridgeToken(e.target.value.trim());
-                setBridgeStatus({ state: 'unknown' });
-              }}
-              placeholder="Bridge token"
-              aria-label="Bridge token"
-              className="flex-1 px-2.5 py-1.5 text-xs font-mono bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 dark:text-zinc-100"
-            />
+            {!sharedBridgeToken && (
+              <input
+                type="password"
+                value={bridgeToken}
+                onChange={(e) => {
+                  setBridgeToken(e.target.value.trim());
+                  setBridgeStatus({ state: 'unknown' });
+                }}
+                placeholder="Bridge token"
+                aria-label="Bridge token"
+                className="flex-1 px-2.5 py-1.5 text-xs font-mono bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 dark:text-zinc-100"
+              />
+            )}
             <button
               type="button"
               onClick={() => void checkBridge()}
-              disabled={bridgeToken.length === 0 || bridgeStatus.state === 'checking'}
+              disabled={effectiveBridgeToken.length === 0 || bridgeStatus.state === 'checking'}
               className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-white dark:hover:bg-zinc-800 transition-colors disabled:opacity-50 whitespace-nowrap"
             >
               {bridgeStatus.state === 'checking' ? 'Checking…' : 'Check bridge'}
