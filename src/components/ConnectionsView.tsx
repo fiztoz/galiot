@@ -194,11 +194,14 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                 <Plug size={20} aria-hidden="true" />
               </div>
               <div>
-                <h3 id="companion-heading" className="font-semibold text-zinc-900 dark:text-zinc-50">Local companion</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 id="companion-heading" className="font-semibold text-zinc-900 dark:text-zinc-50">Local companion</h3>
+                  <span className="rounded-full border border-zinc-300 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">Optional</span>
+                </div>
                 <p className="mt-1 max-w-xl text-sm text-zinc-600 dark:text-zinc-300">
                   {bridgeEnabled
-                    ? 'Enabled for every connection in this tab. New connections use it automatically, too.'
-                    : 'Connect once to route every connection in this tab through the companion.'}
+                    ? 'On · every connection in this tab uses the companion.'
+                    : 'Off · connections send requests directly from the browser.'}
                 </p>
               </div>
             </div>
@@ -215,6 +218,10 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
               </button>
             )}
           </div>
+
+          <p className="mt-4 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+            Use this if a connection shows “Failed to fetch” with a CORS or preflight warning, but this computer can reach your S3 gateway. If connections work normally, leave it off. The companion runs locally and forwards signed requests; it never receives your raw S3 secret keys.
+          </p>
 
           <div className="mt-4 border-t border-teal-200/80 pt-4 dark:border-teal-900/70">
             <button type="button"

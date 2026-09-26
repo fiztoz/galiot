@@ -267,6 +267,9 @@ The bridge is a local companion server for two cases: applying a bucket CORS
 policy and routing S3 traffic when a gateway cannot answer the browser's
 anonymous preflight. The browser still preflights the local companion, which
 answers that request; the companion calls S3 outside the browser.
+This is optional: leave it off when connections work directly in the browser.
+Use it when Galiot reports CORS or preflight errors but the same computer can
+reach the S3 gateway. It does not repair an incorrect endpoint or credentials.
 
 On a deployed Galiot page, open **Connections → Local companion → Download companion** and choose
 macOS Apple Silicon, macOS Intel, Windows x64, or Linux x64. Extract the ZIP on

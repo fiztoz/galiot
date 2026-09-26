@@ -868,7 +868,9 @@ This changes only browser routing. The companion still binds loopback,
 requires its token and an explicitly allowed page origin, and cannot make
 presigned share links reachable to recipients. A global opt-in is visible
 before any connections are saved so a new connection can be tested through
-the companion immediately.
+the companion immediately. The panel explains that it is optional and useful
+for browser CORS/preflight failures when the local computer can reach the
+gateway; ordinary working connections can leave it off.
 
 ---
 
