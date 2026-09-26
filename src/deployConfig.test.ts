@@ -22,22 +22,18 @@ function connectSrc(policy: string): string {
 }
 
 describe('deployed CSP', () => {
-  // The bridge is a privileged local listener. It is reachable in development
-  // only because index.html's meta policy allows it; in production the response
-  // header is stricter and a request must satisfy *every* applicable policy, so
-  // the header is what actually decides. Adding the bridge origin to a header
-  // file would undo that and let any deployed page talk to a visitor's
-  // localhost.
-  test('response-header policies never allow the local bridge', () => {
+  // The opt-in companion needs this one loopback listener in production.
+  // Keep the allowance exact, without opening unrelated local processes.
+  test('response-header policies allow only the exact local bridge origin', () => {
     const headerSources: Record<string, string> = {
       'public/_headers': read('public', '_headers'),
       'vercel.json': read('vercel.json'),
     };
 
     for (const [file, text] of Object.entries(headerSources)) {
-      expect(text, `${file} must not mention the bridge origin`).not.toContain(BRIDGE_ORIGIN);
+      expect(text, `${file} must allow the bridge origin`).toContain(BRIDGE_ORIGIN);
       for (const directive of text.match(/connect-src[^;"]*/g) ?? []) {
-        expect(connectSrc(directive), `${file} connect-src drifted`).toBe("'self' https:");
+        expect(connectSrc(directive), `${file} connect-src drifted`).toBe(`'self' https: ${BRIDGE_ORIGIN}`);
       }
     }
   });
@@ -212,9 +208,8 @@ describe('CSP completeness', () => {
 
       expect(meta.has(name), `meta policy is missing ${name}`).toBe(true);
       if (name === 'connect-src') {
-        // The one deliberate difference: the meta allows the local bridge so it
-        // works in development, while the header stays strict.
-        expect(meta.get(name)!.replace(` ${BRIDGE_ORIGIN}`, '')).toBe(headerValue);
+        // Both policies must allow the same exact loopback listener.
+        expect(meta.get(name)).toBe(headerValue);
         expect(meta.get(name)!).toContain(BRIDGE_ORIGIN);
       } else {
         expect(meta.get(name), `${name} drifted between the meta and header policies`).toBe(headerValue);

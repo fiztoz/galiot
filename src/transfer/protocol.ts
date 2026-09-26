@@ -21,6 +21,8 @@ export interface S3Target {
    * `src/s3/customHeaders.ts`, which refuses credential-looking names.
    */
   headers?: Record<string, string>;
+  /** Local companion token, held in memory for this tab only. */
+  bridgeToken?: string;
 }
 
 export interface CompletedPart {

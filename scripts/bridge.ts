@@ -1,14 +1,12 @@
 /**
  * Galiot companion bridge — optional, local-only.
  *
- * Why it exists: a browser cannot set a bucket's CORS policy, because the
- * request that would do it is itself blocked by the missing policy. This
- * process makes the *same* SigV4-signed request from the machine, where CORS
- * does not apply.
+ * It applies bucket CORS policy and, when enabled for a connection, forwards
+ * signed S3 traffic for gateways that cannot answer browser preflight.
  *
- * It is deliberately not a general proxy:
+ * It is deliberately gated:
  *   - listens on 127.0.0.1 only
- *   - only accepts the local app origins
+ *   - accepts only explicitly allowed app origins
  *   - requires a token printed at startup (paste it into Galiot)
  *   - only forwards requests carrying a SigV4 Authorization header
  *
@@ -26,6 +24,7 @@ import {
   isOriginAllowed,
   resolveAllowedOrigins,
 } from '../src/bridge/policy';
+import { BRIDGE_TARGET_HEADER } from '../src/bridge/transport';
 
 const port = Number(process.env.GALIOT_BRIDGE_PORT ?? BRIDGE_DEFAULT_PORT);
 const token = process.env.GALIOT_BRIDGE_TOKEN ?? crypto.randomUUID();
@@ -54,7 +53,11 @@ const server = Bun.serve({
     const origin = request.headers.get('origin');
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders(origin, allowedOrigins) });
+      if (!isOriginAllowed(origin, allowedOrigins)) return new Response(null, { status: 403 });
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders(origin, allowedOrigins, request.headers.get('access-control-request-headers')),
+      });
     }
 
     const url = new URL(request.url);
@@ -64,7 +67,58 @@ const server = Bun.serve({
       if (!isOriginAllowed(origin, allowedOrigins)) {
         return json({ ok: false, error: 'origin not allowed' }, 403, origin);
       }
-      return json({ ok: true, version: 1, tokenRequired: true }, 200, origin);
+      if (request.headers.get(BRIDGE_TOKEN_HEADER) !== token) {
+        return json({ ok: false, error: 'incorrect bridge token' }, 403, origin);
+      }
+      return json({ ok: true, version: 2, tokenRequired: true }, 200, origin);
+    }
+
+    if (url.pathname === '/proxy') {
+      const headers = Object.fromEntries(request.headers.entries());
+      const check = checkForwardRequest(
+        { target: request.headers.get(BRIDGE_TARGET_HEADER) ?? '', method: request.method, headers },
+        {
+          origin,
+          token: request.headers.get(BRIDGE_TOKEN_HEADER),
+          expectedToken: token,
+          allowedOrigins,
+        },
+      );
+      if (!check.ok) return json({ ok: false, error: check.detail }, 403, origin);
+
+      const upstreamHeaders = new Headers(request.headers);
+      for (const name of [
+        'host', 'connection', 'content-length', 'origin', 'referer', 'accept-encoding',
+        BRIDGE_TARGET_HEADER, BRIDGE_TOKEN_HEADER,
+      ]) upstreamHeaders.delete(name);
+      for (const name of [...upstreamHeaders.keys()]) {
+        if (name.startsWith('sec-')) upstreamHeaders.delete(name);
+      }
+
+      try {
+        const upstream = await fetch(check.url, {
+          method: request.method,
+          headers: upstreamHeaders,
+          body: request.body,
+          redirect: 'manual',
+        });
+        const responseHeaders = new Headers(corsHeaders(origin, allowedOrigins));
+        for (const name of [
+          'content-type', 'content-length', 'etag', 'content-range', 'accept-ranges', 'last-modified',
+          'x-amz-request-id', 'x-amz-id-2',
+        ]) {
+          const value = upstream.headers.get(name);
+          if (value) responseHeaders.set(name, value);
+        }
+        return new Response(
+          request.method === 'HEAD' || upstream.status === 204 || upstream.status === 304
+            ? null
+            : upstream.body,
+          { status: upstream.status, headers: responseHeaders },
+        );
+      } catch (err) {
+        return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 502, origin);
+      }
     }
 
     if (url.pathname !== '/forward') {
@@ -136,15 +190,15 @@ Galiot bridge listening on http://127.0.0.1:${server.port}
 
   Token: ${token}
 
-Paste this token into Galiot (Vault → Connections → CORS helper) when it
-asks to apply a CORS policy. The bridge only forwards SigV4-signed S3
-requests from local app origins, and only to the address you give it.
+Paste this token into Galiot (Connections → Enable local companion) to route
+normal S3 traffic, or into the CORS helper to apply a policy. The bridge
+forwards SigV4-signed S3 requests only from the origins listed below.
 
 Allowed origins:
 ${allowedOrigins.map((origin) => `  - ${origin}`).join('\n')}
 
 Serving Galiot from another origin? Add it explicitly:
-  GALIOT_BRIDGE_ORIGINS=https://your-host bun run bridge
+  Set GALIOT_BRIDGE_ORIGINS to the page's exact origin before starting.
 
 Stop it with Ctrl+C.
 `);

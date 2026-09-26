@@ -2,6 +2,7 @@ import { AwsClient, type AwsSignOptions } from '../lib/aws4fetch';
 import { buildS3Url } from './url';
 import { md5Base64 } from '../transfer/integrity';
 import { withCustomHeaders } from './customHeaders';
+import { fetchViaBridge } from '../bridge/transport';
 import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
 import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
 
@@ -19,6 +20,8 @@ export interface S3ClientOptions {
    * the canonical request.
    */
   headers?: Record<string, string>;
+  /** Session-only token for routing signed requests through the local companion. */
+  bridgeToken?: string;
 }
 
 /** Normalises the three `HeadersInit` shapes to a plain record. */
@@ -217,6 +220,7 @@ export function s3ClientForProfile(
     secretAccessKey: creds.secretAccessKey,
     sessionToken: creds.sessionToken,
     headers: profile.headers,
+    bridgeToken: profile.bridgeToken,
   });
 }
 
@@ -226,6 +230,7 @@ export class S3Client {
   private bucket: string;
   private pathStyle: boolean;
   private customHeaders: Record<string, string>;
+  private bridgeToken?: string;
 
   constructor(options: S3ClientOptions) {
     this.awsClient = new AwsClient({
@@ -239,6 +244,7 @@ export class S3Client {
     this.bucket = options.bucket;
     this.pathStyle = options.pathStyle ?? false;
     this.customHeaders = options.headers ?? {};
+    this.bridgeToken = options.bridgeToken;
   }
 
   /**
@@ -254,14 +260,16 @@ export class S3Client {
    * resumed download's `Range` and an upload's `Content-Type` cannot be
    * displaced by a stale row that predates the screening rule.
    */
-  private request(url: URL, init?: RequestInit & AwsSignOptions): Promise<Response> {
-    if (Object.keys(this.customHeaders).length === 0) {
-      return this.awsClient.fetch(url, init);
-    }
-    return this.awsClient.fetch(url, {
-      ...init,
-      headers: withCustomHeaders(this.customHeaders, headersToRecord(init?.headers)),
-    });
+  private async request(url: URL, init?: RequestInit & AwsSignOptions): Promise<Response> {
+    const requestInit = Object.keys(this.customHeaders).length === 0
+      ? init
+      : {
+          ...init,
+          headers: withCustomHeaders(this.customHeaders, headersToRecord(init?.headers)),
+        };
+    if (!this.bridgeToken) return this.awsClient.fetch(url, requestInit);
+    const signed = await this.awsClient.sign(url, requestInit);
+    return fetchViaBridge(signed, this.bridgeToken, requestInit?.body, requestInit?.signal ?? undefined);
   }
 
 /** Public accessor for the endpoint/bucket/addressing (used by tooling). */

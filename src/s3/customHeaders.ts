@@ -86,7 +86,7 @@ const SIGNING_INPUTS = new Set([
  *   content-type   uploads and presigned PUTs must agree with what was signed
  *   content-md5    the integrity check compares it against the ETag
  */
-const APP_OWNED = new Set(['range', 'content-type', 'content-md5']);
+const APP_OWNED = new Set(['range', 'content-type', 'content-md5', 'x-galiot-bridge-target']);
 
 /**
  * The app-owned set, sorted, so a test can pin it as a literal list — widening

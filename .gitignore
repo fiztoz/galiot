@@ -1,5 +1,9 @@
 node_modules/
 dist/
+bridge-build/
+.*.bun-build
+public/downloads/
+public/.downloads-build-*/
 .env
 .env.local
 .env.*.local

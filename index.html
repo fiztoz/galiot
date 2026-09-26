@@ -4,16 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      This meta policy is the only CSP on hosts that cannot set response headers,
-      so it ships with every build. It deliberately allows the optional local
-      CORS bridge on 127.0.0.1:8787, which shouldOfferBridge() only ever surfaces
-      on a local hostname — without it the page's own CSP blocks the bridge in
-      development.
-
-      Production is not weakened by that: vercel.json and public/_headers send a
-      stricter connect-src, and a request must satisfy *every* policy that
-      applies, so the header still blocks the bridge once deployed. Keep those
-      two files strict; do not add the bridge origin to them.
+      Every CSP allows the optional companion only on 127.0.0.1:8787. The
+      companion checks the page origin and a session token before forwarding
+      any signed S3 request. Keep this value in sync with the response headers.
     -->
     <meta
       http-equiv="Content-Security-Policy"

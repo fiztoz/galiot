@@ -40,6 +40,8 @@ export interface S3ProfileConfig {
    * see `src/s3/presign.ts`.
    */
   headers?: Record<string, string>;
+  /** Local companion token, held in memory for this tab only. */
+  bridgeToken?: string;
 }
 
 /** Credentials either as user-typed plaintext or as vault ciphertext. */
