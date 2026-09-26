@@ -337,7 +337,8 @@ export function CorsHelper({
     ? { ...UNREADABLE_BUT_WORKING, tone: 'ok' as const }
     : VERDICT_COPY[verdict ?? 'none'];
   const needsPathStyle = !canUseVirtualHosting(profile.endpoint) && !profile.pathStyle;
-  // Local development only: a deployed build's visitors have no bridge to use.
+  // Policy repair remains a local-development helper. Deployed pages use the
+  // separate per-connection companion control for ordinary S3 traffic.
   const bridgeOffered = corsBlocksTheFix && shouldOfferBridge();
 
   // Build the safe variant (no secret in the command) the first time the

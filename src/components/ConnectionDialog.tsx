@@ -13,6 +13,7 @@ import {
 } from '../s3/customHeaders';
 import { diagnoseCors, type CorsDiagnostic } from '../s3/diagnostics';
 import { normalizeEndpoint } from '../s3/url';
+import { bridgeTokenFor } from '../bridge/session';
 
 interface ConnectionDialogProps {
   db: AppDB;
@@ -189,6 +190,7 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
       // used. A header the gateway requires is exactly the kind of thing that
       // only shows up on a real signed request.
       headers: check.headers,
+      bridgeToken: editing ? bridgeTokenFor(editing.id) : undefined,
     };
     const typedKeys = {
       accessKeyId: form.accessKeyId.trim(),

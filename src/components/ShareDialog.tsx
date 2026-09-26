@@ -13,6 +13,7 @@ import {
   Clock,
 } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
+import { bridgeTokenFor } from '../bridge/session';
 import {
   EXPIRY_PRESETS,
   createLink,
@@ -105,6 +106,11 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
         </div>
 
         <div className="p-6 space-y-4">
+          {bridgeTokenFor(profile.id) && (
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              Share links point directly to S3. The local companion does not serve them to recipients.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">

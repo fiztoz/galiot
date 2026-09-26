@@ -1,10 +1,9 @@
 /**
  * Where the app is running, from the browser's point of view.
  *
- * The companion bridge is a local development convenience, so the UI only
- * offers it when the page is served from this machine. A deployed build must
- * never show it: visitors cannot use a bridge on your laptop, and offering it
- * would be a dead end at best and confusing at worst.
+ * The CORS-helper repair action is offered only for a locally served page.
+ * The separate per-connection companion mode supports deployed pages when
+ * the user starts a companion on their own machine and allows that origin.
  */
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;

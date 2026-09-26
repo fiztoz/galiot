@@ -4,6 +4,7 @@ import type { CredentialPlaintext } from './protocol';
 import { vaultService } from './vaultService';
 import { SCHEMA_VERSION } from '../db/migrations';
 import { assertSafeCustomHeaders, parseStoredHeaders } from '../s3/customHeaders';
+import { disableAllBridgeSessions } from '../bridge/session';
 
 const META_SALT = 'salt';
 const META_WRAPPED_DEK = 'wrapped_dek';
@@ -66,6 +67,8 @@ export async function unlockVault(db: AppDB, passphrase: string): Promise<void> 
 }
 
 export async function lockVault(): Promise<void> {
+  // A companion token is a local capability; discard it with the unlocked vault.
+  disableAllBridgeSessions();
   await vaultService.call('vault.lock');
 }
 

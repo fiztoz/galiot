@@ -115,7 +115,7 @@ describe('diagnoseCors', () => {
   test('reachable but blocked means CORS', () => {
     const result = diagnoseCors({ ...base, pathStyle: true, requestSucceeded: false }, true);
     expect(result.reason).toBe('cors-blocked');
-    expect(result.hint).toContain('AllowedHeaders');
+    expect(result.hint).toContain('recommended CORS rule');
     expect(result.detail).toContain('preflight');
   });
 

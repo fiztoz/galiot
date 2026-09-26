@@ -1,9 +1,9 @@
 /**
  * Policy for the optional local bridge (`bun run bridge`).
  *
- * The bridge exists for one reason: a browser cannot change a bucket's CORS
- * policy, because the very request that would do it is blocked by the missing
- * policy. A process on the same machine is not subject to CORS, so it can.
+ * The bridge handles CORS policy repair and opt-in S3 traffic for gateways
+ * that cannot answer the browser's preflight. A local process is not subject
+ * to browser CORS when it calls S3.
  *
  * That makes the bridge a privileged listener on a local port, which means it
  * must not become an open proxy. The rules below are deliberately strict and
@@ -30,8 +30,7 @@ export const DEFAULT_BRIDGE_ORIGINS = [
  * Builds the allowlist from defaults plus explicit extras.
  *
  * Wildcards and non-http(s) entries are dropped: this process can forward
- * signed requests, so the origin check is the thing standing between a random
- * website and your S3 credentials.
+ * signed requests, so the origin and token checks guard access to it.
  */
 export function resolveAllowedOrigins(extra: string[] = []): string[] {
   const cleaned = extra
@@ -52,11 +51,17 @@ export function isOriginAllowed(origin: string | null, allowed: string[] = DEFAU
 export function corsHeaders(
   origin: string | null,
   allowed: string[] = DEFAULT_BRIDGE_ORIGINS,
+  requestedHeaders?: string | null,
 ): Record<string, string> {
+  const permitted = isOriginAllowed(origin, allowed);
   return {
-    'Access-Control-Allow-Origin': isOriginAllowed(origin, allowed) ? (origin ?? '') : '',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': `content-type, ${BRIDGE_TOKEN_HEADER}`,
+    'Access-Control-Allow-Origin': permitted ? (origin ?? '') : '',
+    'Access-Control-Allow-Methods': 'GET, HEAD, PUT, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': permitted && requestedHeaders
+      ? requestedHeaders
+      : `authorization, content-type, ${BRIDGE_TOKEN_HEADER}`,
+    'Access-Control-Expose-Headers': 'etag, content-length, content-range, accept-ranges, last-modified, x-amz-request-id, x-amz-id-2',
+    'Access-Control-Allow-Private-Network': permitted ? 'true' : 'false',
     'Access-Control-Max-Age': '600',
     Vary: 'Origin',
   };
@@ -66,6 +71,7 @@ export type RejectionReason =
   | 'bad-origin'
   | 'bad-token'
   | 'bad-target'
+  | 'bad-method'
   | 'not-signed';
 
 export interface ForwardRequest {
@@ -102,6 +108,10 @@ export function checkForwardRequest(
 
   if (options.token !== options.expectedToken) {
     return { ok: false, reason: 'bad-token', detail: 'Missing or incorrect bridge token.' };
+  }
+
+  if (!['GET', 'HEAD', 'PUT', 'POST', 'DELETE'].includes(request.method.toUpperCase())) {
+    return { ok: false, reason: 'bad-method', detail: 'Only S3 request methods are allowed.' };
   }
 
   let url: URL;
