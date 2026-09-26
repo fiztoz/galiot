@@ -91,7 +91,8 @@ describe('header names that are refused', () => {
     expect(kind('range')).toBe('app-owned');
     expect(kind('content-type')).toBe('app-owned');
     expect(kind('content-md5')).toBe('app-owned');
-    expect(APP_OWNED_FOR_TEST).toEqual(['content-md5', 'content-type', 'range']);
+    expect(kind('x-galiot-bridge-target')).toBe('app-owned');
+    expect(APP_OWNED_FOR_TEST).toEqual(['content-md5', 'content-type', 'range', 'x-galiot-bridge-target']);
   });
 
   test('credential-looking names, because the column is cleartext', () => {

@@ -257,38 +257,69 @@ error-code loss that reported a `501` as a permissions problem. Details in
 
 ---
 
-## 10. Optional local bridge (`bun run bridge`, local development only)
+## 10. Optional local companion
 
 A browser cannot fix a bucket's CORS policy: the request that would write it is
 itself blocked by the missing policy. That is why a browser *worker* cannot do
 it either — CORS is enforced per request, not per thread.
 
-The bridge is a tiny local companion server for exactly that one case:
+The bridge is a local companion server for two cases: applying a bucket CORS
+policy and routing S3 traffic when a gateway cannot answer the browser's
+anonymous preflight. The browser still preflights the local companion, which
+answers that request; the companion calls S3 outside the browser.
+This is optional: leave it off when connections work directly in the browser.
+Use it when Galiot reports CORS or preflight errors but the same computer can
+reach the S3 gateway. It does not repair an incorrect endpoint or credentials.
+
+On a deployed Galiot page, open **Connections → Local companion → Download companion** and choose
+macOS Apple Silicon, macOS Intel, Windows x64, or Linux x64. Extract the ZIP on
+the computer that can reach the S3 gateway. Run the executable from a terminal
+with the exact origin shown in the companion panel. For example:
 
 ```bash
-bun run bridge          # prints a one-time token
+GALIOT_BRIDGE_ORIGINS=https://galiot.example.com ./galiot-bridge
 ```
 
-Paste the token into **CORS helper → Apply CORS policy via bridge**. Galiot signs
-the request in the vault worker (the secret never leaves it) and the bridge sends
-it from your machine, where no CORS rules apply. It is not a general proxy:
+In Windows PowerShell, use
+`$env:GALIOT_BRIDGE_ORIGINS='https://galiot.example.com'; .\galiot-bridge.exe`.
+The executable prints a one-time token. Keep it running while using Galiot.
+The download is a standalone program; users do not need Bun or the
+source checkout. [Bun single-file executables](https://bun.sh/docs/bundler/executables).
+
+Developers can also run `bun run bridge`, compile for their own machine with
+`bun run bridge:compile`, or generate the downloadable packages with
+`bun run bridge:package`. `bun run build` includes the packages in the site.
+Each ZIP is split into static parts under 20 MiB and reassembled by the browser
+when downloaded, staying below [Cloudflare's 25 MiB per-asset limit](https://developers.cloudflare.com/workers/platform/limits/#static-assets).
+
+For normal file operations, click **Enable companion** in the panel above the
+connection list and paste the printed token once. Every connection in this tab,
+including ones added later, uses the same companion until the vault locks, the
+tab closes, or you disable it. The companion must keep running.
+For CORS policy setup, the existing **CORS helper → Apply CORS policy via bridge**
+action also uses it. Galiot signs in a worker; raw S3 secret keys never go to
+the companion. The companion:
 
 - binds `127.0.0.1` only
-- accepts only local app origins (`localhost` / `127.0.0.1` on :5173 and :4173)
+- accepts local app origins (`localhost` / `127.0.0.1` on :5173 and :4173) by default
 - requires the token it prints at startup
 - forwards only requests carrying a SigV4 `Authorization` header
 - refuses wildcard origins and non-http(s) targets
 - stops entirely with Ctrl+C
 
-Serving Galiot from a different origin (custom local domain, LAN/Tailscale
-hostname, or a deployed URL you are testing) needs that exact origin allowed —
-never a wildcard:
+Serving Galiot from another origin, including the deployed app, needs that exact
+origin allowed. The companion panel shows the command for the current page.
+For example:
 
 ```bash
 GALIOT_BRIDGE_ORIGINS=https://galiot.example.com bun run bridge
 ```
 
-Without it, apply the same policy with `mc cors set` / `aws s3api put-bucket-cors`.
+The companion needs the browser's local network permission where supported.
+File operations for every connection use the companion while enabled; generated presigned share links
+still target S3 directly, so recipients need a reachable gateway. [Browser CORS
+and opaque response behavior](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch),
+[local network access](https://developer.chrome.com/blog/local-network-access).
 
 ---
 

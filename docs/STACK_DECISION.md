@@ -799,5 +799,80 @@ hosting cost.
 
 ---
 
+## 17. Re-verification log — 2026-09-26 (optional local companion traffic)
+
+The same on-premises S3 gateway was later given a matching bucket CORS rule.
+A credential-free `OPTIONS` request to the path-style bucket URL still returned
+`404 NoSuchBucket` without `Access-Control-Allow-Origin`; a plain anonymous
+`GET` said ECS could not determine a namespace. A signed CLI `GetBucketCors`
+can read the policy because it is not the browser's anonymous preflight. Dell
+describes this namespace/Base URL requirement for ECS CORS
+[here](https://www.dell.com/community/en/conversations/ecs/cors-allowed-origin-issue/647f63c3f4ccf8a8de00e7d9?commentId=647f63b6f4ccf8a8deffdc4f).
+
+There is no browser switch for skipping the preflight on SigV4 requests carrying
+`Authorization`. `no-cors` makes the response opaque and unusable by the
+explorer, according to [MDN's Fetch guidance](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch).
+Because the user cannot change the gateway's namespace Base URL, the existing
+optional local companion now also forwards signed S3 requests. A saved
+connection enables it from the frontend after the user starts the companion
+and enters its short-lived token. Tokens stay in tab memory and are cleared on
+vault lock. The companion still requires an allowed page origin and a token;
+only its exact loopback origin is added to production `connect-src`.
+
+The browser can preflight the companion, which answers `OPTIONS`; the companion
+then calls S3 without browser CORS. Browser local-network permission can also
+apply to a deployed page talking to loopback; see [Chrome's local network access
+guidance](https://developer.chrome.com/blog/local-network-access). Presigned
+share links still point directly at S3 and are outside this routing mode.
+
+Verification: the local companion integration test checks preflight, binary
+forwarding, response headers, and token rejection; the full `bun test` suite
+passed with loopback networking enabled.
+
+---
+
+## 18. Re-verification log — 2026-09-26 (browser companion downloads)
+
+The source repository is private, so release assets there cannot serve as
+anonymous downloads for a public static page. The site build now uses [Bun's
+single-file executable compilation](https://bun.sh/docs/bundler/executables)
+to package macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64
+companions. The packages are ZIP files with executable permissions where
+needed. Users choose a platform from the connection card, download the ZIP,
+extract it, and run the companion locally.
+
+The ZIPs are split into 20 MiB static parts and reassembled on download.
+This keeps each deployed asset below [Cloudflare Workers' 25 MiB per-file
+limit](https://developers.cloudflare.com/workers/platform/limits/#static-assets)
+without adding a binary hosting account. The app fetches the manifest from its
+own origin and checks every part with [Fetch subresource
+integrity](https://developer.mozilla.org/en-US/docs/Web/API/RequestInit#integrity)
+and an exact byte count before offering the ZIP.
+The companion's allowed-origin and token requirements remain the same.
+
+---
+
+## 19. Re-verification log — 2026-09-26 (one companion for all connections)
+
+The per-connection controls described in §§17–18 have been replaced by one
+companion panel above the connection list. Enabling it validates one token and
+routes signed requests for every connection in the current tab, including
+connections added afterward. The token remains in tab memory and is cleared
+when the vault locks or the user disables the companion. Connection tests,
+object operations, and transfer jobs all read the same session token; see
+[`src/bridge/session.ts`](../src/bridge/session.ts),
+[`src/db/objects.ts`](../src/db/objects.ts), and
+[`src/components/ConnectionDialog.tsx`](../src/components/ConnectionDialog.tsx).
+
+This changes only browser routing. The companion still binds loopback,
+requires its token and an explicitly allowed page origin, and cannot make
+presigned share links reachable to recipients. A global opt-in is visible
+before any connections are saved so a new connection can be tested through
+the companion immediately. The panel explains that it is optional and useful
+for browser CORS/preflight failures when the local computer can reach the
+gateway; ordinary working connections can leave it off.
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*

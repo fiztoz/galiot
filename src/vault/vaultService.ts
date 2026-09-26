@@ -7,6 +7,7 @@ import {
   type VaultParams,
   type VaultResults,
 } from './protocol';
+import { disableBridge } from '../bridge/session';
 
 type EventListener = () => void;
 
@@ -44,6 +45,7 @@ class VaultService {
       }
 
       if (isVaultEvent(data) && data.event === 'locked') {
+        disableBridge();
         for (const listener of this.lockedListeners) {
           listener();
         }

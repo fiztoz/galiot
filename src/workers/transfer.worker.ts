@@ -20,6 +20,7 @@ import type {
 } from '../transfer/protocol';
 import { buildS3Url } from '../s3/url';
 import { xmlBlocks, xmlFirst } from '../s3/xml';
+import { fetchViaBridge } from '../bridge/transport';
 
 /** Per-part retry policy for transient network failures. */
 const MAX_ATTEMPTS = 3;
@@ -246,6 +247,13 @@ class TransferEngine {
       customHeaders: job.target.headers,
       ...(typeof options.body === 'string' ? { body: options.body } : {}),
     });
+    if (job.target.bridgeToken) {
+      const signedRequest = new Request(signed.url, {
+        method: signed.method,
+        headers: signed.headers,
+      });
+      return fetchViaBridge(signedRequest, job.target.bridgeToken, options.body, options.signal);
+    }
     return fetch(signed.url, {
       method: signed.method,
       headers: signed.headers,

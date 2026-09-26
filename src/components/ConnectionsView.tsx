@@ -10,7 +10,9 @@ import {
   X,
   Settings,
   FileDown,
+  Download,
   Pencil,
+  Plug,
 } from 'lucide-react';
 import type { AppDB, ConnectionRow } from '../db/client';
 import { deleteConnection } from '../vault/repository';
@@ -18,6 +20,9 @@ import { ConnectionDialog } from './ConnectionDialog';
 import { GaleonImportDialog } from './GaleonImportDialog';
 import { VaultSettings } from './VaultSettings';
 import { Explorer } from './Explorer';
+import { disableBridge, enableBridge, getBridgeToken } from '../bridge/session';
+import { isLocalHostname } from '../bridge/environment';
+import { COMPANION_PACKAGES, downloadCompanion, type CompanionPackageId } from '../bridge/download';
 
 interface ConnectionsViewProps {
   db: AppDB;
@@ -41,6 +46,16 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [bridgeDraftOpen, setBridgeDraftOpen] = useState(false);
+  const [bridgeToken, setBridgeToken] = useState('');
+  const [bridgeBusy, setBridgeBusy] = useState(false);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
+  const [, refreshBridge] = useState(0);
+  const [downloadDraftOpen, setDownloadDraftOpen] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadedPlatform, setDownloadedPlatform] = useState<CompanionPackageId | null>(null);
 
   const connections = useLiveQuery<ConnectionRow>(
     `SELECT ${CONNECTION_COLUMNS} FROM profiles ORDER BY name ASC`,
@@ -49,6 +64,16 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const rows = connections?.rows ?? [];
   const active = activeId ? rows.find((r) => r.id === activeId) ?? null : null;
   const editing = editingId ? rows.find((r) => r.id === editingId) ?? null : null;
+  const bridgeEnabled = Boolean(getBridgeToken());
+  const bridgeCommand = isLocalHostname(window.location.hostname)
+    ? 'bun run bridge'
+    : `GALIOT_BRIDGE_ORIGINS=${window.location.origin} bun run bridge`;
+  const companionCommand = isLocalHostname(window.location.hostname)
+    ? './galiot-bridge'
+    : `GALIOT_BRIDGE_ORIGINS=${window.location.origin} ./galiot-bridge`;
+  const companionWindowsCommand = isLocalHostname(window.location.hostname)
+    ? '.\\galiot-bridge.exe'
+    : `$env:GALIOT_BRIDGE_ORIGINS='${window.location.origin}'; .\\galiot-bridge.exe`;
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -63,6 +88,40 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
     },
     [db],
   );
+
+  const handleEnableBridge = useCallback(async () => {
+    setBridgeBusy(true);
+    setBridgeError(null);
+    try {
+      await enableBridge(bridgeToken);
+      setBridgeDraftOpen(false);
+      setBridgeToken('');
+      refreshBridge((value) => value + 1);
+    } catch (err) {
+      setBridgeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBridgeBusy(false);
+    }
+  }, [bridgeToken]);
+
+  const handleDownload = useCallback(async (id: CompanionPackageId) => {
+    setDownloadBusy(true);
+    setDownloadError(null);
+    setDownloadProgress('Starting download…');
+    setDownloadedPlatform(null);
+    try {
+      await downloadCompanion(id, (received, total) => {
+        setDownloadProgress(`Downloading… ${Math.round((received / total) * 100)}%`);
+      });
+      setDownloadProgress('Download ready. Extract the ZIP, then run the companion.');
+      setDownloadedPlatform(id);
+    } catch (err) {
+      setDownloadProgress(null);
+      setDownloadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloadBusy(false);
+    }
+  }, []);
 
   if (active) {
     return <Explorer db={db} profile={active} onBack={() => setActiveId(null)} />;
@@ -127,6 +186,95 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
             {deleteError}
           </div>
         )}
+
+        <section className="mb-6 rounded-2xl border border-teal-200 bg-teal-50/50 p-5 dark:border-teal-900/70 dark:bg-teal-950/20" aria-labelledby="companion-heading">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-teal-100 p-2.5 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300">
+                <Plug size={20} aria-hidden="true" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 id="companion-heading" className="font-semibold text-zinc-900 dark:text-zinc-50">Local companion</h3>
+                  <span className="rounded-full border border-zinc-300 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">Optional</span>
+                </div>
+                <p className="mt-1 max-w-xl text-sm text-zinc-600 dark:text-zinc-300">
+                  {bridgeEnabled
+                    ? 'On · every connection in this tab uses the companion.'
+                    : 'Off · connections send requests directly from the browser.'}
+                </p>
+              </div>
+            </div>
+            {bridgeEnabled ? (
+              <button type="button" onClick={() => { disableBridge(); refreshBridge((value) => value + 1); }}
+                className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-white dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800">
+                Disable companion
+              </button>
+            ) : (
+              <button type="button" onClick={() => { setBridgeDraftOpen(!bridgeDraftOpen); setBridgeError(null); }}
+                aria-expanded={bridgeDraftOpen}
+                className="rounded-lg bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-700">
+                Enable companion
+              </button>
+            )}
+          </div>
+
+          <p className="mt-4 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+            Use this if a connection shows “Failed to fetch” with a CORS or preflight warning, but this computer can reach your S3 gateway. If connections work normally, leave it off. The companion runs locally and forwards signed requests; it never receives your raw S3 secret keys.
+          </p>
+
+          <div className="mt-4 border-t border-teal-200/80 pt-4 dark:border-teal-900/70">
+            <button type="button"
+              onClick={() => { setDownloadDraftOpen(!downloadDraftOpen); setDownloadError(null); setDownloadProgress(null); setDownloadedPlatform(null); }}
+              aria-expanded={downloadDraftOpen}
+              className="inline-flex items-center gap-2 text-sm font-medium text-teal-700 hover:text-teal-900 dark:text-teal-300 dark:hover:text-teal-200">
+              <Download size={16} aria-hidden="true" /> Download companion
+            </button>
+            {downloadDraftOpen && (
+              <div className="mt-3 space-y-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+                <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                  Choose your computer. Extract the ZIP and run it on a computer that can reach your S3 endpoints.
+                </p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {COMPANION_PACKAGES.map((item) => (
+                    <button key={item.id} type="button" disabled={downloadBusy}
+                      onClick={() => void handleDownload(item.id)}
+                      className="rounded-lg border border-zinc-300 px-3 py-2 text-left text-sm font-medium text-zinc-700 hover:border-teal-500 hover:text-teal-700 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:text-teal-300">
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                {downloadProgress && <p role="status" className="text-sm text-teal-700 dark:text-teal-400">{downloadProgress}</p>}
+                {downloadedPlatform && (
+                  <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                    Run from the extracted folder: <code className="mt-1 block select-all break-all rounded bg-zinc-100 p-2 dark:bg-zinc-800">{downloadedPlatform === 'windows-x64' ? companionWindowsCommand : companionCommand}</code>
+                  </p>
+                )}
+                {downloadError && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{downloadError}</p>}
+              </div>
+            )}
+          </div>
+
+          {!bridgeEnabled && bridgeDraftOpen && (
+            <div className="mt-4 space-y-3 rounded-xl border border-teal-200 bg-white p-4 dark:border-teal-800 dark:bg-zinc-900">
+              <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                Run the downloaded companion, or run <code className="select-all">{bridgeCommand}</code> from the source checkout. Paste the token it prints. Keep it running while using Galiot.
+              </p>
+              <label htmlFor="companion-token" className="block text-sm font-medium text-zinc-700 dark:text-zinc-200">Companion token</label>
+              <input id="companion-token" type="password" value={bridgeToken} onChange={(event) => setBridgeToken(event.target.value)}
+                className="w-full rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100" />
+              {bridgeError && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{bridgeError}</p>}
+              <div className="flex items-center gap-3">
+                <button type="button" disabled={bridgeBusy} onClick={() => void handleEnableBridge()}
+                  className="rounded-lg bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50">
+                  {bridgeBusy ? 'Checking…' : 'Connect for all connections'}
+                </button>
+                <button type="button" onClick={() => { setBridgeDraftOpen(false); setBridgeToken(''); setBridgeError(null); }}
+                  className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">Cancel</button>
+              </div>
+            </div>
+          )}
+        </section>
 
         {rows.length === 0 ? (
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-12 flex flex-col items-center text-center">
@@ -236,6 +384,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                     </span>
                   )}
                 </div>
+
               </div>
             ))}
           </div>
