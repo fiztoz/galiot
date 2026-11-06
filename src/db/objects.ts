@@ -4,7 +4,8 @@ import { vaultService } from '../vault/vaultService';
 import { getSealedCredentials } from '../vault/repository';
 import { parseStoredHeaders } from '../s3/customHeaders';
 import type { ListObjectsResult } from '../s3/client';
-import { getBridgeToken } from '../bridge/session';
+import { parseNetwork } from '../server/network';
+import { getProxyToken } from '../server/session';
 
 /** Safety cap: 20 pages × 1000 keys = 20 000 entries per folder view. */
 const MAX_LIST_PAGES = 20;
@@ -19,7 +20,8 @@ export function profileConfig(profile: ConnectionRow): S3ProfileConfig {
     // column is cleartext and outlives upgrades, so a rule added later still has
     // to hold for rows written before it existed.
     headers: parseStoredHeaders(profile.custom_headers),
-    bridgeToken: getBridgeToken(),
+    network: parseNetwork(profile.network),
+    proxyToken: getProxyToken(),
   };
 }
 

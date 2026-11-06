@@ -40,8 +40,13 @@ export interface S3ProfileConfig {
    * see `src/s3/presign.ts`.
    */
   headers?: Record<string, string>;
-  /** Local companion token, held in memory for this tab only. */
-  bridgeToken?: string;
+  /**
+   * Retained on the profile shape. Routing ignores it: signed requests always
+   * go through the app server.
+   */
+  network?: 'server' | 'user';
+  /** Gate for a public app server. Tab memory only; not an S3 key. */
+  proxyToken?: string;
 }
 
 /** Credentials either as user-typed plaintext or as vault ciphertext. */
@@ -120,8 +125,6 @@ export type VaultMethod =
   | 's3.probe'
   | 's3.cors.get'
   | 's3.cors.put'
-  | 's3.cors.putViaBridge'
-  | 'bridge.health'
   | 's3.cors.presign'
   | 's3.cors.delete'
   | 's3.list'
@@ -158,16 +161,6 @@ export interface VaultParams {
     credentials: Credentials;
     config: CorsConfiguration;
   };
-  /** Applies a CORS policy through the local companion bridge. */
-  's3.cors.putViaBridge': {
-    profile: S3ProfileConfig;
-    credentials: Credentials;
-    config: CorsConfiguration;
-    origin: string;
-    token: string;
-  };
-  /** Checks whether the companion bridge is running. */
-  'bridge.health': { origin: string; token: string };
   /**
    * Presigns PutBucketCors so the user can apply the policy with curl, which
    * needs no S3 tooling, no configuration, and is not subject to CORS.
@@ -244,8 +237,6 @@ export type VaultResults = {
   };
   's3.cors.get': CorsConfiguration;
   's3.cors.put': CorsPutResult;
-  's3.cors.putViaBridge': { applied: boolean; status: number; body?: string; via: 'bridge' };
-  'bridge.health': { reachable: boolean; error?: string };
   's3.cors.presign': { url: string; expiresIn: number };
   's3.cors.delete': { deleted: true };
   's3.list': ListObjectsResult;

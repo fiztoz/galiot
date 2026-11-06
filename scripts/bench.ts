@@ -213,6 +213,7 @@ async function benchRemote(): Promise<void> {
     pathStyle: process.env.GALIOT_S3_PATH_STYLE !== '0',
     accessKeyId: process.env.GALIOT_S3_KEY ?? '',
     secretAccessKey: process.env.GALIOT_S3_SECRET ?? '',
+    direct: true,
   });
 
   console.log(`\n── Live listing: ${endpoint} / ${bucket} ──`);

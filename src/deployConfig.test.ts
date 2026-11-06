@@ -13,36 +13,25 @@ import { join } from 'node:path';
 const ROOT = new URL('..', import.meta.url).pathname;
 const read = (...parts: string[]) => readFileSync(join(ROOT, ...parts), 'utf8');
 
-/** Where the optional local CORS bridge listens. */
-const BRIDGE_ORIGIN = 'http://127.0.0.1:8787';
-
 function connectSrc(policy: string): string {
   const match = /connect-src([^;]*)/.exec(policy);
   return match?.[1]?.trim() ?? '';
 }
 
 describe('deployed CSP', () => {
-  // The opt-in companion needs this one loopback listener in production.
-  // Keep the allowance exact, without opening unrelated local processes.
-  test('response-header policies allow only the exact local bridge origin', () => {
+  test('connect-src is the app and https, with no loopback companion', () => {
     const headerSources: Record<string, string> = {
       'public/_headers': read('public', '_headers'),
       'vercel.json': read('vercel.json'),
+      'index.html': read('index.html'),
     };
 
     for (const [file, text] of Object.entries(headerSources)) {
-      expect(text, `${file} must allow the bridge origin`).toContain(BRIDGE_ORIGIN);
+      expect(text, `${file} still names the retired companion`).not.toContain('127.0.0.1:8787');
       for (const directive of text.match(/connect-src[^;"]*/g) ?? []) {
-        expect(connectSrc(directive), `${file} connect-src drifted`).toBe(`'self' https: ${BRIDGE_ORIGIN}`);
+        expect(connectSrc(directive), `${file} connect-src drifted`).toBe(`'self' https:`);
       }
     }
-  });
-
-  test('the dev meta policy still allows the bridge, or the feature is dead', () => {
-    const html = read('index.html');
-    const meta = /<meta[^>]*http-equiv="Content-Security-Policy"[^>]*>/s.exec(html);
-    expect(meta, 'index.html lost its CSP meta tag').not.toBeNull();
-    expect(connectSrc(meta![0])).toContain(BRIDGE_ORIGIN);
   });
 
   test('every policy keeps the directives that stop framing and plugins', () => {
@@ -87,15 +76,12 @@ describe('build output', () => {
 describe('CI', () => {
   const workflow = read('.github', 'workflows', 'deploy.yml');
 
-  test('the test suite gates deployment', () => {
+  test('tests run before the server smoke check, and no platform deploy is wired in', () => {
     expect(workflow).toMatch(/run:\s*bun test/);
-    expect(workflow, 'deploy must wait on verify').toMatch(/needs:\s*verify/);
-    // A green suite must be established before anything can publish: tests run
-    // in `verify`, and `deploy` needs `verify`, so ordering in the file plus the
-    // needs edge is what makes a red suite unshippable.
-    expect(workflow.indexOf('bun test')).toBeLessThan(workflow.indexOf('wrangler-action'));
-    expect(workflow.split(/^  deploy:/m)[0]).toContain('bun test');
-    expect(workflow.split(/^  deploy:/m)[0]).not.toContain('wrangler-action');
+    expect(workflow.indexOf('bun test')).toBeLessThan(workflow.indexOf('scripts/server.ts'));
+    expect(workflow).not.toContain('wrangler-action');
+    expect(workflow).not.toContain('secrets.CLOUDFLARE_API_TOKEN');
+    expect(workflow).not.toContain('VERCEL_TOKEN');
   });
 
   test('actions are pinned to commit SHAs, not mutable tags', () => {
@@ -106,12 +92,11 @@ describe('CI', () => {
     }
   });
 
-  test('credentials appear only in the deploy job', () => {
-    const [verify, deploy] = workflow.split(/^  deploy:/m);
-    expect(verify).toBeDefined();
-    expect(deploy).toBeDefined();
-    expect(verify!).not.toContain('secrets.CLOUDFLARE_API_TOKEN');
-    expect(deploy!).toContain('secrets.CLOUDFLARE_API_TOKEN');
+  test('package scripts do not publish to a hosted platform', () => {
+    const pkg = JSON.parse(read('package.json')) as { scripts?: Record<string, string> };
+    expect(pkg.scripts?.server).toContain('scripts/server.ts');
+    expect(pkg.scripts?.deploy).toBeUndefined();
+    expect(JSON.stringify(pkg.scripts)).not.toContain('wrangler');
   });
 });
 
@@ -208,9 +193,8 @@ describe('CSP completeness', () => {
 
       expect(meta.has(name), `meta policy is missing ${name}`).toBe(true);
       if (name === 'connect-src') {
-        // Both policies must allow the same exact loopback listener.
         expect(meta.get(name)).toBe(headerValue);
-        expect(meta.get(name)!).toContain(BRIDGE_ORIGIN);
+        expect(meta.get(name)).toBe(`'self' https:`);
       } else {
         expect(meta.get(name), `${name} drifted between the meta and header policies`).toBe(headerValue);
       }

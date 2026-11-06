@@ -3,21 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The Agile Cloud Explorer \u2014 a 100% client-side S3 storage client powered by PGlite WASM Postgres",
+  "description": "The Agile Cloud Explorer \u2014 an S3 client whose signed requests leave through a provider-neutral server proxy",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "bun run scripts/package-bridge.ts && vite build && bun run scripts/verify-bridge-packages.ts",
+    "server": "bun run scripts/server.ts",
+    "build": "vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
     "test": "bun test",
     "test:integrity": "bun run scripts/integrity-test.ts",
     "test:minio": "bun run scripts/minio-test.ts",
-    "bench": "bun run scripts/bench.ts",
-    "bridge": "bun run scripts/bridge.ts",
-    "bridge:compile": "bun build --compile scripts/bridge.ts --outfile bridge-build/galiot-bridge",
-    "bridge:package": "bun run scripts/package-bridge.ts",
-    "deploy": "wrangler deploy"
+    "bench": "bun run scripts/bench.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6",

@@ -86,6 +86,8 @@ const SIGNING_INPUTS = new Set([
  *   content-type   uploads and presigned PUTs must agree with what was signed
  *   content-md5    the integrity check compares it against the ETag
  */
+// `x-galiot-bridge-target` is refused so an older saved row cannot inject the
+// header the retired companion used to route a request.
 const APP_OWNED = new Set(['range', 'content-type', 'content-md5', 'x-galiot-bridge-target']);
 
 /**

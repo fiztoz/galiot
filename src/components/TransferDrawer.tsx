@@ -23,7 +23,7 @@ interface TransferDrawerProps {
 }
 
 
-const PROFILE_COLUMNS = `id, name, protocol, endpoint, region, bucket, path_style, storage_class, custom_headers, created_at, updated_at`;
+const PROFILE_COLUMNS = `id, name, protocol, endpoint, region, bucket, path_style, network, storage_class, custom_headers, created_at, updated_at`;
 
 const ACTIVE_STATUSES = new Set(['queued', 'transferring']);
 

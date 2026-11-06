@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { X, Loader2, Plug, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import type { AppDB, ConnectionRow } from '../db/client';
-import type { S3ProfileConfig, Credentials } from '../vault/protocol';
+import type { Credentials } from '../vault/protocol';
 import { createConnection, getSealedCredentials, updateConnection } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
-import { CorsHelper } from './CorsHelper';
 import { CustomHeadersField } from './CustomHeadersField';
 import {
   normalizeCustomHeaders,
   parseStoredHeaders,
   type HeaderDraft,
 } from '../s3/customHeaders';
-import { diagnoseCors, type CorsDiagnostic } from '../s3/diagnostics';
+import { diagnoseCors } from '../s3/diagnostics';
 import { normalizeEndpoint } from '../s3/url';
-import { getBridgeToken } from '../bridge/session';
+import { getProxyToken } from '../server/session';
 
 interface ConnectionDialogProps {
   db: AppDB;
@@ -69,11 +68,6 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: 'idle' });
   const [cors, setCors] = useState<CorsState>({ status: 'idle' });
-  const [testedTarget, setTestedTarget] = useState<S3ProfileConfig | null>(null);
-  const [diagnosis, setDiagnosis] = useState<CorsDiagnostic | null>(null);
-  // The credentials the last test actually used, so the CORS helper works on
-  // an edit without ever needing the plaintext keys.
-  const [credentialsForTest, setCredentialsForTest] = useState<Credentials | null>(null);
   const [saving, setSaving] = useState(false);
 
   const isEdit = editing !== null && editing !== undefined;
@@ -107,9 +101,6 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
     setError(null);
     setTest({ status: 'idle' });
     setCors({ status: 'idle' });
-    setTestedTarget(null);
-    setDiagnosis(null);
-    setCredentialsForTest(null);
     setSaving(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editingId]);
@@ -178,7 +169,6 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
 
     setTest({ status: 'testing' });
     setCors({ status: 'idle' });
-    setDiagnosis(null);
 
     const rawEndpoint = form.endpoint.trim();
     const profile = {
@@ -186,11 +176,12 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
       region: form.region.trim() || 'us-east-1',
       bucket: form.bucket.trim(),
       pathStyle: form.pathStyle,
+      network: 'server' as const,
+      proxyToken: getProxyToken(),
       // Included so "Test" exercises the connection as it will actually be
       // used. A header the gateway requires is exactly the kind of thing that
       // only shows up on a real signed request.
       headers: check.headers,
-      bridgeToken: getBridgeToken(),
     };
     const typedKeys = {
       accessKeyId: form.accessKeyId.trim(),
@@ -215,30 +206,7 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
       return;
     }
 
-    // Remember the target either way: the CORS helper is most useful exactly
-    // when the connection test fails.
-    setTestedTarget(profile);
-    setCredentialsForTest(credentials);
-
-    // 1. Can we reach the host at all? This probe is CORS-free, so it separates
-    //    DNS/port/TLS problems from browser CORS blocks. It also tries the other
-    //    addressing form, so a bucket-subdomain that does not resolve is
-    //    reported as the addressing problem it is, not as a dead network.
-    let reachable = true;
-    let probeUrl = profile.endpoint;
-    let alternateReachable: boolean | undefined;
-    let alternateUrl: string | undefined;
-    try {
-      const probe = await vaultService.call('s3.probe', { profile });
-      reachable = probe.reachable;
-      probeUrl = probe.url;
-      alternateReachable = probe.alternateReachable;
-      alternateUrl = probe.alternateUrl;
-    } catch {
-      reachable = false;
-    }
-
-    // 2. Real signed request.
+    // Test the server route directly; this browser may have no route to S3.
     let requestSucceeded: boolean | undefined;
     let failureMessage: string | null = null;
     try {
@@ -260,23 +228,19 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
       setTest({ status: 'fail', message: failureMessage });
     }
 
-    // 3. Turn the two signals into one actionable verdict.
+    // Diagnose the request that actually ran on the server.
     const verdict = diagnoseCors(
       {
-        probeUrl,
+        probeUrl: profile.endpoint,
         requestSucceeded,
-        // Distinguishes "the browser blocked it" from "the bucket refused it".
         requestError: failureMessage ?? undefined,
         endpoint: profile.endpoint,
         rawEndpoint,
         pathStyle: form.pathStyle,
-        alternateReachable,
-        alternateUrl,
+        network: 'server',
       },
-      reachable,
+      false,
     );
-    setDiagnosis(verdict);
-
     if (verdict.reason === 'cors-blocked' || verdict.reason === 'host-unreachable') {
       setCors({ status: 'fail', message: `${verdict.detail}${verdict.hint ? ` ${verdict.hint}` : ''}` });
     } else if (verdict.reason === 'request-rejected') {
@@ -351,12 +315,6 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
     },
     [buildPayload, db, editing, form, isEdit, onClose, onSaved],
   );
-
-  // Either the keys are typed, or this is an edit where blank means "keep the
-  // stored ones" — both give the helper something usable to work with.
-  const hasUsableCredentials =
-    (form.accessKeyId.trim() !== '' && form.secretAccessKey.trim() !== '') ||
-    (isEdit && form.accessKeyId.trim() === '' && form.secretAccessKey.trim() === '');
 
   if (!open) return null;
 
@@ -565,15 +523,6 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
                 </>
               )}
             </div>
-          )}
-
-          {testedTarget && hasUsableCredentials && (
-            <CorsHelper
-              profile={testedTarget}
-              credentials={credentialsForTest ?? { plain: { accessKeyId: '', secretAccessKey: '' } }}
-              onApplied={() => setCors({ status: 'ok', message: 'CORS policy applied — run the test again to confirm.' })}
-              diagnosis={diagnosis}
-            />
           )}
 
           <div className="flex items-center justify-between pt-2">

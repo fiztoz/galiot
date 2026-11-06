@@ -1,7 +1,6 @@
 import type { ConnectionRow } from '../db/client';
-import { profileConfig } from './objects';
 import { diagnoseCors, type CorsDiagnostic } from '../s3/diagnostics';
-import { vaultService } from '../vault/vaultService';
+import { parseNetwork } from '../server/network';
 
 /**
  * Turns a failed bucket request into an actionable explanation instead of the
@@ -12,27 +11,9 @@ export async function classifyConnectionFailure(
   profile: ConnectionRow,
   error: unknown,
 ): Promise<CorsDiagnostic> {
-  let reachable = true;
-  let probeUrl = profile.endpoint;
-  let alternateReachable: boolean | undefined;
-  let alternateUrl: string | undefined;
-
-  try {
-    // A CORS-free probe: this succeeds whenever the host answers at all, and
-    // also tries the other addressing form so a missing bucket subdomain is
-    // reported as the addressing problem it is.
-    const probe = await vaultService.call('s3.probe', { profile: profileConfig(profile) });
-    reachable = probe.reachable;
-    probeUrl = probe.url;
-    alternateReachable = probe.alternateReachable;
-    alternateUrl = probe.alternateUrl;
-  } catch {
-    reachable = false;
-  }
-
   const diagnosis = diagnoseCors(
     {
-      probeUrl,
+      probeUrl: profile.endpoint,
       requestSucceeded: false,
       // The real error is what separates a CORS block from a bucket that
       // answered and said no (403 AccessDenied, 404 NoSuchBucket, …).
@@ -40,10 +21,9 @@ export async function classifyConnectionFailure(
       endpoint: profile.endpoint,
       rawEndpoint: profile.endpoint,
       pathStyle: profile.path_style,
-      alternateReachable,
-      alternateUrl,
+      network: parseNetwork(profile.network),
     },
-    reachable,
+    false,
   );
 
   // Keep the original error text for the (rare) case the diagnosis is 'unknown'.

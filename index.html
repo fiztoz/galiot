@@ -4,13 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      Every CSP allows the optional companion only on 127.0.0.1:8787. The
-      companion checks the page origin and a session token before forwarding
-      any signed S3 request. Keep this value in sync with the response headers.
+      Keep this policy in sync with the response headers in public/_headers
+      and vercel.json. Signed S3 calls go to the same origin.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self' https: http://127.0.0.1:8787; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'self' blob: https:; worker-src 'self' blob:; manifest-src 'self'"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self' https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'self' blob: https:; worker-src 'self' blob:; manifest-src 'self'"
     />
     <title>Galiot — The Agile Cloud Explorer</title>
     <meta name="description" content="A 100% client-side cloud storage explorer powered by PGlite WASM Postgres" />

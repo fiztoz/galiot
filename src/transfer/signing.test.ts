@@ -39,8 +39,8 @@ describe('mergeScreenedHeaders', () => {
  * module scope and call `postMessage`, neither of which exists here.
  *
  * That leaves their wiring untestable directly — and mutation testing showed it
- * matters. Removing any of the three lines below leaves the entire suite green
- * while uploads, downloads and the bridge path silently stop sending custom
+ * matters. Removing either call below leaves the entire suite green
+ * while uploads and downloads silently stop sending custom
  * headers. So the call sites are asserted as source. This is deliberately
  * brittle: renaming the helper should force a conscious update here rather than
  * quietly dropping the feature.
@@ -53,10 +53,6 @@ describe('worker wiring for custom headers', () => {
     expect(vaultWorker).toContain('mergeScreenedHeaders(request.customHeaders, request.headers)');
   });
 
-  test('the bridge path merges the profile headers', () => {
-    expect(vaultWorker).toContain("mergeScreenedHeaders(p.profile.headers,");
-  });
-
   test('the transfer worker forwards its target headers to the signer', () => {
     expect(transferWorker).toContain('customHeaders: job.target.headers');
   });
@@ -65,7 +61,7 @@ describe('worker wiring for custom headers', () => {
     // makeS3Client is the seam every S3Client in the worker comes from; if it
     // stops delegating, custom headers stop being applied to listing, the editor
     // and delete, none of which the integration test would notice.
-    expect(vaultWorker).toMatch(/function makeS3Client[\s\S]{0,200}?return s3ClientForProfile\(/);
+    expect(vaultWorker).toMatch(/function makeS3Client[\s\S]{0,200}?return s3ClientForProfile\(profile, creds\);/);
   });
 
   test('the signing protocol actually carries the field', () => {

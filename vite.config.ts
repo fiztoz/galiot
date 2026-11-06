@@ -1,9 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { s3ProxyPlugin } from "./src/server/vite";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), s3ProxyPlugin()],
   resolve: {
     alias: {
       "@": import.meta.dirname + "/src",

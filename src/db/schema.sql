@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS profiles (
     region TEXT NOT NULL,
     bucket TEXT NOT NULL,
     path_style BOOLEAN NOT NULL DEFAULT false,
+    -- Signed requests leave from the Galiot process. `user` remains in the
+    -- check so a vault from the browser-route era can be migrated to `server`.
+    network TEXT NOT NULL DEFAULT 'server' CHECK (network IN ('server', 'user')),
     encrypted_credentials JSONB NOT NULL,
     storage_class TEXT,
     -- Extra headers sent on every request to this connection. Cleartext by

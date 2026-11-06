@@ -1,6 +1,6 @@
 # Galiot — The Agile Cloud Explorer
 
-> *A 100% client-side, local-first cloud & object storage web client inspired by **Galeon**, powered by **PGlite** (WASM Postgres) and **Bun 1.4**. Ships as a static bundle — host it anywhere.*
+> *A local-first cloud & object storage web client inspired by **Galeon**, powered by **PGlite** (WASM Postgres) and **Bun**. The app server forwards signed S3 requests, so buckets do not need CORS for listing and transfers. Host the server anywhere — it is not a Cloudflare or Vercel app.*
 
 ---
 
@@ -11,9 +11,9 @@
 **Galiot** is its agile, web-native cousin. Where Galeon serves as the heavy native desktop flagship (with direct access to the OS keychain and local binaries), Galiot brings that same high-performance, keyboard-first, and zero-telemetry experience **directly into any web browser**.
 
 ### The Core Architectural Pillars:
-1. **100% Client-Side & Local-First**: Zero server required. The build output is a plain static bundle, so it can be served by any static host, edge CDN or object-storage front door — no backend, no vendor lock-in.
+1. **Local-first vault, provider-neutral server**: Credentials stay in the browser vault. A plain Bun server forwards already-signed S3 requests. It is not built as a Cloudflare Worker or a Vercel function — run it on any machine or container.
 2. **PGlite WASM Engine**: Runs genuine PostgreSQL 18.3 compiled to WebAssembly inside a browser Web Worker, persisting data locally to the browser's **Origin Private File System (OPFS)**.
-3. **Direct S3 Connectivity**: Speaks directly to AWS S3, Cloudflare R2, MinIO, Wasabi, and Backblaze B2 using standard S3 REST over HTTPS (with bucket CORS).
+3. **One way to reach S3**: the browser signs each request, then the Bun server forwards it. Traffic leaves from the machine running Galiot, and the bucket does not need CORS for listing, transfer, or edit. The server has to be able to reach the endpoint.
 4. **HTML5 Dual-Pane Local Explorer**: Mounts local computer directories using the **File System Access API** (`window.showDirectoryPicker()`).
 5. **In-Browser CodeMirror 6 Editor**: Edit remote files with real language support, review a side-by-side diff, then save straight back to the bucket. Images, PDFs, audio and video preview natively.
 6. **Bun 1.4 Toolchain**: Developed and bundled with Bun 1.4 for sub-second builds and instant static packaging.
@@ -37,12 +37,12 @@ In maritime history:
 ```
 +───────────────────────────────────────────────────────────────────────────+
 |                           GALIOT ARCHITECTURE                             |
-| (100% Static Deployment — host it anywhere)                              |
+| (Bun server + static bundle — host the process anywhere)                |
 +───────────────────────────────────────────────────────────────────────────+
 |                                                                           |
-| Any static host or edge CDN (vendor-neutral)                             |
-|   └── Serves static bundle: index.html + JS + CSS + pglite.wasm           |
-|   (served with CSP / COOP / COEP / HSTS where the host supports headers) |
+| App server (Bun, any host — not a platform function)                    |
+|   ├── Serves the static bundle: index.html + JS + CSS + pglite.wasm       |
+|   └── /api/s3-proxy forwards signed S3 requests on the server's network   |
 |                                                                           |
 |   User's Browser (Chrome / Safari / Edge / Firefox)                       |
 |   ├── React 19 UI Layer (TailwindCSS v4 + TanStack Virtual + Lucide)      |
@@ -68,10 +68,20 @@ In maritime history:
 |   └── UI (main thread)                                                     |
 |       ├── Virtualized list/grid explorer: multi-select, lasso, filters    |
 |       ├── CodeMirror 6 editor + diff, media previews, presigned links     |
-|       └── Direct HTTPS to the S3 endpoint (AWS, R2, MinIO… with CORS)     |
+|       └── Signed S3 calls go to /api/s3-proxy on this origin             |
 |                                                                           |
 +───────────────────────────────────────────────────────────────────────────+
 ```
+
+Run it with Bun. Development includes the proxy. Production serves `dist/` and the same proxy:
+
+```bash
+bun install
+bun run dev          # http://127.0.0.1:5173, proxy included
+bun run build && bun run server
+```
+
+A public bind refuses to start unless `GALIOT_PROXY_TOKEN` is set (or you explicitly set `GALIOT_PROXY_OPEN=1`). The token is a gate for the proxy, not an S3 key. Share links still point directly at S3 and use the recipient's network.
 
 ---
 
@@ -99,8 +109,8 @@ The complete research and technical specification suite for Galiot:
 
 | Dimension | Galeon (Desktop) | Galiot (Web) |
 |---|---|---|
-| **Form Factor** | Desktop App (.dmg, .exe, .deb) | 100% Client-Side Web App |
-| **Hosting** | N/A (Local Install) | Any static host / edge CDN; no backend to operate |
+| **Form Factor** | Desktop App (.dmg, .exe, .deb) | Web app plus a small server |
+| **Hosting** | N/A (Local Install) | Any host that can run Bun or the container |
 | **Core Runtime** | Tauri v2 + Rust + tokio | Browser (V8/JSC) + WebAssembly |
 | **Build Toolchain** | Bun + Cargo | **Bun 1.4** + Vite |
 | **Catalog Database** | In-memory HashMap / JSON | **PGlite (WASM Postgres in OPFS)** |
@@ -108,7 +118,7 @@ The complete research and technical specification suite for Galiot:
 | **Credentials** | OS Keyring (macOS Keychain, etc.) | WebCrypto AES-GCM-256 Vault |
 | **Local File Access** | Unrestricted `std::fs` | HTML5 File System Access API |
 | **File Editing** | Spawns external VS Code binary | Built-in CodeMirror 6 with side-by-side diff |
-| **S3 Protocol** | Direct TCP via OpenDAL | Direct HTTPS REST (CORS enabled) |
+| **S3 Protocol** | Direct TCP via OpenDAL | Signed HTTPS via the app server |
 | **Telemetry / Tracking**| Zero (Privacy first) | Zero (Privacy first, 100% local) |
 
 ---
@@ -257,69 +267,17 @@ error-code loss that reported a `501` as a permissions problem. Details in
 
 ---
 
-## 10. Optional local companion
+## 10. Where S3 traffic goes
 
-A browser cannot fix a bucket's CORS policy: the request that would write it is
-itself blocked by the missing policy. That is why a browser *worker* cannot do
-it either — CORS is enforced per request, not per thread.
+Every signed request is posted to `/api/s3-proxy` on the Galiot origin. The Bun
+process calls S3, so the bucket does not need a CORS policy for listing,
+upload, download, or edit. The machine running Galiot has to be able to reach
+the endpoint. A bucket that is only visible on a laptop VPN stays unreachable
+until that machine can see it too.
 
-The bridge is a local companion server for two cases: applying a bucket CORS
-policy and routing S3 traffic when a gateway cannot answer the browser's
-anonymous preflight. The browser still preflights the local companion, which
-answers that request; the companion calls S3 outside the browser.
-This is optional: leave it off when connections work directly in the browser.
-Use it when Galiot reports CORS or preflight errors but the same computer can
-reach the S3 gateway. It does not repair an incorrect endpoint or credentials.
-
-On a deployed Galiot page, open **Connections → Local companion → Download companion** and choose
-macOS Apple Silicon, macOS Intel, Windows x64, or Linux x64. Extract the ZIP on
-the computer that can reach the S3 gateway. Run the executable from a terminal
-with the exact origin shown in the companion panel. For example:
-
-```bash
-GALIOT_BRIDGE_ORIGINS=https://galiot.example.com ./galiot-bridge
-```
-
-In Windows PowerShell, use
-`$env:GALIOT_BRIDGE_ORIGINS='https://galiot.example.com'; .\galiot-bridge.exe`.
-The executable prints a one-time token. Keep it running while using Galiot.
-The download is a standalone program; users do not need Bun or the
-source checkout. [Bun single-file executables](https://bun.sh/docs/bundler/executables).
-
-Developers can also run `bun run bridge`, compile for their own machine with
-`bun run bridge:compile`, or generate the downloadable packages with
-`bun run bridge:package`. `bun run build` includes the packages in the site.
-Each ZIP is split into static parts under 20 MiB and reassembled by the browser
-when downloaded, staying below [Cloudflare's 25 MiB per-asset limit](https://developers.cloudflare.com/workers/platform/limits/#static-assets).
-
-For normal file operations, click **Enable companion** in the panel above the
-connection list and paste the printed token once. Every connection in this tab,
-including ones added later, uses the same companion until the vault locks, the
-tab closes, or you disable it. The companion must keep running.
-For CORS policy setup, the existing **CORS helper → Apply CORS policy via bridge**
-action also uses it. Galiot signs in a worker; raw S3 secret keys never go to
-the companion. The companion:
-
-- binds `127.0.0.1` only
-- accepts local app origins (`localhost` / `127.0.0.1` on :5173 and :4173) by default
-- requires the token it prints at startup
-- forwards only requests carrying a SigV4 `Authorization` header
-- refuses wildcard origins and non-http(s) targets
-- stops entirely with Ctrl+C
-
-Serving Galiot from another origin, including the deployed app, needs that exact
-origin allowed. The companion panel shows the command for the current page.
-For example:
-
-```bash
-GALIOT_BRIDGE_ORIGINS=https://galiot.example.com bun run bridge
-```
-
-The companion needs the browser's local network permission where supported.
-File operations for every connection use the companion while enabled; generated presigned share links
-still target S3 directly, so recipients need a reachable gateway. [Browser CORS
-and opaque response behavior](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch),
-[local network access](https://developer.chrome.com/blog/local-network-access).
+Presigned share links and in-app media previews still open the object URL in a
+browser. Those loads use the viewer's network, and a preview can still need a
+bucket CORS rule.
 
 ---
 

@@ -5,17 +5,16 @@ on:
     branches: [main]
   pull_request:
 
-# `verify` holds no credentials and runs on every push and PR. `deploy` runs only
-# on main and only after verify passes, so a red test suite can never ship.
+# `verify` holds no credentials and runs on every push and PR. Publishing is not
+# tied to a platform: run `bun run server` or the container on any host.
 jobs:
   verify:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # Pinned to commit SHAs, not mutable tags: the deploy job exposes
-      # CLOUDFLARE_API_TOKEN, and a hijacked tag would hand it over. Re-resolve
-      # deliberately when bumping, e.g.
+      # Pinned to commit SHAs, not mutable tags. A hijacked tag would run
+      # arbitrary code in CI. Re-resolve deliberately when bumping, e.g.
       #   gh api repos/actions/checkout/git/ref/tags/v4
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -48,29 +47,16 @@ jobs:
       - name: Assert the CSP headers file shipped
         run: test -f dist/_headers
 
-  deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: verify
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      deployments: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: "1.4.2"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build
-        run: bun run build
-
-      - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+      - name: Smoke-test the provider-neutral server
+        run: |
+          bun run scripts/server.ts &
+          pid=$!
+          trap 'kill $pid' EXIT
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -sf http://127.0.0.1:8788/api/s3-proxy >/dev/null; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::app server did not answer /api/s3-proxy"
+          exit 1

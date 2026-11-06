@@ -7,8 +7,8 @@
 ## Project Identity
 
 - **Name**: Galiot — The Agile Cloud Explorer
-- **Architecture**: 100% client-side SPA, zero server backend
-- **Hosting**: Cloudflare Workers Static Assets (free tier)
+- **Architecture**: Static SPA plus a provider-neutral Bun server that forwards already-signed S3 requests. Not a Cloudflare Worker or a Vercel function. Signed requests always leave from that server.
+- **Hosting**: Any host that can run Bun or the container (`bun run server`). A static file host can serve the bundle, and S3 calls still need the Bun server on an origin the page can reach.
 - **License**: MIT
 
 ## Tech Stack (Canonical Source: `docs/STACK_DECISION.md`)

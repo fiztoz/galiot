@@ -24,6 +24,7 @@ const PROFILE_COLUMNS = [
   'region',
   'bucket',
   'path_style',
+  'network',
   'encrypted_credentials',
   'storage_class',
   'custom_headers',
@@ -47,6 +48,9 @@ export async function exportVault(db: AppDB): Promise<Blob> {
 
 function profileValues(profile: Record<string, unknown>): unknown[] {
   return PROFILE_COLUMNS.map((column) => {
+    // Older backups stored `user` for a browser call. Restore them on the
+    // server route, which is the only route this build uses.
+    if (column === 'network') return 'server';
     const value = profile[column];
     if (value === undefined || value === null) {
       switch (column) {

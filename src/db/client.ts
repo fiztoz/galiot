@@ -46,6 +46,11 @@ export interface ConnectionRow {
   region: string;
   bucket: string;
   path_style: boolean;
+  /**
+   * Stored route. After migration every row is `server`: signed requests leave
+   * from the Galiot process. A leftover `user` value is not a live route.
+   */
+  network: 'server' | 'user';
   storage_class: string | null;
   /** Extra request headers for this connection; null when none are set. */
   custom_headers: Record<string, string> | string | null;

@@ -1,11 +1,12 @@
 # Galiot — System Architecture
 
 > **⚠️ Hosting correction (2026-09-24):** the hosting and cost statements in
-> this document are obsolete. Galiot's build output is a static bundle that any
-> static host or edge CDN can serve; the provider is an interchangeable
-> implementation detail, not a design constraint. See
-> [docs/STACK_DECISION.md](docs/STACK_DECISION.md) for the decision log. This
-> file is kept as the original spec; corrections live there.
+> this document are obsolete. See [docs/STACK_DECISION.md](docs/STACK_DECISION.md).
+>
+> **⚠️ S3 path correction:** signed requests now leave through a provider-neutral
+> app server by default, so bucket CORS is not required. A connection can opt
+> into this device's network instead. This file is kept as the original spec;
+> corrections live in the decision log.
 
 
 > *A comprehensive architectural blueprint for porting Galeon's desktop client paradigm to a 100% client-side web application hosted for free on GitHub Pages.*

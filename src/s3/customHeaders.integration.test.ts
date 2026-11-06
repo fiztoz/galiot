@@ -193,6 +193,7 @@ function client(headers?: Record<string, string>): S3Client {
     accessKeyId: ACCESS_KEY,
     secretAccessKey: SECRET_KEY,
     headers,
+    direct: true,
   });
 }
 
@@ -305,6 +306,7 @@ describe('custom headers reach the client', () => {
     region: REGION,
     bucket: 'example-bucket',
     path_style: true,
+    network: 'user',
     storage_class: null,
     custom_headers: null,
     created_at: '2026-01-01T00:00:00.000Z',
@@ -334,6 +336,7 @@ describe('custom headers reach the client', () => {
         headers: { 'x-tenant-id': 'acme' },
       },
       { accessKeyId: ACCESS_KEY, secretAccessKey: SECRET_KEY },
+      { direct: true },
     );
 
     await c.listObjects();
@@ -346,6 +349,7 @@ describe('custom headers reach the client', () => {
     const c = s3ClientForProfile(
       profileConfig({ ...row, endpoint, region: REGION, bucket: BUCKET }),
       { accessKeyId: ACCESS_KEY, secretAccessKey: SECRET_KEY },
+      { direct: true },
     );
 
     await c.listObjects();

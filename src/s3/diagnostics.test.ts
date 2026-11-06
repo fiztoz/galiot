@@ -8,6 +8,53 @@ const base: DiagnoseInput = {
 };
 
 describe('diagnoseCors', () => {
+  test('server rejections ignore browser reachability and alternate addressing', () => {
+    for (const requestError of ['ListObjects failed: AccessDenied (403)', 'NoSuchBucket (404)', 'Missing or incorrect proxy token.']) {
+      const result = diagnoseCors({
+        endpoint: 'https://s3.example.com', probeUrl: 'https://s3.example.com/example-bucket',
+        pathStyle: true, network: 'server', requestSucceeded: false,
+        requestError, alternateReachable: true,
+      }, false);
+      expect(result.reason).toBe('request-rejected');
+      expect(result.detail).toContain(requestError);
+      expect(result.reachable).toBe(true);
+    }
+  });
+
+  test('an unattempted server request does not fall back to browser diagnostics', () => {
+    expect(diagnoseCors({ ...base, pathStyle: true, network: 'server' }, true).reason).toBe('unknown');
+  });
+
+  test('a server-routed success does not demand bucket CORS', () => {
+    const result = diagnoseCors(
+      {
+        ...base,
+        pathStyle: true,
+        network: 'server',
+        requestSucceeded: true,
+      },
+      false,
+    );
+    expect(result.reason).toBe('ok');
+    expect(result.detail).toContain('Galiot server');
+  });
+
+  test('a server that cannot reach the endpoint names the machine running Galiot', () => {
+    const result = diagnoseCors(
+      {
+        ...base,
+        pathStyle: true,
+        network: 'server',
+        requestSucceeded: false,
+        requestError: 'ListObjects failed: HTTP 502 (502) — connect failed',
+      },
+      true,
+    );
+    expect(result.reason).toBe('host-unreachable');
+    expect(result.hint).toContain('machine running Galiot');
+    expect(result.hint).not.toContain("This device's network");
+  });
+
   test('flags IP endpoints that cannot use virtual-hosted addressing', () => {
     const result = diagnoseCors(base, true);
     expect(result.reason).toBe('addressing-unsupported');
@@ -104,12 +151,11 @@ describe('diagnoseCors', () => {
     expect(result.reason).toBe('cors-blocked');
   });
 
-  test('the CORS hint offers the bridge for servers with no CORS support', () => {
-    // A gateway that answers preflight with 405 cannot be given a policy at all,
-    // so "apply the policy below" is a dead end on its own.
+  test('a browser block points at a CORS rule for direct browser loads', () => {
     const result = diagnoseCors({ ...base, pathStyle: true, requestSucceeded: false, requestError: 'Failed to fetch' }, true);
     expect(result.reason).toBe('cors-blocked');
-    expect(result.hint).toContain('bridge');
+    expect(result.hint).toContain('recommended CORS rule');
+    expect(result.hint).not.toContain('bridge');
   });
 
   test('reachable but blocked means CORS', () => {

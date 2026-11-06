@@ -153,6 +153,7 @@ describe('Galeon import end to end', () => {
       pathStyle: row.path_style,
       accessKeyId: decrypted.accessKeyId,
       secretAccessKey: decrypted.secretAccessKey,
+      direct: true,
     });
     const listing = await client.listObjects('', { maxKeys: 10 });
 

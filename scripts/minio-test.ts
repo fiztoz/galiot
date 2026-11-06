@@ -84,11 +84,11 @@ const signer = () =>
   new AwsClient({ accessKeyId, secretAccessKey, region, service: 's3' });
 
 const client = (b = bucket) =>
-  new S3Client({ endpoint, region, bucket: b, pathStyle, accessKeyId, secretAccessKey });
+  new S3Client({ endpoint, region, bucket: b, pathStyle, accessKeyId, secretAccessKey, direct: true });
 
 /** A client that sends extra headers on every request, as a connection can. */
 const clientWithHeaders = (headers: Record<string, string>) =>
-  new S3Client({ endpoint, region, bucket, pathStyle, accessKeyId, secretAccessKey, headers });
+  new S3Client({ endpoint, region, bucket, pathStyle, accessKeyId, secretAccessKey, headers, direct: true });
 
 const rule = (overrides: Partial<CorsRule> = {}): CorsRule => ({
   allowedOrigins: [origin],

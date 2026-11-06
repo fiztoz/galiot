@@ -36,7 +36,7 @@ describe('schema migrations', () => {
     expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION));
     // Pinned so bumping the schema is a deliberate, reviewed edit: a new version
     // needs a migration step for every vault already in the field.
-    expect(SCHEMA_VERSION).toBe(2);
+    expect(SCHEMA_VERSION).toBe(4);
 
     const tables = await db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
@@ -162,6 +162,60 @@ describe('schema migrations', () => {
     const stored = rows.rows[0]?.custom_headers;
     // PGlite may hand back JSONB parsed or as text; both must read identically.
     expect(typeof stored === 'string' ? JSON.parse(stored) : stored).toEqual(headers);
+
+    await db.close();
+  });
+
+  test('a v2 vault ends on the server route, including rows that v3 marked as browser calls', async () => {
+    const db = await freshDb();
+    await runMigrations(db);
+    await db.exec(`ALTER TABLE profiles DROP COLUMN network`);
+    await db.query(`UPDATE _meta SET value = '2' WHERE key = 'schema_version'`);
+
+    const now = new Date().toISOString();
+    await db.query(
+      `INSERT INTO profiles
+         (id, name, protocol, endpoint, region, bucket, path_style, encrypted_credentials, created_at, updated_at)
+       VALUES ($1, 'old', 's3', 'https://s3.example.com', 'us-east-1', 'example-bucket', false, $2, $3, $4)`,
+      ['66666666-6666-4666-8666-666666666666', JSON.stringify({ ciphertext: 'a', iv: 'b' }), now, now],
+    );
+
+    await runMigrations(db);
+
+    const upgraded = await db.query<{ network: string }>(`SELECT network FROM profiles WHERE name = 'old'`);
+    expect(upgraded.rows[0]?.network).toBe('server');
+
+    await db.query(
+      `INSERT INTO profiles
+         (id, name, protocol, endpoint, region, bucket, path_style, encrypted_credentials, created_at, updated_at)
+       VALUES ($1, 'new', 's3', 'https://s3.example.com', 'us-east-1', 'example-bucket', false, $2, $3, $4)`,
+      ['77777777-7777-4777-8777-777777777777', JSON.stringify({ ciphertext: 'a', iv: 'b' }), now, now],
+    );
+    const created = await db.query<{ network: string }>(`SELECT network FROM profiles WHERE name = 'new'`);
+    expect(created.rows[0]?.network).toBe('server');
+
+    await db.close();
+  });
+
+  test('a v3 vault that stored a browser route moves to the server', async () => {
+    const db = await freshDb();
+    await runMigrations(db);
+    await db.query(`UPDATE _meta SET value = '3' WHERE key = 'schema_version'`);
+
+    const now = new Date().toISOString();
+    await db.query(
+      `INSERT INTO profiles
+         (id, name, protocol, endpoint, region, bucket, path_style, network, encrypted_credentials, created_at, updated_at)
+       VALUES ($1, 'browser', 's3', 'https://s3.example.com', 'us-east-1', 'example-bucket', true, 'user', $2, $3, $4)`,
+      ['88888888-8888-4888-8888-888888888888', JSON.stringify({ ciphertext: 'a', iv: 'b' }), now, now],
+    );
+
+    await runMigrations(db);
+
+    const upgraded = await db.query<{ network: string }>(`SELECT network FROM profiles WHERE name = 'browser'`);
+    expect(upgraded.rows[0]?.network).toBe('server');
+    const version = await db.query<{ value: string }>(`SELECT value FROM _meta WHERE key = 'schema_version'`);
+    expect(version.rows[0]?.value).toBe('4');
 
     await db.close();
   });

@@ -1,10 +1,11 @@
 import type { AppDB } from '../db/client';
+
 import type { EncryptedPayload } from './crypto';
 import type { CredentialPlaintext } from './protocol';
 import { vaultService } from './vaultService';
 import { SCHEMA_VERSION } from '../db/migrations';
 import { assertSafeCustomHeaders, parseStoredHeaders } from '../s3/customHeaders';
-import { disableBridge } from '../bridge/session';
+
 
 const META_SALT = 'salt';
 const META_WRAPPED_DEK = 'wrapped_dek';
@@ -67,8 +68,6 @@ export async function unlockVault(db: AppDB, passphrase: string): Promise<void> 
 }
 
 export async function lockVault(): Promise<void> {
-  // A companion token is a local capability; discard it with the unlocked vault.
-  disableBridge();
   await vaultService.call('vault.lock');
 }
 
@@ -151,8 +150,8 @@ export async function createConnection(db: AppDB, input: ConnectionInput): Promi
 
   await db.query(
     `INSERT INTO profiles
-       (id, name, protocol, endpoint, region, bucket, path_style, encrypted_credentials, custom_headers, created_at, updated_at)
-     VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9, $10)`,
+       (id, name, protocol, endpoint, region, bucket, path_style, network, encrypted_credentials, custom_headers, created_at, updated_at)
+     VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       id,
       input.name,
@@ -160,6 +159,7 @@ export async function createConnection(db: AppDB, input: ConnectionInput): Promi
       input.region,
       input.bucket,
       input.pathStyle,
+      'server',
       JSON.stringify(payload),
       headersColumnValue(headers),
       now,
@@ -230,6 +230,7 @@ export async function updateConnection(
   const current = existing.rows[0];
   if (!current) throw new Error('Connection not found');
 
+  const nextNetwork = 'server';
   const storedHeaders = parseStoredHeaders(current.custom_headers);
   const nextHeaders =
     input.customHeaders === undefined ? storedHeaders : assertSafeCustomHeaders(input.customHeaders);
@@ -261,14 +262,15 @@ export async function updateConnection(
       await tx.query(
         `UPDATE profiles
             SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5,
-                encrypted_credentials = $6, custom_headers = $7, updated_at = $8
-          WHERE id = $9`,
+                network = $6, encrypted_credentials = $7, custom_headers = $8, updated_at = $9
+          WHERE id = $10`,
         [
           input.name,
           input.endpoint,
           input.region,
           input.bucket,
           input.pathStyle,
+          nextNetwork,
           JSON.stringify(payload),
           headersJson,
           now,
@@ -279,14 +281,15 @@ export async function updateConnection(
       await tx.query(
         `UPDATE profiles
             SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5,
-                custom_headers = $6, updated_at = $7
-          WHERE id = $8`,
+                network = $6, custom_headers = $7, updated_at = $8
+          WHERE id = $9`,
         [
           input.name,
           input.endpoint,
           input.region,
           input.bucket,
           input.pathStyle,
+          nextNetwork,
           headersJson,
           now,
           id,

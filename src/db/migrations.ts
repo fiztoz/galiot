@@ -8,7 +8,7 @@ import schemaSql from './schema.sql?raw';
  * OPFS or IndexedDB and outlives every deploy, so an existing database has to be
  * upgraded in place — a fresh `schema.sql` only ever runs for a new vault.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 4;
 
 /** The transaction handle PGlite hands the callback. */
 type Tx = Parameters<Parameters<PGlite['transaction']>[0]>[0];
@@ -35,6 +35,33 @@ async function columnExists(tx: Tx, table: string, column: string): Promise<bool
 async function migrateToV2(tx: Tx): Promise<void> {
   if (!(await columnExists(tx, 'profiles', 'custom_headers'))) {
     await tx.exec(`ALTER TABLE profiles ADD COLUMN custom_headers JSONB`);
+  }
+}
+
+/**
+ * v2 → v3: per-connection network route.
+ *
+ * Existing rows were direct browser calls, so they stay on `user`. New inserts
+ * that omit the column use `server`, which is also the fresh-schema default.
+ */
+async function migrateToV3(tx: Tx): Promise<void> {
+  if (!(await columnExists(tx, 'profiles', 'network'))) {
+    await tx.exec(
+      `ALTER TABLE profiles ADD COLUMN network TEXT NOT NULL DEFAULT 'user' CHECK (network IN ('server', 'user'))`,
+    );
+  }
+  await tx.exec(`ALTER TABLE profiles ALTER COLUMN network SET DEFAULT 'server'`);
+}
+
+/**
+ * v3 → v4: one route. Every connection uses the Galiot server's network.
+ *
+ * Rows written by v3 as `user` were browser calls. They move to `server` so an
+ * existing vault follows the same path as a new one.
+ */
+async function migrateToV4(tx: Tx): Promise<void> {
+  if (await columnExists(tx, 'profiles', 'network')) {
+    await tx.exec(`UPDATE profiles SET network = 'server' WHERE network IS DISTINCT FROM 'server'`);
   }
 }
 
@@ -76,6 +103,8 @@ export async function runMigrations(db: PGlite): Promise<void> {
     const current = Number.isFinite(parsed) ? parsed : 1;
 
     if (current < 2) await migrateToV2(tx);
+    if (current < 3) await migrateToV3(tx);
+    if (current < 4) await migrateToV4(tx);
 
     if (current !== SCHEMA_VERSION) {
       await tx.query(`UPDATE _meta SET value = $1 WHERE key = 'schema_version'`, [

@@ -93,6 +93,13 @@ export interface DiagnoseInput {
   alternateReachable?: boolean;
   /** The URL that answered, for the explanation. */
   alternateUrl?: string;
+  /** When `server`, a browser probe is not evidence about the path the request took. */
+  network?: 'server' | 'user';
+}
+
+function isProxyTransportFailure(error?: string | null): boolean {
+  if (!error) return false;
+  return /server proxy request failed|\b502\b|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|getaddrinfo/i.test(error);
 }
 
 /**
@@ -110,6 +117,40 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
       detail:
         'This endpoint is an IP address, so a bucket cannot be added to the hostname. The request was built without the bucket in the path.',
       hint: 'Turn on "Path-style addressing" — it is required for IP/local endpoints such as MinIO.',
+      probedUrl: probeUrl,
+    };
+  }
+
+  // A successful server-routed request does not care whether this browser can see the host.
+  if (input.network === 'server' && requestSucceeded === true) {
+    return {
+      reachable: true,
+      reason: 'ok',
+      detail: 'The bucket answered a signed request through the Galiot server. Bucket CORS was not required.',
+      probedUrl: probeUrl,
+    };
+  }
+
+  if (input.network === 'server') {
+    if (requestSucceeded === false) {
+      const transportFailure = isProxyTransportFailure(requestError) || isBlockedByBrowser(requestError);
+      return {
+        reachable: !transportFailure,
+        reason: transportFailure ? 'host-unreachable' : 'request-rejected',
+        detail: transportFailure
+          ? 'The Galiot server could not complete the signed request. Bucket CORS is not involved on the server route.'
+          : `The server route returned an error${requestError ? `: ${requestError}` : ''}. Bucket CORS is not involved.`,
+        hint: transportFailure
+          ? 'Check that the machine running Galiot can reach the endpoint, including the host, port, and whether it needs http:// instead of https://.'
+          : 'Check the server gate, S3 credentials, bucket name, and permissions for this request.',
+        probedUrl: probeUrl,
+      };
+    }
+    return {
+      reachable: false,
+      reason: 'unknown',
+      detail: 'No signed request has been attempted through the Galiot server yet.',
+      hint: 'Run "Test connection" to check the server route and credentials.',
       probedUrl: probeUrl,
     };
   }
@@ -169,7 +210,7 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
         reason: 'cors-blocked',
         detail:
           'The endpoint answered, but the browser blocked the response. Signed requests preflight because they carry Authorization and x-amz-* headers, so the bucket must allow those headers as well as the methods.',
-        hint: 'If the bucket policy is missing, apply the recommended CORS rule below. If the policy already exists but the gateway still rejects anonymous preflight, enable the local companion above the connection list. Start `bun run bridge` on your computer and use the command shown there for a deployed page.',
+        hint: 'If the bucket policy is missing, apply the recommended CORS rule below. A preview or a share link loads the bucket in the browser and needs that rule.',
         probedUrl: probeUrl,
       };
     }

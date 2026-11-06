@@ -110,35 +110,33 @@ describe('probeAddressing', () => {
   });
 });
 
-describe('local companion routing', () => {
-  test('signs inside the worker path and sends the bucket request to loopback', async () => {
-    const calls: { url: string; headers: Headers }[] = [];
+describe('server network routing', () => {
+  test('sends the signed bucket request to the same-origin proxy', async () => {
+    const calls: { url: string; headers: Headers; cache?: RequestCache }[] = [];
     globalThis.fetch = mock(async (input: string | URL | Request, init: RequestInit = {}) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      calls.push({ url, headers: new Headers(init.headers) });
+      calls.push({ url, headers: new Headers(init.headers), cache: init.cache });
       return new Response('<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>', {
         status: 200,
       });
     }) as unknown as typeof fetch;
 
-    const viaBridge = new S3Client({
-      endpoint: 'https://s3.example.com:9021',
+    const viaServer = new S3Client({
+      endpoint: 'https://s3.example.com',
       bucket: 'archive',
       region: 'us-east-1',
       pathStyle: true,
       accessKeyId: 'AKIA',
       secretAccessKey: 'secret',
-      bridgeToken: 'session-token',
     });
-    const listing = await viaBridge.listObjects();
+    await viaServer.listObjects();
 
-    expect(listing.objects).toEqual([]);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe('http://127.0.0.1:8787/proxy');
-    expect(calls[0]?.headers.get('x-galiot-bridge-target')).toBe(
-      'https://s3.example.com:9021/archive/?list-type=2',
+    expect(calls[0]?.url).toBe('/api/s3-proxy');
+    expect(calls[0]?.cache).toBe('no-store');
+    expect(calls[0]?.headers.get('x-galiot-s3-target')).toBe(
+      'https://s3.example.com/archive/?list-type=2',
     );
-    expect(calls[0]?.headers.get('x-galiot-bridge-token')).toBe('session-token');
     expect(calls[0]?.headers.get('authorization')).toContain('AWS4-HMAC-SHA256');
   });
 });

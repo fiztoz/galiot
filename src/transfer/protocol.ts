@@ -21,8 +21,10 @@ export interface S3Target {
    * `src/s3/customHeaders.ts`, which refuses credential-looking names.
    */
   headers?: Record<string, string>;
-  /** Local companion token, held in memory for this tab only. */
-  bridgeToken?: string;
+  /** Retained on the profile shape. The worker always uses the app server. */
+  network?: 'server' | 'user';
+  /** Gate for a public app server. Tab memory only. */
+  proxyToken?: string;
 }
 
 export interface CompletedPart {

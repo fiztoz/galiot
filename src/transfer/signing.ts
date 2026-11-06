@@ -15,8 +15,7 @@ import { parseStoredHeaders, withCustomHeaders } from '../s3/customHeaders';
  *    `Range` and an upload's `Content-Type` cannot be displaced by a stored row.
  *    Those two are part of what the signature covers.
  *
- * Used by the transfer-signing path and the local-bridge path, which are the two
- * request routes that do not go through `S3Client`.
+ * Used by the transfer-signing path, which does not go through `S3Client`.
  */
 export function mergeScreenedHeaders(
   customHeaders: Record<string, string> | undefined,

@@ -874,5 +874,58 @@ gateway; ordinary working connections can leave it off.
 
 ---
 
+## 20. Re-verification log — server-side S3, not a platform function
+
+The browser still signs every S3 request in the vault worker. Raw keys do not
+move to the server or the main thread. What changed is where the signed request
+is sent:
+
+- **Server network** (default for new connections): the browser posts the signed
+  request to same-origin `/api/s3-proxy`. A plain Bun process (`scripts/server.ts`,
+  also mounted in Vite dev) forwards it with `fetch`. Bucket CORS is not required.
+  Traffic leaves from the machine running Galiot.
+- **This device's network**: the browser calls S3 itself. Use this when the
+  endpoint is only reachable from the user's network (VPN, office LAN, local
+  MinIO). Bucket CORS, or the existing local companion, still applies.
+
+The server is not a Cloudflare Worker and not a Vercel function. `bun run server`
+and the `Dockerfile` are the way to run it. A non-loopback bind requires
+`GALIOT_PROXY_TOKEN` so a public process is not an open proxy; loopback does not.
+Redirects are not followed. Literal link-local targets, including cloud metadata
+addresses, are refused. Private LAN addresses stay allowed so the server can
+reach a MinIO on its own network.
+
+Existing vaults migrate to `user` so a connection that already worked from the
+browser keeps doing so. New connections and the fresh schema default to `server`.
+Presigned share links are unchanged: they still open from the recipient's browser.
+
+`wrangler deploy` is no longer the creation path. `vercel.json` and `public/_headers`
+remain so a static host can still serve the bundle for device-network use; they
+are not required to run Galiot.
+
+---
+
+## 21. Re-verification log — server network only
+
+Signed S3 calls now have one route. The browser signs the request in the vault
+worker and posts it to same-origin `/api/s3-proxy`. The Bun process calls S3.
+`S3Client` and the transfer worker no longer fall through to `fetch` against
+the bucket, and they no longer forward through the local companion.
+
+The connection dialog no longer offers "This device's network". Saves write
+`profiles.network = 'server'`. Schema version 4 rewrites any stored `user` row
+to `server`. A vault backup that still says `user` is restored as `server`.
+`parseNetwork` ignores a leftover `user` value.
+
+The companion panel, the downloadable bridge packages, and the
+`http://127.0.0.1:8787` CSP exception are removed with that route. `bun run build`
+is `vite build`. Presigned share links and media previews still open the object
+URL in a browser, so those loads use the viewer's network.
+
+The machine running Galiot has to reach the endpoint. A bucket that is only
+routable from a laptop VPN is unreachable from a server that is not on that VPN.
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*

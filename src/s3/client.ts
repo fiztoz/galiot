@@ -2,7 +2,7 @@ import { AwsClient, type AwsSignOptions } from '../lib/aws4fetch';
 import { buildS3Url } from './url';
 import { md5Base64 } from '../transfer/integrity';
 import { withCustomHeaders } from './customHeaders';
-import { fetchViaBridge } from '../bridge/transport';
+import { fetchViaServer, serverGate } from '../server/transport';
 import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
 import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
 
@@ -20,8 +20,14 @@ export interface S3ClientOptions {
    * the canonical request.
    */
   headers?: Record<string, string>;
-  /** Session-only token for routing signed requests through the local companion. */
-  bridgeToken?: string;
+  /** Public app-server gate. Not an S3 key. */
+  proxyToken?: string;
+  /**
+   * Call S3 from this process. Set only by Bun tools and tests that already
+   * run outside the browser (the MinIO suite, the integrity check). The app
+   * factory never sets it: the vault worker always uses the proxy.
+   */
+  direct?: boolean;
 }
 
 /** Normalises the three `HeadersInit` shapes to a plain record. */
@@ -210,6 +216,7 @@ async function throwS3Error(res: Response, operation: string): Promise<never> {
 export function s3ClientForProfile(
   profile: S3ProfileConfig,
   creds: CredentialPlaintext,
+  options?: { direct?: boolean },
 ): S3Client {
   return new S3Client({
     endpoint: profile.endpoint,
@@ -220,7 +227,8 @@ export function s3ClientForProfile(
     secretAccessKey: creds.secretAccessKey,
     sessionToken: creds.sessionToken,
     headers: profile.headers,
-    bridgeToken: profile.bridgeToken,
+    proxyToken: serverGate(profile),
+    direct: options?.direct,
   });
 }
 
@@ -230,7 +238,8 @@ export class S3Client {
   private bucket: string;
   private pathStyle: boolean;
   private customHeaders: Record<string, string>;
-  private bridgeToken?: string;
+  private proxyToken?: string;
+  private direct: boolean;
 
   constructor(options: S3ClientOptions) {
     this.awsClient = new AwsClient({
@@ -244,7 +253,8 @@ export class S3Client {
     this.bucket = options.bucket;
     this.pathStyle = options.pathStyle ?? false;
     this.customHeaders = options.headers ?? {};
-    this.bridgeToken = options.bridgeToken;
+    this.proxyToken = serverGate(options);
+    this.direct = options.direct === true;
   }
 
   /**
@@ -267,9 +277,9 @@ export class S3Client {
           ...init,
           headers: withCustomHeaders(this.customHeaders, headersToRecord(init?.headers)),
         };
-    if (!this.bridgeToken) return this.awsClient.fetch(url, requestInit);
+    if (this.direct) return this.awsClient.fetch(url, requestInit);
     const signed = await this.awsClient.sign(url, requestInit);
-    return fetchViaBridge(signed, this.bridgeToken, requestInit?.body, requestInit?.signal ?? undefined);
+    return fetchViaServer(signed, this.proxyToken, requestInit?.body, requestInit?.signal ?? undefined);
   }
 
 /** Public accessor for the endpoint/bucket/addressing (used by tooling). */

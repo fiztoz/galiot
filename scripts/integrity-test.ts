@@ -325,6 +325,7 @@ async function main(): Promise<void> {
     pathStyle: config.pathStyle,
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
+    direct: true,
   });
 
   const id = `run-${Date.now()}`;
