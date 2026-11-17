@@ -199,7 +199,10 @@ buckets work through the same server path. What to set:
   with no CORS API (or no preflight at all) still works.
 - **Retention.** Objects under ECS compliance retention refuse overwrite and
   delete. That refusal is the storage system enforcing policy, not a Galiot
-  fault; the S3 error code is shown as-is.
+  fault; the S3 error code is shown as-is. Where the provider sends Object Lock
+  headers, Details shows mode / retain-until / legal hold, and Galiot refuses
+  single-object delete, rename, and copy-over early with the date instead of
+  forwarding a doomed request.
 - **TLS.** Private ECS certificates belong in the trust store of the host
   running Galiot. There is no skip-verification switch.
 

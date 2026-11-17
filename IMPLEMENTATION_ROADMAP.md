@@ -6,6 +6,12 @@
 > implementation detail, not a design constraint. See
 > [docs/STACK_DECISION.md](docs/STACK_DECISION.md) for the decision log. This
 > file is kept as the original spec; corrections live there.
+>
+> **⚠️ Architecture correction (2026-11-17):** Galiot is self-hosted; the server
+> signs and calls S3. Phases below describe the original client-only plan.
+> Current work and the forward backlog live in
+> [docs/STACK_DECISION.md](docs/STACK_DECISION.md) §22–30 and
+> [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 
 > *A phased engineering roadmap for building Galiot as a 100% client-side web application hosted on GitHub Pages.*

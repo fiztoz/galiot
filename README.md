@@ -97,6 +97,11 @@ bucket on the server, not just the cached folder. Connections can be shared as
 secret-free JSON ("Share connection" / "Import connection"); moving keys stays
 with the ciphertext-only vault backup under its passphrase.
 
+Folders upload with their structure (picker or drag & drop, capped at 2000
+files per drop), mirroring folder downloads. Archived objects show a snowflake
+and can be restored from Details; object-lock retention and legal hold are
+shown there and checked before single-object delete, rename, or copy-over.
+
 ---
 
 ## 4. Documentation Index

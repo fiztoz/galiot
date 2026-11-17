@@ -1132,5 +1132,56 @@ the v2 path.
 
 ---
 
+## 29. Re-verification log — folder uploads and object-lock awareness
+
+**Folder uploads.** The mirror of folder downloads: an "Upload folder" picker
+(`webkitdirectory`) and directory-aware drag & drop (`DataTransfer` entry API,
+`src/localfs/dropEntries.ts`, capped at 2000 files with a stated truncation)
+enqueue one upload per file with relative keys, so structure survives. Keys
+are sanitised through `uploadKey` (traversal and empty segments dropped);
+`relativeNameOf` prefers the picker's relative path. The transfer ledger
+records the relative path as `local_path`. Pure naming helpers unit-tested.
+
+**Object lock / retention.** HeadObject now surfaces
+`x-amz-object-lock-mode`, `-retain-until-date`, and `-legal-hold`. Details
+shows them with a plain-language warning. Before single-object delete,
+rename, and copy-over, Galiot heads the source and refuses early with the
+retain-until date or legal-hold state instead of letting the provider reject
+a confusing `AccessDenied`. Providers that do not send these headers (some
+ECS retention configurations) simply show nothing; the provider's refusal
+code still surfaces unchanged.
+
+---
+
+## 30. Backlog — deferred and next work (not yet in any original spec)
+
+Recorded here so nothing promised in conversation is lost. Ordered by value:
+
+1. **Server-mediated write share links.** Read shares stream from the Galiot
+   host; write links are still presigned S3 PUTs, so recipients must reach S3.
+   An upload grant (single key, size-capped, expiring, revocable) would complete
+   the story. Needs a security design first: bounds on a bearer upload
+   capability (max bytes, one key, expiry, revoke, gate-only management).
+2. **Responsive and accessibility pass.** Explorer toolbar crowding at phone
+   width; dialog focus traps and aria labelling; palette screen-reader names;
+   one batched rendered check at 390/768/1440. Deeper screens need a master
+   password, which the interactive browser tool will not type — an operator
+   can enter it in the isolated browser window for the check.
+3. **Ops packaging.** Publish the container to GHCR on tag; Dockerfile
+   HEALTHCHECK; a compose example. CI already verifies build + server smoke.
+4. **Multi-operator server-stored connections.** Only worth building if several
+   people share one Galiot host without each holding S3 keys. Today the
+   browser vault + secret-free connection share + ciphertext vault backup
+   cover single-operator and hand-off cases; server-stored keys would change
+   the threat model and need their own design.
+5. **R2 and B2 live verification.** Skipped by operator decision (no accounts).
+   The suites are endpoint-agnostic; run them when accounts exist.
+
+Done since the original roadmap and not repeated here: server-side S3 path,
+file operations, versions, bucket search, share routes, bulk/folder transfers,
+cold storage, keyboard flow, live verification (AWS, ECS scoped, Zenko).
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*
