@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Download, History, Info, Loader2, RotateCcw, Snowflake, Trash2, X } from 'lucide-react';
+import { Download, History, Info, Loader2, Lock, RotateCcw, Snowflake, Trash2, X } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
 import { isArchiveClass, isRestored, type ObjectMeta, type ObjectVersion } from '../s3/client';
 import { profileConfig } from '../db/objects';
@@ -214,6 +214,39 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
                 </button>
               </div>
               {restoreNote && <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">{restoreNote}</p>}
+            </div>
+          )}
+
+          {meta && (meta.objectLockMode || meta.retainUntil || meta.legalHold) && (
+            <div className="mt-5 border-t border-zinc-100 dark:border-zinc-800 pt-4">
+              <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100 flex items-center gap-2">
+                <Lock size={14} className="text-amber-600 dark:text-amber-400" />
+                Object lock
+              </h3>
+              <dl className="mt-2 space-y-1.5 text-xs">
+                {meta.objectLockMode && (
+                  <div className="grid grid-cols-[7rem_1fr] gap-3">
+                    <dt className="text-zinc-500 dark:text-zinc-400">Mode</dt>
+                    <dd className="font-mono text-zinc-800 dark:text-zinc-100">{meta.objectLockMode}</dd>
+                  </div>
+                )}
+                {meta.retainUntil && (
+                  <div className="grid grid-cols-[7rem_1fr] gap-3">
+                    <dt className="text-zinc-500 dark:text-zinc-400">Retain until</dt>
+                    <dd className="font-mono text-zinc-800 dark:text-zinc-100">{formatDate(meta.retainUntil)}</dd>
+                  </div>
+                )}
+                {meta.legalHold && (
+                  <div className="grid grid-cols-[7rem_1fr] gap-3">
+                    <dt className="text-zinc-500 dark:text-zinc-400">Legal hold</dt>
+                    <dd className="font-mono text-zinc-800 dark:text-zinc-100">{meta.legalHold}</dd>
+                  </div>
+                )}
+              </dl>
+              <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
+                While retention or a legal hold is active, the provider refuses overwrites and
+                deletes. Galiot checks this before single-object rename, copy-over, and delete.
+              </p>
             </div>
           )}
 

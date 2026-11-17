@@ -268,6 +268,26 @@ describe('server-side file operations', () => {
     ]);
   });
 
+  test('head surfaces object-lock mode, retain-until, and legal hold', async () => {
+    const sessions = new SessionStore();
+    const { forward } = scripted([
+      { headers: {
+        'content-length': '5',
+        'x-amz-object-lock-mode': 'COMPLIANCE',
+        'x-amz-object-lock-retain-until-date': '2030-01-01T00:00:00Z',
+        'x-amz-object-lock-legal-hold': 'ON',
+      } },
+    ]);
+    const options = { expectedToken: GATE, sessions, lookup: LOOKUP, forward };
+    const created = await open(options);
+    const sessionId = ((await created.json()) as { result: { sessionId: string } }).result.sessionId;
+    const response = await handleAppRequest(callRequest(sessionId, { op: 'head', key: 'a.txt' }), options);
+    const result = ((await response.json()) as { result: { objectLockMode: string | null; retainUntil: string | null; legalHold: string | null } }).result;
+    expect(result.objectLockMode).toBe('COMPLIANCE');
+    expect(result.retainUntil).toBe('2030-01-01T00:00:00Z');
+    expect(result.legalHold).toBe('ON');
+  });
+
   test('restore on a provider without archive tiers reports unsupported, not denied', async () => {
     const sessions = new SessionStore();
     const { forward } = scripted([{ status: 501, body: '<Error><Code>NotImplemented</Code></Error>' }]);

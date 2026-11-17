@@ -31,6 +31,11 @@ export interface TransferTaskRow {
 export interface UploadOptions {
   partSize?: number;
   concurrency?: number;
+  /**
+   * Per-file relative paths (folder picks and directory drops), parallel to
+   * `files`. When absent, each file lands under its own name.
+   */
+  relativePaths?: string[];
 }
 
 type Listener = (event: TransferEvent) => void;
@@ -128,15 +133,17 @@ class TransferManager {
     const credentials = await getSealedCredentials(db, profile.id);
     const taskIds: string[] = [];
 
-    for (const file of files) {
-      const key = `${prefix}${file.name}`;
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i] as File;
+      const relative = options.relativePaths?.[i] ?? file.name;
+      const key = `${prefix}${relative}`;
       const taskId = crypto.randomUUID();
 
       await db.query(
         `INSERT INTO transfer_tasks
            (id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred, status)
          VALUES ($1, $2, 'upload', $3, $4, $5, 0, 'queued')`,
-        [taskId, profile.id, key, file.name, file.size],
+        [taskId, profile.id, key, relative, file.size],
       );
 
       const job: UploadJob = {

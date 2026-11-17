@@ -85,6 +85,10 @@ export interface ObjectMeta {
   storageClass: string | null;
   /** `x-amz-restore`: ongoing-request="false" plus an expiry once restored. */
   restore: string | null;
+  /** Object Lock / retention: mode, retain-until date, legal hold. */
+  objectLockMode: string | null;
+  retainUntil: string | null;
+  legalHold: string | null;
 }
 
 /** Storage classes whose objects must be restored before they can be read. */
@@ -434,6 +438,9 @@ export class S3Client {
       eTag: res.headers.get('etag') || '',
       storageClass: res.headers.get('x-amz-storage-class'),
       restore: res.headers.get('x-amz-restore'),
+      objectLockMode: res.headers.get('x-amz-object-lock-mode'),
+      retainUntil: res.headers.get('x-amz-object-lock-retain-until-date'),
+      legalHold: res.headers.get('x-amz-object-lock-legal-hold'),
     };
   }
 

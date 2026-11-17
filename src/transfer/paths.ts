@@ -21,3 +21,18 @@ export function underFolder(folderName: string, key: string, prefix: string): st
   const relative = relativeKey(key, prefix);
   return folderName ? `${folderName}/${relative}` : relative;
 }
+
+/**
+ * Remote key for an uploaded file. Folder picks and directory drops carry a
+ * relative path; plain picks carry only a name. Traversal and empty segments
+ * are dropped so a crafted relative path cannot escape the target prefix.
+ */
+export function uploadKey(prefix: string, relativePath: string): string {
+  return `${prefix}${pathSegments(relativePath).join('/')}`;
+}
+
+/** A file's relative path when the picker/drop provides one, else its name. */
+export function relativeNameOf(file: { name: string; webkitRelativePath?: string }): string {
+  const relative = file.webkitRelativePath ?? '';
+  return relative.length > 0 ? relative : file.name;
+}
