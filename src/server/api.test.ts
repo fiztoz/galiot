@@ -302,6 +302,81 @@ describe('server-side file operations', () => {
     expect(body.code).toBe('NotImplemented');
   });
 
+  test('a write grant accepts one bounded PUT without the gate and is revocable', async () => {
+    const sessions = new SessionStore();
+    const { calls, forward } = scripted([{ headers: { etag: '"u"' } }]);
+    const options = { expectedToken: GATE, sessions, lookup: LOOKUP, forward };
+    const created = await open(options);
+    const sessionId = ((await created.json()) as { result: { sessionId: string } }).result.sessionId;
+
+    const granted = await handleAppRequest(callRequest(sessionId, { op: 'shareWrite', key: 'inbox/a.bin', expiresIn: 3600, maxBytes: 16 }), options);
+    const grant = ((await granted.json()) as { result: { url: string; maxBytes: number } }).result;
+    expect(grant.url.startsWith('/api/s3/upload/')).toBe(true);
+    expect(grant.maxBytes).toBe(16);
+
+    const put = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, {
+      method: 'PUT',
+      headers: { 'content-length': '5', 'content-type': 'application/octet-stream' },
+      body: 'hello',
+    }), options);
+    expect(put.status).toBe(200);
+    expect(calls[0]?.method).toBe('PUT');
+    expect(calls[0]?.url).toBe('https://s3.example.com/archive/inbox/a.bin');
+    expect(calls[0]?.headers['content-length']).toBe('5');
+
+    const tooBig = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, {
+      method: 'PUT',
+      headers: { 'content-length': '17' },
+      body: 'x'.repeat(17),
+    }), options);
+    expect(tooBig.status).toBe(413);
+
+    const noLength = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, {
+      method: 'PUT',
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('hello'));
+          controller.close();
+        },
+      }),
+      duplex: 'half',
+    } as RequestInit), options);
+    expect(noLength.status).toBe(411);
+
+    const wrongMethod = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`), options);
+    expect(wrongMethod.status).toBe(405);
+
+    const anonRevoke = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, { method: 'DELETE' }), options);
+    expect(anonRevoke.status).toBe(403);
+    const revoke = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, {
+      method: 'DELETE',
+      headers: { 'x-galiot-access-token': GATE },
+    }), options);
+    expect(revoke.status).toBe(200);
+    const after = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, {
+      method: 'PUT',
+      headers: { 'content-length': '5' },
+      body: 'hello',
+    }), options);
+    expect(after.status).toBe(404);
+  });
+
+  test('a read grant cannot be used to upload', async () => {
+    const sessions = new SessionStore();
+    const { forward } = scripted([]);
+    const options = { expectedToken: GATE, sessions, lookup: LOOKUP, forward };
+    const created = await open(options);
+    const sessionId = ((await created.json()) as { result: { sessionId: string } }).result.sessionId;
+    const granted = await handleAppRequest(callRequest(sessionId, { op: 'share', key: 'a.txt', expiresIn: 3600 }), options);
+    const url = ((await granted.json()) as { result: { url: string } }).result.url;
+    const put = await handleAppRequest(new Request(`http://127.0.0.1${url}`, {
+      method: 'PUT',
+      headers: { 'content-length': '5' },
+      body: 'hello',
+    }), options);
+    expect(put.status).toBe(405);
+  });
+
   test('list-buckets signs the endpoint root and returns the names', async () => {
     const { calls, forward } = scripted([
       { body: '<ListAllMyBucketsResult><Buckets><Bucket><Name>archive</Name></Bucket><Bucket><Name>logs</Name></Bucket></Buckets></ListAllMyBucketsResult>' },

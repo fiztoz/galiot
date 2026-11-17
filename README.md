@@ -87,9 +87,10 @@ A public bind refuses to start unless `GALIOT_PROXY_TOKEN` or `GALIOT_GATE` is s
 Rename, move, copy and new folders run inside S3 (`CopyObject`, multipart
 `UploadPartCopy` above 5 GiB) — the bytes never pass through the browser. Share
 links default to a short-lived URL that streams from this server, so they work
-for people who cannot reach S3 and can be revoked here. A presigned S3 link
-remains available as an explicit option; it uses the recipient's network and
-cannot be revoked. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
+for people who cannot reach S3 and can be revoked here; upload links work the
+same way with a byte cap and a single fixed key. Presigned S3 links remain
+available as an explicit option; they use the recipient's network and cannot
+be revoked. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 On versioned buckets, Details lists every version with download, restore
 (server-side copy onto the key), and permanent purge. Search can walk the whole

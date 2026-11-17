@@ -74,7 +74,8 @@ either case: the browser never calls S3.
 | Whole-bucket search | Galiot server walks the bucket (capped at 50,000 keys / 500 matches) |
 | Share link, "Through this server" | recipient → Galiot server → S3 |
 | Share link, "Direct S3" (presigned) | recipient → S3 directly |
-| Write (upload) share link | recipient → S3 directly, presigned PUT |
+| Upload link, "Through this server" | recipient → Galiot server → S3; one key, byte cap, expiry, revocable |
+| Upload link, "Direct S3" (presigned PUT) | recipient → S3 directly |
 
 A server share link works for people who cannot reach S3 themselves, and can be
 revoked in the share dialog: the grant is deleted and the URL stops working at
@@ -83,6 +84,12 @@ memory, so it survives the operator locking the vault; it dies at its expiry,
 at revocation, or at server restart. A presigned S3 link cannot be revoked; it
 stays valid until it expires, and the recipient must be able to reach the
 bucket.
+
+Upload links through the server accept a single PUT to exactly one key, up to
+the byte cap chosen at creation (10 MiB / 100 MiB / 1 GiB), until they expire
+or are revoked. Content-Length is required; oversized bodies are refused with
+413. The recipient needs no credentials and no route to S3 — e.g.
+`curl -X PUT --data-binary @file <url>`.
 
 ## 5. Limits worth knowing
 

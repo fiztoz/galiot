@@ -1157,11 +1157,8 @@ code still surfaces unchanged.
 
 Recorded here so nothing promised in conversation is lost. Ordered by value:
 
-1. **Server-mediated write share links.** Read shares stream from the Galiot
-   host; write links are still presigned S3 PUTs, so recipients must reach S3.
-   An upload grant (single key, size-capped, expiring, revocable) would complete
-   the story. Needs a security design first: bounds on a bearer upload
-   capability (max bytes, one key, expiry, revoke, gate-only management).
+1. ~~Server-mediated write share links.~~ **Done — see §32.** Upload grants
+   (single key, byte cap, expiry, revoke, gate-only management) now exist.
 2. **Responsive and accessibility pass.** Explorer toolbar crowding at phone
    width; dialog focus traps and aria labelling; palette screen-reader names;
    one batched rendered check at 390/768/1440. Deeper screens need a master
@@ -1217,6 +1214,31 @@ Sources:
 - https://registry.npmjs.org/elysia/latest (1.4.32)
 - https://registry.npmjs.org/@tanstack/react-start/latest (1.169.5; engines node >=22.12)
 - https://tanstack.com/start/latest/docs/framework/react/guide/spa-mode (SPA mode caveats; server functions/routes still need a server)
+
+---
+
+## 32. Write share links — bounded upload grants (backlog item 1, done)
+
+Recipients who cannot reach S3 can now upload through the Galiot host. A write
+grant is the read-grant mechanism with a write kind and a byte cap:
+
+- **Bounds:** one exact key; `maxBytes` (default 100 MiB, max 1 GiB, chosen at
+  creation); expiry 60 s…7 days; revocable. The credential snapshot is wiped on
+  expiry/revoke and outlives the minting session, like read grants.
+- **Route:** `PUT /api/s3/upload/:token` only. `Content-Length` is required
+  (411/400 otherwise) and checked against the cap up front (413); streamed
+  bytes are also counted and the transfer aborted if a body lies about its
+  length (413). GET/HEAD on an upload grant → 405; PUT on a read grant → 405.
+- **Management:** minting (`shareWrite`) and revoking (DELETE, gate-protected)
+  are operator actions; the PUT itself is the bearer capability, same trust
+  model as read links. No gate on the PUT by design — the link is the secret.
+- **UI:** Share dialog offers the route toggle for write links too, with a cap
+  selector and a curl one-liner; history badges and revoke cover both kinds.
+
+Verified: unit tests (bounded PUT, over-cap 413, missing length 411, wrong
+method 405, anonymous revoke 403, revoked 404, read-grant PUT 405) and live
+against Zenko CloudServer: 31/31 server-path checks including upload landing
+in S3 byte-exact. Presigned S3 PUT remains the explicit "Direct S3" option.
 
 ---
 

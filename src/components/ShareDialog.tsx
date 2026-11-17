@@ -22,6 +22,7 @@ import {
   purgeExpiredLinks,
   revocationHint,
   serverLinkHint,
+  serverWriteHint,
   type LinkPermission,
   type PresignedRecord,
 } from '../s3/links';
@@ -36,6 +37,7 @@ interface ShareDialogProps {
 export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
   const [permission, setPermission] = useState<LinkPermission>('read');
   const [via, setVia] = useState<'server' | 's3'>('server');
+  const [maxBytes, setMaxBytes] = useState(100 * 1024 * 1024);
   const [expirySeconds, setExpirySeconds] = useState(EXPIRY_PRESETS[0]?.seconds ?? 3600);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,13 +61,13 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
     setBusy(true);
     setError(null);
     try {
-      await createLink(db, profile, file.key, permission, expirySeconds, permission === 'write' ? 's3' : via);
+      await createLink(db, profile, file.key, permission, expirySeconds, via, maxBytes);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, [db, profile, file.key, permission, expirySeconds, via]);
+  }, [db, profile, file.key, permission, expirySeconds, via, maxBytes]);
 
   const handleCopy = useCallback(async (link: PresignedRecord) => {
     try {
@@ -165,8 +167,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
             </div>
           </div>
 
-          {permission === 'read' && (
-            <div>
+          <div>
               <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                 Link route
               </label>
@@ -198,18 +199,36 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
               </div>
               <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
                 {via === 'server'
-                  ? 'Streams from this Galiot host. Works for people who cannot reach S3, and can be revoked here.'
-                  : 'A presigned S3 URL. The recipient must be able to reach the bucket themselves.'}
+                  ? permission === 'read'
+                    ? 'Streams from this Galiot host. Works for people who cannot reach S3, and can be revoked here.'
+                    : 'Accepts one bounded PUT through this Galiot host. Works for people who cannot reach S3, and can be revoked here.'
+                  : permission === 'read'
+                    ? 'A presigned S3 URL. The recipient must be able to reach the bucket themselves.'
+                    : 'A presigned S3 PUT signed with Content-Type: application/octet-stream — the uploader must reach S3 and send exactly that header.'}
+              </p>
+          </div>
+
+          {permission === 'write' && via === 'server' && (
+            <div>
+              <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                Upload cap
+              </label>
+              <select
+                value={maxBytes}
+                onChange={(event) => setMaxBytes(Number(event.target.value))}
+                className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg text-zinc-700 dark:text-zinc-200"
+                aria-label="Upload cap"
+              >
+                <option value={10 * 1024 * 1024}>10 MiB</option>
+                <option value={100 * 1024 * 1024}>100 MiB</option>
+                <option value={1024 * 1024 * 1024}>1 GiB</option>
+              </select>
+              <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                The recipient uploads with a single PUT, e.g.{' '}
+                <code className="break-all">curl -X PUT --data-binary @file URL</code>. Larger bodies
+                are refused; the key is fixed to this object.
               </p>
             </div>
-          )}
-
-          {permission === 'write' && (
-            <p className="text-[11px] text-amber-600 dark:text-amber-400">
-              Write links are presigned S3 URLs signed with{' '}
-              <code>Content-Type: application/octet-stream</code> — the uploader must reach S3 and
-              send exactly that header.
-            </p>
           )}
 
           {error && (
@@ -301,7 +320,11 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
 
           <p className="flex items-start gap-2 text-[11px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
             <Clock size={13} className="flex-none mt-0.5" />
-            {rows.some((link) => isServerLink(link.url)) ? serverLinkHint : revocationHint}
+            {rows.some((link) => isServerLink(link.url))
+              ? permission === 'write' && via === 'server'
+                ? serverWriteHint
+                : serverLinkHint
+              : revocationHint}
           </p>
         </div>
       </div>

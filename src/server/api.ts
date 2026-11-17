@@ -25,6 +25,8 @@ const COPY_PART_SIZE = 512 * 1024 ** 2;
 const MAX_TREE_ENTRIES = 10_000;
 const SHARE_MIN_SECONDS = 60;
 const SHARE_MAX_SECONDS = 7 * 24 * 3600;
+const UPLOAD_CAP_DEFAULT = 100 * 1024 * 1024;
+const UPLOAD_CAP_MAX = 1024 * 1024 * 1024;
 
 export interface AppApiOptions {
   expectedToken: string | null;
@@ -92,6 +94,40 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   if (!text) return {};
   const parsed = JSON.parse(text) as unknown;
   return asRecord(parsed);
+}
+
+/**
+ * Counts streamed bytes against a write grant's cap. A declared Content-Length
+ * is checked up front; this is the defence against a body that lies about it.
+ */
+function countedBody(
+  body: ReadableStream<Uint8Array>,
+  max: number,
+): { body: ReadableStream<Uint8Array>; exceeded: () => boolean } {
+  let total = 0;
+  let over = false;
+  const reader = body.getReader();
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      total += value.byteLength;
+      if (total > max) {
+        over = true;
+        controller.error(new Error('Upload exceeds the grant cap.'));
+        await reader.cancel().catch(() => undefined);
+        return;
+      }
+      controller.enqueue(value);
+    },
+    cancel() {
+      return reader.cancel();
+    },
+  });
+  return { body: stream, exceeded: () => over };
 }
 
 function uploadLength(request: Request): { ok: true; length: string } | { ok: false; status: 411 | 400 } {
@@ -298,9 +334,17 @@ async function handleCall(
       case 'share': {
         const key = requireString(body.key, 'key', 1024);
         const expiresIn = Math.min(SHARE_MAX_SECONDS, Math.max(SHARE_MIN_SECONDS, numberOr(body.expiresIn, 3600)));
-        const token = sessions.mintMedia(sessionId, key, expiresIn * 1000);
+        const token = sessions.mintMedia(sessionId, key, { ttlMs: expiresIn * 1000 });
         if (!token) return json({ ok: false, error: 'S3 session expired or unknown.' }, 404);
         return json({ ok: true, result: { url: `/api/s3/media/${token}`, expiresIn } }, 200);
+      }
+      case 'shareWrite': {
+        const key = requireString(body.key, 'key', 1024);
+        const expiresIn = Math.min(SHARE_MAX_SECONDS, Math.max(SHARE_MIN_SECONDS, numberOr(body.expiresIn, 3600)));
+        const maxBytes = Math.min(UPLOAD_CAP_MAX, Math.max(1, numberOr(body.maxBytes, UPLOAD_CAP_DEFAULT)));
+        const token = sessions.mintMedia(sessionId, key, { ttlMs: expiresIn * 1000, kind: 'write', maxBytes });
+        if (!token) return json({ ok: false, error: 'S3 session expired or unknown.' }, 404);
+        return json({ ok: true, result: { url: `/api/s3/upload/${token}`, expiresIn, maxBytes } }, 200);
       }
       case 'presignGet':
         return json({
@@ -339,7 +383,7 @@ async function handleCall(
         }, 200);
       case 'media': {
         const key = requireString(body.key, 'key', 1024);
-        const token = sessions.mintMedia(sessionId, key, undefined, asString(body.versionId, 1024));
+        const token = sessions.mintMedia(sessionId, key, { versionId: asString(body.versionId, 1024) });
         if (!token) return json({ ok: false, error: 'S3 session expired or unknown.' }, 404);
         return json({ ok: true, result: { url: `/api/s3/media/${token}` } }, 200);
       }
@@ -502,13 +546,64 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
     }
     if (request.method === 'GET' || request.method === 'HEAD') {
       const grant = sessions.useMedia(token);
-      if (!grant) return json({ ok: false, error: 'This link expired or was revoked.' }, 404);
+      if (!grant || grant.kind !== 'read') return json({ ok: false, error: 'This link expired or was revoked.' }, 404);
       try {
         return await streamObject(request, grant.session, grant.key, options, grant.versionId);
       } catch (err) {
         if (err instanceof BlockedProxyTargetError) return json({ ok: false, error: err.message, reason: 'bad-target' }, 400);
         return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 502);
       }
+    }
+    return json({ ok: false, error: 'Read links accept GET only.' }, 405);
+  }
+
+  const upload = /^\/api\/s3\/upload\/([A-Za-z0-9_-]{32,128})$/.exec(url.pathname);
+  if (upload) {
+    const token = upload[1] ?? '';
+    if (request.method === 'DELETE') {
+      if (!authorized(request, options.expectedToken)) {
+        return json({ ok: false, error: 'Missing or incorrect server access token.', reason: 'bad-token' }, 403);
+      }
+      return json({ ok: true, result: { revoked: sessions.revokeMedia(token) } }, 200);
+    }
+    if (request.method !== 'PUT') {
+      return json({ ok: false, error: 'Upload links accept PUT only.' }, 405);
+    }
+    const grant = sessions.useMedia(token);
+    if (!grant || grant.kind !== 'write') return json({ ok: false, error: 'This link expired or was revoked.' }, 404);
+    const length = uploadLength(request);
+    if (!length.ok) {
+      return json(
+        { ok: false, error: length.status === 411 ? 'Uploads require Content-Length.' : 'Invalid Content-Length.', reason: 'length-required' },
+        length.status,
+      );
+    }
+    const cap = grant.maxBytes ?? UPLOAD_CAP_DEFAULT;
+    if (Number(length.length) > cap) {
+      return json({ ok: false, error: `This link accepts at most ${cap} bytes.` }, 413);
+    }
+    if (!request.body) return json({ ok: false, error: 'Upload body is empty.' }, 400);
+    const counted = countedBody(request.body, cap);
+    const headers: Record<string, string> = {
+      'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
+      'content-length': length.length,
+    };
+    const type = request.headers.get('content-type');
+    if (type) headers['content-type'] = type;
+    try {
+      const s3 = client(grant.session, options);
+      const upstream = await s3.send(s3.objectUrl(grant.key), {
+        method: 'PUT',
+        headers,
+        body: counted.body,
+        signal: request.signal,
+        duplex: 'half',
+      } as RequestInit);
+      return relay(upstream, 'PUT');
+    } catch (err) {
+      if (counted.exceeded()) return json({ ok: false, error: `This link accepts at most ${cap} bytes.` }, 413);
+      if (err instanceof BlockedProxyTargetError) return json({ ok: false, error: err.message, reason: 'bad-target' }, 400);
+      return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 502);
     }
   }
 

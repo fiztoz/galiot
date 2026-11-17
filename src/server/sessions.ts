@@ -63,6 +63,9 @@ interface MediaGrant {
   sessionToken?: Uint8Array;
   key: string;
   versionId?: string;
+  /** Read grants stream bytes out; write grants accept one bounded PUT. */
+  kind: 'read' | 'write';
+  maxBytes?: number;
   expiresAt: number;
 }
 
@@ -142,9 +145,14 @@ export class SessionStore {
     this.sessions.delete(id);
   }
 
-  mintMedia(sessionId: string, key: string, ttlMs = MEDIA_TTL_MS, versionId?: string): string | null {
+  mintMedia(
+    sessionId: string,
+    key: string,
+    opts: { ttlMs?: number; versionId?: string; kind?: 'read' | 'write'; maxBytes?: number } = {},
+  ): string | null {
     const session = this.use(sessionId);
     if (!session) return null;
+    const ttlMs = opts.ttlMs ?? MEDIA_TTL_MS;
     while (this.media.size >= MAX_MEDIA) {
       const oldest = this.media.keys().next().value;
       if (!oldest) break;
@@ -161,7 +169,9 @@ export class SessionStore {
       secretAccessKey: encode(session.secretAccessKey),
       sessionToken: session.sessionToken ? encode(session.sessionToken) : undefined,
       key,
-      versionId,
+      versionId: opts.versionId,
+      kind: opts.kind ?? 'read',
+      maxBytes: opts.maxBytes,
       expiresAt: this.now() + ttlMs,
     });
     return token;
@@ -177,7 +187,7 @@ export class SessionStore {
     return true;
   }
 
-  useMedia(token: string): { session: SessionView; key: string; versionId?: string } | null {
+  useMedia(token: string): { session: SessionView; key: string; versionId?: string; kind: 'read' | 'write'; maxBytes?: number } | null {
     const grant = this.media.get(token);
     if (!grant || grant.expiresAt <= this.now()) {
       this.revokeMedia(token);
@@ -196,6 +206,8 @@ export class SessionStore {
       },
       key: grant.key,
       versionId: grant.versionId,
+      kind: grant.kind,
+      maxBytes: grant.maxBytes,
     };
   }
 

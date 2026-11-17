@@ -141,6 +141,7 @@ export type VaultMethod =
   | 's3.copy'
   | 's3.rename'
   | 's3.shareLink'
+  | 's3.shareWrite'
   | 's3.listBuckets'
   | 's3.listVersions'
   | 's3.deleteVersion'
@@ -232,6 +233,7 @@ export interface VaultParams {
   's3.rename': { profile: S3ProfileConfig; credentials: Credentials; sourceKey: string; destKey: string };
   /** Server-streamed share link. Relative URL; the caller makes it absolute. */
   's3.shareLink': { profile: S3ProfileConfig; credentials: Credentials; key: string; expiresIn: number };
+  's3.shareWrite': { profile: S3ProfileConfig; credentials: Credentials; key: string; expiresIn: number; maxBytes: number };
   's3.listBuckets': { profile: S3ProfileConfig; credentials: Credentials };
   's3.listVersions': { profile: S3ProfileConfig; credentials: Credentials; key: string };
   's3.deleteVersion': { profile: S3ProfileConfig; credentials: Credentials; key: string; versionId: string };
@@ -288,6 +290,7 @@ export type VaultResults = {
   's3.copy': { copied: number };
   's3.rename': { moved: number };
   's3.shareLink': { url: string; expiresIn: number };
+  's3.shareWrite': { url: string; expiresIn: number; maxBytes: number };
   's3.listBuckets': { buckets: string[] };
   's3.listVersions': VersionListResult;
   's3.deleteVersion': { deleted: boolean };

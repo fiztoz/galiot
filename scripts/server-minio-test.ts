@@ -186,6 +186,36 @@ async function main(): Promise<void> {
   check('issued link survives session close', afterLock.status === 200);
   await fetch(`${origin}${survivor.url}`, { method: 'DELETE', headers: gateHeaders() });
 
+  // Write grant: bounded PUT through the server, no gate, revocable.
+  const writeOpened = await fetch(`${origin}/api/s3/sessions`, {
+    method: 'POST',
+    headers: gateHeaders(true),
+    body: JSON.stringify({ endpoint, region, bucket, pathStyle: true, accessKeyId, secretAccessKey, sessionToken: sts }),
+  });
+  const writeSession = ((await writeOpened.json()) as { result: { sessionId: string } }).result.sessionId;
+  const writeGrant = await call<{ url: string; maxBytes: number }>(writeSession, {
+    op: 'shareWrite',
+    key: `${prefix}inbox.bin`,
+    expiresIn: 3600,
+    maxBytes: 32,
+  });
+  const uploadOk = await fetch(`${origin}${writeGrant.url}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: 'hello',
+  });
+  check('write grant accepts a bounded PUT without the gate', uploadOk.status === 200);
+  const uploadedHead = await call<{ contentLength: number }>(writeSession, { op: 'head', key: `${prefix}inbox.bin` });
+  check('uploaded bytes landed in S3', uploadedHead.contentLength === 5);
+  const uploadBig = await fetch(`${origin}${writeGrant.url}`, { method: 'PUT', body: 'x'.repeat(33) });
+  check('write grant refuses bodies over the cap', uploadBig.status === 413);
+  const uploadAnonRevoke = await fetch(`${origin}${writeGrant.url}`, { method: 'DELETE' });
+  check('revoking a write grant without the gate is refused', uploadAnonRevoke.status === 403);
+  await fetch(`${origin}${writeGrant.url}`, { method: 'DELETE', headers: gateHeaders() });
+  const uploadAfter = await fetch(`${origin}${writeGrant.url}`, { method: 'PUT', body: 'hello' });
+  check('revoked write grant stops accepting uploads', uploadAfter.status === 404);
+  await fetch(`${origin}/api/s3/sessions/${writeSession}`, { method: 'DELETE', headers: gateHeaders() });
+
   const buckets = await fetch(`${origin}/api/s3/list-buckets`, {
     method: 'POST',
     headers: gateHeaders(true),

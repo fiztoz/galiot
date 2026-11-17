@@ -36,7 +36,8 @@ export const EXPIRY_PRESETS: { label: string; seconds: number }[] = [
 /** True for links that stream from this Galiot server rather than from S3. */
 export function isServerLink(url: string): boolean {
   try {
-    return new URL(url, window.location.origin).pathname.startsWith('/api/s3/media/');
+    const path = new URL(url, window.location.origin).pathname;
+    return path.startsWith('/api/s3/media/') || path.startsWith('/api/s3/upload/');
   } catch {
     return false;
   }
@@ -49,14 +50,18 @@ export async function createLink(
   permission: LinkPermission,
   expiresIn: number,
   via: 'server' | 's3' = 'server',
+  maxBytes = 100 * 1024 * 1024,
 ): Promise<PresignedRecord> {
   const sealed = await getSealedCredentials(db, profile.id);
   const config = profileConfig(profile);
 
   const common = { profile: config, credentials: { sealed }, key, expiresIn };
   let url: string;
-  if (permission === 'read' && via === 'server') {
-    const grant = await vaultService.call('s3.shareLink', common);
+  if (via === 'server') {
+    const grant =
+      permission === 'read'
+        ? await vaultService.call('s3.shareLink', common)
+        : await vaultService.call('s3.shareWrite', { ...common, maxBytes });
     url = `${window.location.origin}${grant.url}`;
   } else if (permission === 'read') {
     url = (await vaultService.call('s3.presignGet', common)).url;
@@ -133,3 +138,6 @@ export const revocationHint =
 
 export const serverLinkHint =
   'A server link streams from this Galiot host, so it works for people who cannot reach S3 themselves. Revoke it here and it stops working at once.';
+
+export const serverWriteHint =
+  'An upload link accepts one PUT to exactly this key, up to the byte cap, until it expires. The recipient never sees credentials and never needs a route to S3.';

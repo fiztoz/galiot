@@ -287,6 +287,11 @@ export class RemoteS3 {
     return this.call('share', { key, expiresIn });
   }
 
+  /** Bounded upload link: one key, one byte cap, expiring, revocable. */
+  shareWrite(key: string, expiresIn: number, maxBytes: number): Promise<{ url: string; expiresIn: number; maxBytes: number }> {
+    return this.call('shareWrite', { key, expiresIn, maxBytes });
+  }
+
   probe(): Promise<ProbeResult> {
     return this.call('probe', {});
   }

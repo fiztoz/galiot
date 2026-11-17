@@ -406,6 +406,12 @@ async function dispatch<M extends VaultMethod>(
       return (await sessionClient(p.profile, creds)).shareLink(p.key, p.expiresIn);
     }
 
+    case 's3.shareWrite': {
+      const p = params as NonNullable<VaultRequest<'s3.shareWrite'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).shareWrite(p.key, p.expiresIn, p.maxBytes);
+    }
+
     case 's3.listBuckets': {
       const p = params as NonNullable<VaultRequest<'s3.listBuckets'>['params']>;
       const creds = await resolveCredentials(p.credentials);
