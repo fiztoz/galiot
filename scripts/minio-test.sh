@@ -82,4 +82,8 @@ echo "=== real-server protocol behaviour (test:minio) ==="
 GALIOT_S3_BUCKET=galiot-cors bun run test:minio
 
 echo ""
-echo "Both suites passed against a real S3 implementation."
+echo "=== self-hosted server path (test:minio-server) ==="
+GALIOT_S3_BUCKET=galiot-test bun run test:minio-server
+
+echo ""
+echo "All three suites passed against a real S3 implementation."

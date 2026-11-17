@@ -1,5 +1,12 @@
 # Launch checklist (roadmap 5.4)
 
+> **⚠️ Superseded (2026-11-17):** Galiot is self-hosted. The server signs and
+> calls S3; a static host cannot run it, and bucket CORS is not required for
+> listing, transfer, edit, or preview. The static-host choice, the deploy-secret
+> step, and the production-origin CORS step below no longer apply. The current
+> operator path is [docs/OPERATIONS.md](docs/OPERATIONS.md); the reasoning is in
+> `docs/STACK_DECISION.md` §22–24. This file is kept as the original checklist.
+
 Everything below is a decision or a secret that the code cannot provide. Phases
 1–4 are complete; this is the operational work to take the app live.
 

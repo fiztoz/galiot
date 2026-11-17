@@ -7,8 +7,8 @@
 ## Project Identity
 
 - **Name**: Galiot — The Agile Cloud Explorer
-- **Architecture**: Static SPA plus a provider-neutral Bun server that forwards already-signed S3 requests. Not a Cloudflare Worker or a Vercel function. Signed requests always leave from that server.
-- **Hosting**: Any host that can run Bun or the container (`bun run server`). A static file host can serve the bundle, and S3 calls still need the Bun server on an origin the page can reach.
+- **Architecture**: Self-hosted SPA plus a provider-neutral Bun server. The server signs S3 requests and opens the connection. The browser talks only to that server. Not a Cloudflare Worker or a Vercel function.
+- **Hosting**: The operator runs Bun or the container (`bun run server`) on a machine that can reach the S3 endpoint. A static file host cannot connect to S3.
 - **License**: MIT
 
 ## Tech Stack (Canonical Source: `docs/STACK_DECISION.md`)
@@ -22,7 +22,7 @@
 | Styling | Tailwind CSS ^4.3 |
 | Editor | CodeMirror 6 (NOT Monaco) |
 | Database | PGlite ≥ 0.5.8 (Postgres 18.3 WASM), IDB VFS primary |
-| S3 Signing | Vendored aws4fetch (src/lib/aws4fetch.ts) |
+| S3 Signing | Vendored aws4fetch, used by the self-hosted server |
 | Vault | WebCrypto AES-GCM-256 + PBKDF2-600k |
 | Icons | Lucide React |
 
@@ -36,7 +36,8 @@
 
 ### Security Rules
 - **Never** expose raw S3 secret keys to the main thread
-- All crypto operations in Web Workers only
+- The vault worker may send credentials to the same-origin server for a session. The server keeps them in memory and signs there.
+- All vault crypto operations in Web Workers only
 - Memory zeroing (`buffer.fill(0)`) after sensitive operations
 - No `eval`, no `new Function`, no inline scripts
 - No external CDN resources — everything vendored

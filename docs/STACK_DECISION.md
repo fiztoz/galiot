@@ -927,5 +927,210 @@ routable from a laptop VPN is unreachable from a server that is not on that VPN.
 
 ---
 
+## 22. Re-verification log — server-side S3 connection
+
+The signed-request proxy is no longer the product path. Galiot is a self-hosted
+app. `bun run server` (or the container) signs with the vendored aws4fetch and
+opens the TCP connection itself. The browser calls `/api/s3` on the same origin.
+
+What changed:
+
+- A session is created on the server. Credentials are held in memory, wiped on
+  lock or expiry, and are not written to disk. The browser vault still seals
+  them at rest and still keeps the DEK off the main thread.
+- Listing, edit, preview, and transfer bytes go through that session. Preview
+  uses a same-origin media URL, so the visitor's browser does not need a route
+  to the bucket.
+- Share links are still presigned S3 URLs. The recipient's network has to reach
+  S3. That is a different path from the app.
+- The host running Galiot must be able to resolve and connect to the endpoint,
+  including a private MinIO or an on-premises gateway. Link-local and metadata
+  addresses stay blocked. Private LAN addresses stay allowed.
+- A non-loopback bind still refuses to start without `GALIOT_PROXY_TOKEN` or
+  `GALIOT_GATE`. That gate is not an S3 key.
+- `connect-src` is `'self'`. The page cannot open its own connection to S3.
+
+A static file host is not a supported way to use the app. There is no platform
+function and no provider-specific deploy step.
+
+---
+
+## 23. Re-verification log — server-side file operations and share routes
+
+The explorer gained the file actions a browser needs, all executed by the
+server inside S3: `CopyObject` for objects up to 5 GiB, multipart
+`UploadPartCopy` above that, rename/move as copy-then-delete, folder creation
+as an empty slash-terminated PUT, and `HeadObject` for object details
+including storage class. Folder walks are capped at 10,000 objects.
+`ListBuckets` is offered in the connection form when the key allows it;
+`AccessDenied` falls back to typing the bucket name, with that said plainly.
+
+Share links now have two explicit routes. The default streams from the Galiot
+server through a revocable, expiring grant, so a recipient who cannot reach S3
+can still download. The presigned S3 URL remains as the "Direct S3" option and
+for write links; it cannot be revoked and uses the recipient's network.
+
+Motivation, verified: MinIO's community console lost its management UI in May
+2025 (maintainer statement in minio/minio#21317), and the repository was
+archived in April 2026. Self-hosted S3 still needs a usable browser, and the
+host that can reach a private bucket is usually a server, not a laptop.
+
+Sources:
+- https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html (5 GiB single-copy limit; UploadPartCopy above it)
+- https://github.com/minio/minio/issues/21317 (community console scope, maintainer comment 2025-05-26; archive notice 2026-04-25)
+
+Operator guidance lives in `docs/OPERATIONS.md`.
+
+---
+
+## 24. Re-verification log — live server path, and two defects it caught
+
+**Stale transfer sessions.** The transfer worker cached server session ids and
+never invalidated them, so a vault lock (manual or 15-minute idle) left
+in-flight and resumed transfers sending dead ids. The worker now clears its
+cache on a `sessions-closed` port notice from the vault worker, and reopens once
+when the server answers its own expired-session 404. An S3 `NoSuchKey` 404 is
+XML, not that JSON, and does not trigger a reopen (`src/transfer/session.ts`,
+unit-tested).
+
+**Server-originated PUTs had no Content-Length.** With signing moved to the
+server, a PUT whose body is a string went out chunked: no browser remained to
+add the length header. Zenko CloudServer answered `411 MissingContentLength`.
+The client now supplies Content-Length for known-size bodies before signing
+(`bodyByteLength` in `src/s3/client.ts`); streamed uploads already carry the
+length from the API layer. Regression-tested in `src/server/api.test.ts`.
+
+**MinIO images are gone; the live suite moved.** Verified 2026-11-17:
+`quay.io/minio/minio:latest` and a pinned 2025 release both answer 401, and
+Docker Hub denies `minio/minio`. Upstream was archived 2026-04-25. The live
+suite (`scripts/live-s3-test.sh`) now runs Zenko CloudServer, an independent S3
+implementation with its own SigV4 validation; `scripts/minio-test.sh` remains
+for cached MinIO images. Results against CloudServer: transfer integrity 22/22,
+server path 19/19 (sessions, gate refusal, multipart parts, byte-exact download,
+range resume at a part boundary, folder copy/rename, share read without the
+gate, gated revoke, link survival after session close, list-buckets, cleanup).
+
+**Visual verification limit.** The rendered check covers the unlock gate and
+header at desktop and phone widths. Deeper screens need a master password, and
+the interactive browser tool refuses credential entry, so explorer dialogs and
+the share routes remain verified by types, unit tests, and the live suite only.
+
+---
+
+## 25. Re-verification log — versions, bucket search, connection sharing
+
+**Object versions.** `ListObjectVersions` filtered to the exact key, with delete
+markers shown as such; a never-versioned bucket reports `unversioned` instead of
+a fake history. Restore is a server-side `CopyObject` with
+`x-amz-copy-source: /bucket/key?versionId=…` onto the same key, so it becomes a
+new latest version and nothing is overwritten lossily. Old versions download
+through a media grant that carries the versionId; purge deletes one exact
+version (two-click confirm). All server-side; unit and live tested.
+
+**Whole-bucket search.** The explorer's search only covered the cached folder.
+A server walk (no delimiter, capped 50,000 keys / 500 matches, continuation
+tokens honoured) now answers "search whole bucket", with the cap stated in the
+result line. Clicking a match jumps to its folder.
+
+**Connection sharing.** Saved profiles already existed (PGlite `profiles`,
+sealed credentials), as did ciphertext-only vault backup/restore and Galeon
+import. Added: secret-free connection export/import (`galiot.connection` v1,
+copy JSON or save file; import prefills the connection form with blank keys).
+The parser refuses any payload carrying credential fields and re-screens
+headers, so a hand-edited "share" cannot smuggle keys. Moving keys remains the
+vault backup's job, under its passphrase — documented in OPERATIONS §6.
+
+Live results against Zenko CloudServer: integrity 22/22, server path 25/25
+including versioning enable, two-version listing, restore-to-current, old
+version download through the server, single-version purge, bucket search, and
+full version cleanup. Unit suite 394 tests.
+
+---
+
+## 26. Re-verification log — bulk downloads, cold storage, keyboard, ECS
+
+**Folder and bulk downloads.** Download and drop-to-local now expand folders
+through a capped server walk (`listTree`, 10,000 objects) into one transfer per
+object, carrying relative names; the local-folder write path creates nested
+directories so structure survives (`src/transfer/paths.ts`, unit-tested).
+Archived objects are counted in the notice rather than silently skipped.
+
+**Cold storage.** Archive classes (GLACIER, DEEP_ARCHIVE, GLACIER_IR) show a
+snowflake in list and grid; Details reads `x-amz-restore` and offers
+`RestoreObject` with a days choice; a failed transfer with `InvalidObjectState`
+says to restore first. Providers without archive tiers answer 501, surfaced as
+unsupported (unit-tested).
+
+**Keyboard.** ⌘K/Ctrl+K opens a palette over existing actions; arrow keys move
+selection, shift extends from the anchor, Enter opens. No new server surface.
+
+**Dell ECS / ObjectScale.** Compatible by protocol through the server path.
+Verified from vendor documentation: S3 on 9020/9021 (Dell default port table via
+the Kemp ECS guide), path-style required (Starburst Dell connector docs),
+`GetBucketLocation` unsupported per Dell's S3 matrix — Galiot never calls it.
+Namespace rides as `x-emc-namespace` custom header. Added a ListObjects v1
+marker-paging fallback for ECS/ViPR-family gateways without v2; the mode sticks
+for the session so pages do not flip back (unit-tested). ECS itself remains
+unexercised live here; OPERATIONS §8 says so and points at the live suite.
+
+Sources:
+- https://docs.progress.com/bundle/ecs-connection-manager-deployment-guide-kemp-ecs-connection-manager-ga/page/hqi1696458877261.html (ports; Dell S3 guidance)
+- https://starburstdata.github.io/latest/connector/starburst-dell-object-storage.html (path-style for ECS/ObjectScale)
+
+---
+
+## 27. Re-verification log — live against real AWS S3
+
+Ran `scripts/server-minio-test.ts` against `https://s3.us-east-1.amazonaws.com`
+with a throwaway bucket (`galiot-live-…`), using the operator's `galiot` AWS
+profile and temporary credentials. **26/26 checks passed**: sessions and gate,
+listing, put/head, multipart parts, byte-exact download, range resume, folder
+copy/rename, share read/revoke/survival, list-buckets, versioning enable,
+two-version listing, restore-to-current, old-version download, single-version
+purge, bucket search, listTree, and full cleanup. The bucket was then emptied
+of versions and markers and deleted; HeadBucket confirms 404. No other bucket
+or resource was modified.
+
+One harness defect found and fixed: the suite's direct signer for the
+versioning step omitted the STS session token, so temporary credentials got
+403 there while every server-session call (which carried the token) worked.
+The signer now passes it (`sessionToken: sts`). Also added: when a key lacks
+`s3:PutBucketVersioning` (403), the versioning checks skip with an explanation
+instead of failing — a permission boundary is not a Galiot defect.
+
+AWS S3 joins Zenko CloudServer and MinIO-family as exercised implementations.
+R2 and B2 remain unexercised.
+
+---
+
+## 28. Re-verification log — live against a Dell ECS dev gateway, scoped
+
+R2 and B2 are skipped by operator decision (no accounts). ECS was exercised
+live against an on-premises ECS dev gateway (endpoint and bucket belong to
+another project; neither is named here, per the Hostnames rule), using
+credentials the operator authorised from Galeon's OS-keychain store.
+
+Because the bucket is not ours, the suite gained **scoped mode**
+(`GALIOT_LIVE_SCOPED=1`): every object read and write stays inside the run's
+own `server-suite-<ts>/` prefix, bucket-level configuration is never touched
+(versioning checks skip), search walks only that prefix, and cleanup removes
+only that prefix. Result: **20/20 checks** — sessions/gate, listing, put/head,
+multipart parts, byte-exact download, range resume, folder copy/rename, share
+read/revoke/survival, prefix search, listTree, cleanup. An independent sweep
+afterwards found zero objects under any test prefix.
+
+Observed permission boundaries, handled as skips with the provider's code:
+`ListBuckets` → `AccessDenied` (bucket-scoped key). The first scoped run
+stopped at that check before cleanup; the leftovers (4 objects) were removed
+by a prefix-only sweep before the suite was fixed and re-run.
+
+ECS behaviour confirmed live: SigV4 with path-style on 9021, ListObjects
+paging, multipart upload and completion, CopyObject, multi-delete with
+Content-MD5, range GET, and presigned-free server streaming all work. The
+ListObjects v1 fallback (§26) remains for older gateways; this one answered
+the v2 path.
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*

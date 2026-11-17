@@ -1,6 +1,6 @@
 # Galiot — The Agile Cloud Explorer
 
-> *A local-first cloud & object storage web client inspired by **Galeon**, powered by **PGlite** (WASM Postgres) and **Bun**. The app server forwards signed S3 requests, so buckets do not need CORS for listing and transfers. Host the server anywhere — it is not a Cloudflare or Vercel app.*
+> *A self-hosted cloud & object storage web client inspired by **Galeon**, powered by **PGlite** (WASM Postgres) and **Bun**. The server signs and calls S3. You run it on a machine that can reach the bucket. It is not a Cloudflare or Vercel app.*
 
 ---
 
@@ -11,9 +11,9 @@
 **Galiot** is its agile, web-native cousin. Where Galeon serves as the heavy native desktop flagship (with direct access to the OS keychain and local binaries), Galiot brings that same high-performance, keyboard-first, and zero-telemetry experience **directly into any web browser**.
 
 ### The Core Architectural Pillars:
-1. **Local-first vault, provider-neutral server**: Credentials stay in the browser vault. A plain Bun server forwards already-signed S3 requests. It is not built as a Cloudflare Worker or a Vercel function — run it on any machine or container.
+1. **Self-hosted server, local vault**: You run Galiot. The Bun server signs each S3 request and opens the connection. Credentials are sealed in the browser vault and sent to your own server for the session only. It is not a Cloudflare Worker or a Vercel function.
 2. **PGlite WASM Engine**: Runs genuine PostgreSQL 18.3 compiled to WebAssembly inside a browser Web Worker, persisting data locally to the browser's **Origin Private File System (OPFS)**.
-3. **One way to reach S3**: the browser signs each request, then the Bun server forwards it. Traffic leaves from the machine running Galiot, and the bucket does not need CORS for listing, transfer, or edit. The server has to be able to reach the endpoint.
+3. **The host must reach S3**: listing, transfer, edit, and preview all go through the server. The visitor's browser does not need a route to the bucket, and the bucket does not need CORS for those operations. A private MinIO or on-premises gateway works when the Galiot host can reach it.
 4. **HTML5 Dual-Pane Local Explorer**: Mounts local computer directories using the **File System Access API** (`window.showDirectoryPicker()`).
 5. **In-Browser CodeMirror 6 Editor**: Edit remote files with real language support, review a side-by-side diff, then save straight back to the bucket. Images, PDFs, audio and video preview natively.
 6. **Bun 1.4 Toolchain**: Developed and bundled with Bun 1.4 for sub-second builds and instant static packaging.
@@ -40,9 +40,9 @@ In maritime history:
 | (Bun server + static bundle — host the process anywhere)                |
 +───────────────────────────────────────────────────────────────────────────+
 |                                                                           |
-| App server (Bun, any host — not a platform function)                    |
+| App server (Bun, any host that can reach S3 — not a platform function) |
 |   ├── Serves the static bundle: index.html + JS + CSS + pglite.wasm       |
-|   └── /api/s3-proxy forwards signed S3 requests on the server's network   |
+|   └── /api/s3 signs requests and calls the bucket on this host's network  |
 |                                                                           |
 |   User's Browser (Chrome / Safari / Edge / Firefox)                       |
 |   ├── React 19 UI Layer (TailwindCSS v4 + TanStack Virtual + Lucide)      |
@@ -58,8 +58,8 @@ In maritime history:
 |   │                                                                       |
 |   ├── Vault Worker (Web Worker)                                            |
 |   │   ├── PBKDF2-600k → AES-KW unwrap → AES-GCM-256 for S3 credentials     |
-|   │   ├── Holds the DEK and every signed request (15-min idle auto-lock)   |
-|   │   └── Signs requests for the transfer worker over a MessagePort        |
+|   │   ├── Holds the DEK (15-min idle auto-lock) and opens a server session |
+|   │   └── Gives the transfer worker a session id, never the secret         |
 |   │                                                                       |
 |   ├── Transfer Worker (Web Worker)                                         |
 |   │   ├── Parallel multipart uploads with pause/resume + part ledger      |
@@ -68,7 +68,8 @@ In maritime history:
 |   └── UI (main thread)                                                     |
 |       ├── Virtualized list/grid explorer: multi-select, lasso, filters    |
 |       ├── CodeMirror 6 editor + diff, media previews, presigned links     |
-|       └── Signed S3 calls go to /api/s3-proxy on this origin             |
+|       └── S3 operations go to /api/s3 on this origin. The page does not   |
+|           open its own connection to the bucket.                          |
 |                                                                           |
 +───────────────────────────────────────────────────────────────────────────+
 ```
@@ -81,7 +82,20 @@ bun run dev          # http://127.0.0.1:5173, proxy included
 bun run build && bun run server
 ```
 
-A public bind refuses to start unless `GALIOT_PROXY_TOKEN` is set (or you explicitly set `GALIOT_PROXY_OPEN=1`). The token is a gate for the proxy, not an S3 key. Share links still point directly at S3 and use the recipient's network.
+A public bind refuses to start unless `GALIOT_PROXY_TOKEN` or `GALIOT_GATE` is set (or you explicitly set `GALIOT_PROXY_OPEN=1`). The gate is not an S3 key.
+
+Rename, move, copy and new folders run inside S3 (`CopyObject`, multipart
+`UploadPartCopy` above 5 GiB) — the bytes never pass through the browser. Share
+links default to a short-lived URL that streams from this server, so they work
+for people who cannot reach S3 and can be revoked here. A presigned S3 link
+remains available as an explicit option; it uses the recipient's network and
+cannot be revoked. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+On versioned buckets, Details lists every version with download, restore
+(server-side copy onto the key), and permanent purge. Search can walk the whole
+bucket on the server, not just the cached folder. Connections can be shared as
+secret-free JSON ("Share connection" / "Import connection"); moving keys stays
+with the ciphertext-only vault backup under its passphrase.
 
 ---
 
@@ -91,6 +105,7 @@ The complete research and technical specification suite for Galiot:
 
 | Document | Description |
 |---|---|
+| [**docs/OPERATIONS.md**](docs/OPERATIONS.md) | Operator guide: running the server, host reachability, the access gate, where credentials live, and which network each feature uses. |
 | [**docs/STACK_DECISION.md**](docs/STACK_DECISION.md) | Verified stack comparison with sources, provisional decisions, and corrections to earlier specs (2026-09-17; pass 3 2026-09-18). |
 | [**docs/FEASIBILITY_AND_RISKS.md**](docs/FEASIBILITY_AND_RISKS.md) | Browser feasibility pass: Postgres 18.3, memory-resident IDB VFS, Safari 7-day storage deletion, part-buffered S3 uploads, and the revised Phase 1 spike list (2026-09-18). |
 | [**docs/HOSTING_COMPARISON.md**](docs/HOSTING_COMPARISON.md) | Free-tier hosting shootout for a public non-commercial OSS app: bandwidth, custom headers, billing risk. Dated research pass; its recommendation is superseded — see STACK_DECISION §12–13. Hosting is treated as an interchangeable implementation detail, not a design constraint. |
@@ -191,6 +206,10 @@ Two consequences of editing, by design:
 ---
 
 ## 8. Fixing CORS from a terminal, with nothing pre-configured
+
+The app itself does not need bucket CORS. Listing, transfer, edit, and preview
+go through the Galiot server. This section is only for a share link or other
+direct browser load of the bucket.
 
 When a bucket has no CORS policy, the browser blocks the very request that would
 write one — so Galiot cannot fix it from the page. The CORS helper offers

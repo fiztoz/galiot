@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The Agile Cloud Explorer \u2014 an S3 client whose signed requests leave through a provider-neutral server proxy",
+  "description": "The Agile Cloud Explorer \u2014 a self-hosted S3 client. The server signs and connects; the host must be able to reach the bucket.",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,7 @@
     "test": "bun test",
     "test:integrity": "bun run scripts/integrity-test.ts",
     "test:minio": "bun run scripts/minio-test.ts",
+    "test:minio-server": "bun run scripts/server-minio-test.ts",
     "bench": "bun run scripts/bench.ts"
   },
   "dependencies": {

@@ -3,10 +3,12 @@
 > **⚠️ Hosting correction (2026-09-24):** the hosting and cost statements in
 > this document are obsolete. See [docs/STACK_DECISION.md](docs/STACK_DECISION.md).
 >
-> **⚠️ S3 path correction:** signed requests now leave through a provider-neutral
-> app server by default, so bucket CORS is not required. A connection can opt
-> into this device's network instead. This file is kept as the original spec;
-> corrections live in the decision log.
+> **⚠️ S3 path correction (2026-09-24, superseded):** signed requests left
+> through a provider-neutral app server. That forwarding path is retired.
+>
+> **⚠️ Current path:** Galiot is self-hosted. The Bun server signs and calls S3.
+> The operator's host must be able to reach the endpoint. The browser does not.
+> This file is kept as the original spec; corrections live in the decision log.
 
 
 > *A comprehensive architectural blueprint for porting Galeon's desktop client paradigm to a 100% client-side web application hosted for free on GitHub Pages.*
