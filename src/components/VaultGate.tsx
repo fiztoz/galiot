@@ -51,7 +51,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       setConfirmPassword('');
       onUnlockChange?.(false);
       setState('unlock');
-      setNotice('Vault auto-locked after inactivity.');
+      setNotice('Locked after inactivity. Enter your password to continue.');
 
       void (async () => {
         try {
@@ -78,11 +78,11 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       setNotice(null);
 
       if (password.length < 8) {
-        setError('Passphrase must be at least 8 characters.');
+        setError('Password must be at least 8 characters.');
         return;
       }
       if (password !== confirmPassword) {
-        setError('Passphrases do not match.');
+        setError('Passwords do not match.');
         return;
       }
 
@@ -109,7 +109,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       setNotice(null);
 
       if (!password) {
-        setError('Please enter your passphrase.');
+        setError('Please enter your password.');
         return;
       }
 
@@ -132,7 +132,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-6">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
-        <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400 font-medium">Initializing vault…</p>
+        <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300 font-medium">Checking your lock…</p>
       </div>
     );
   }
@@ -150,20 +150,20 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-teal-100/50 dark:bg-teal-900/30 text-teal-600 dark:text-teal-500 mb-4">
             <Lock size={24} />
           </div>
-          <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
-            {isCreate ? 'Create Master Vault' : 'Unlock Vault'}
+          <h2 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+            {isCreate ? 'Set a master password' : 'Unlock'}
           </h2>
-          <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
             {isCreate
-              ? 'Your passphrase encrypts all cloud credentials locally. It never leaves your browser.'
-              : 'Enter your master passphrase to unlock your connections.'}
+              ? 'This password seals your S3 keys in this browser. While a bucket is open, your Galiot server uses those keys in memory. It does not store them.'
+              : 'Enter your password to open your S3 connections.'}
           </p>
         </div>
 
         <form onSubmit={isCreate ? handleCreateVault : handleUnlockVault} className="space-y-4">
           <div>
             <label htmlFor="passphrase" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-              Master Passphrase
+              Master password
             </label>
             <div className="relative">
               <input
@@ -173,7 +173,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={busy}
                 className="w-full pl-4 pr-10 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent dark:text-zinc-100 transition-shadow disabled:opacity-60"
-                placeholder={isCreate ? 'Minimum 8 characters' : 'Enter passphrase'}
+                placeholder={isCreate ? 'Minimum 8 characters' : 'Enter your password'}
                 autoFocus
               />
               <button
@@ -190,7 +190,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
           {isCreate && (
             <div>
               <label htmlFor="confirm-passphrase" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
-                Confirm Passphrase
+                Confirm password
               </label>
               <input
                 id="confirm-passphrase"
@@ -199,7 +199,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 disabled={busy}
                 className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent dark:text-zinc-100 transition-shadow disabled:opacity-60"
-                placeholder="Confirm your passphrase"
+                placeholder="Confirm your password"
               />
             </div>
           )}
@@ -224,11 +224,11 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
             {busy ? (
               <>
                 <Loader2 size={18} className="animate-spin" />
-                Deriving key (PBKDF2 ×600,000)…
+                {isCreate ? 'Setting password…' : 'Unlocking…'}
               </>
             ) : isCreate ? (
               <>
-                Create Vault
+                Set password and continue
                 <Check size={18} />
               </>
             ) : (
@@ -243,8 +243,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
         <p className="mt-6 flex items-start gap-2 text-xs text-zinc-400 dark:text-zinc-500 leading-relaxed">
           <ShieldCheck size={14} className="flex-none mt-0.5" />
           <span>
-            AES-GCM-256 · PBKDF2-SHA256 600k iterations. Credentials are encrypted before they ever
-            touch storage — Galiot cannot read them without your passphrase.
+            The password stays in this browser. S3 keys are sealed here, then used only by the server you are running, and only while unlocked.
           </span>
         </p>
       </div>

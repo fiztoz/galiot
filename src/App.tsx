@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Sailboat, Lock, Unlock, AlertTriangle } from 'lucide-react';
+import { Sailboat, Lock, AlertTriangle } from 'lucide-react';
 import { PGliteProvider } from '@electric-sql/pglite-react';
 import { initDb, type AppDB } from './db/client';
 import { VaultGate } from './components/VaultGate';
@@ -7,12 +7,13 @@ import { ConnectionsView } from './components/ConnectionsView';
 import { TransferDrawer } from './components/TransferDrawer';
 import { transferManager } from './transfer/manager';
 import { purgeExpiredLinks } from './s3/links';
+import { lockVault } from './vault/repository';
 
 function Splash({ label }: { label: string }) {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex flex-col items-center justify-center p-6">
       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
-      <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400 font-medium">{label}</p>
+      <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300 font-medium">{label}</p>
     </div>
   );
 }
@@ -27,11 +28,20 @@ function FatalError({ message }: { message: string }) {
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-2">
           Galiot failed to start
         </h2>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400 break-words">{message}</p>
-        <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-4 leading-relaxed">
-          The embedded Postgres (WASM) engine could not initialize. Private-browsing modes may
-          block OPFS/IndexedDB storage — try a regular window.
+        <p className="text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
+          This browser could not open local storage, so your connections cannot be kept here. Try a regular window, not private browsing.
         </p>
+        <details className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">
+          <summary className="cursor-pointer text-zinc-600 dark:text-zinc-300">Technical detail</summary>
+          <p className="mt-2 break-words">{message}</p>
+        </details>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-5 inline-flex items-center rounded-lg bg-teal-600 px-3 py-2 text-sm font-medium text-white hover:bg-teal-700"
+        >
+          Reload
+        </button>
       </div>
     </div>
   );
@@ -64,24 +74,26 @@ function Shell({ db }: { db: AppDB }) {
             <h1 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50 leading-tight">
               Galiot
             </h1>
-            <p className="text-[11px] text-zinc-400 dark:text-zinc-500 leading-tight hidden sm:block">
-              The Agile Cloud Explorer
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-tight hidden sm:block">
+              S3 file browser
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          {isUnlocked ? (
-            <>
-              <Unlock size={16} className="text-teal-500" />
-              <span>Vault Unlocked</span>
-            </>
-          ) : (
-            <>
-              <Lock size={16} />
-              <span>Vault Locked</span>
-            </>
-          )}
-        </div>
+        {isUnlocked ? (
+          <button
+            type="button"
+            onClick={() => void lockVault()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            <Lock size={15} />
+            Lock
+          </button>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400">
+            <Lock size={15} />
+            Locked
+          </span>
+        )}
       </header>
 
       <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -116,7 +128,7 @@ export function App() {
   }, []);
 
   if (error) return <FatalError message={error} />;
-  if (!db) return <Splash label="Booting Postgres WASM…" />;
+  if (!db) return <Splash label="Starting Galiot…" />;
 
   return (
     <PGliteProvider db={db}>

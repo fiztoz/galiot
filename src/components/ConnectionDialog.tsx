@@ -13,6 +13,7 @@ import {
 import { diagnoseCors } from '../s3/diagnostics';
 import { normalizeEndpoint } from '../s3/url';
 import { getProxyToken } from '../server/session';
+import type { ConnectionShare } from '../vault/share';
 
 interface ConnectionDialogProps {
   db: AppDB;
@@ -20,6 +21,8 @@ interface ConnectionDialogProps {
   onClose: () => void;
   /** When set, the dialog edits this connection instead of creating one. */
   editing?: ConnectionRow | null;
+  /** Prefill for an imported secret-free connection share. Keys stay blank. */
+  draft?: ConnectionShare | null;
   /** Called after an edit is saved. */
   onSaved?: () => void;
 }
@@ -63,12 +66,16 @@ const EMPTY_FORM: FormState = {
   headers: [],
 };
 
-export function ConnectionDialog({ db, open, onClose, editing, onSaved }: ConnectionDialogProps) {
+export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }: ConnectionDialogProps) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: 'idle' });
   const [cors, setCors] = useState<CorsState>({ status: 'idle' });
   const [saving, setSaving] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [buckets, setBuckets] = useState<string[] | null>(null);
+  const [bucketsBusy, setBucketsBusy] = useState(false);
+  const [bucketsError, setBucketsError] = useState<string | null>(null);
 
   const isEdit = editing !== null && editing !== undefined;
   // Keyed on the id, not the object: the connections list re-renders with fresh
@@ -96,12 +103,30 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
               ([name, value]) => ({ name, value }),
             ),
           }
-        : EMPTY_FORM,
+        : draft
+          ? {
+              ...EMPTY_FORM,
+              name: draft.name,
+              endpoint: draft.endpoint,
+              region: draft.region,
+              bucket: draft.bucket,
+              pathStyle: draft.pathStyle,
+              headers: Object.entries(draft.headers).map(([name, value]) => ({ name, value })),
+            }
+          : EMPTY_FORM,
     );
     setError(null);
     setTest({ status: 'idle' });
     setCors({ status: 'idle' });
     setSaving(false);
+    setBuckets(null);
+    setBucketsError(null);
+    setAdvancedOpen(
+      Boolean(editing?.path_style) ||
+        Object.keys(parseStoredHeaders(editing?.custom_headers)).length > 0 ||
+        Boolean(draft?.pathStyle) ||
+        Object.keys(draft?.headers ?? {}).length > 0,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editingId]);
 
@@ -159,6 +184,53 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
     if (!secretKey) return { ok: false, error: 'Secret access key is required.' };
     return { ok: true, headers };
   }, [form, isEdit]);
+
+  /** ListBuckets through the server, so a typed bucket name is not the only way in. */
+  const handleBrowseBuckets = useCallback(async () => {
+    setBucketsBusy(true);
+    setBucketsError(null);
+    setBuckets(null);
+    try {
+      const rawEndpoint = form.endpoint.trim();
+      if (!rawEndpoint) throw new Error('Enter the endpoint first.');
+      const typed = {
+        accessKeyId: form.accessKeyId.trim(),
+        secretAccessKey: form.secretAccessKey.trim(),
+      };
+      let credentials: Credentials;
+      if (typed.accessKeyId && typed.secretAccessKey) {
+        credentials = { plain: typed };
+      } else if (isEdit && editing) {
+        credentials = { sealed: await getSealedCredentials(db, editing.id) };
+      } else {
+        throw new Error('Enter both keys, or edit a stored connection, to list buckets.');
+      }
+      const result = await vaultService.call('s3.listBuckets', {
+        profile: {
+          endpoint: normalizeEndpoint(rawEndpoint),
+          region: form.region.trim() || 'us-east-1',
+          bucket: form.bucket.trim() || 'list',
+          pathStyle: form.pathStyle,
+          network: 'server',
+          proxyToken: getProxyToken(),
+        },
+        credentials,
+      });
+      setBuckets(result.buckets);
+      if (result.buckets.length === 0) {
+        setBucketsError('The key can list buckets, but this endpoint returned none.');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setBucketsError(
+        /AccessDenied/i.test(message)
+          ? 'This key cannot list buckets. Type the bucket name.'
+          : message,
+      );
+    } finally {
+      setBucketsBusy(false);
+    }
+  }, [form, isEdit, editing, db]);
 
   const handleTest = useCallback(async () => {
     const check = buildPayload();
@@ -255,7 +327,8 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
       // simply cannot use virtual-hosted addressing.
       if (verdict.reason === 'addressing-unsupported') {
         setField('pathStyle', true);
-        setCors({ status: 'fail', message: `${verdict.detail} Switching to path-style addressing — test again.` });
+        setAdvancedOpen(true);
+        setCors({ status: 'fail', message: 'This endpoint needs path-style addressing. Turned it on — test again.' });
       } else {
         setCors({ status: 'idle' });
       }
@@ -329,12 +402,12 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
           <div>
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-              {isEdit ? 'Edit Connection' : 'Add Connection'}
+              {isEdit ? 'Edit connection' : 'Add connection'}
             </h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">
+            <p className="text-sm text-zinc-600 dark:text-zinc-300 mt-0.5">
               {isEdit
-                ? 'Change anything — the stored keys are kept unless you replace them.'
-                : 'S3-compatible endpoint — R2, MinIO, AWS S3, B2, Spaces…'}
+                ? 'Stored keys stay unless you replace both of them.'
+                : 'The server running Galiot connects to this bucket. Your browser does not.'}
             </p>
           </div>
           <button
@@ -368,33 +441,52 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
                 className={`${INPUT_CLASS} font-mono text-xs`}
                 value={form.endpoint}
                 onChange={(e) => setField('endpoint', e.target.value)}
-                placeholder="https://accountId.r2.cloudflarestorage.com"
+                placeholder="https://s3.example.com"
                 spellCheck={false}
               />
             </div>
 
-            <div>
-              <label htmlFor="conn-region" className={LABEL_CLASS}>Region</label>
-              <input
-                id="conn-region"
-                className={INPUT_CLASS}
-                value={form.region}
-                onChange={(e) => setField('region', e.target.value)}
-                placeholder="auto"
-                spellCheck={false}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="conn-bucket" className={LABEL_CLASS}>Bucket</label>
+            <div className="col-span-2">
+              <div className="flex items-center justify-between">
+                <label htmlFor="conn-bucket" className={LABEL_CLASS}>Bucket</label>
+                <button
+                  type="button"
+                  onClick={() => void handleBrowseBuckets()}
+                  disabled={bucketsBusy}
+                  className="text-xs font-medium text-teal-700 dark:text-teal-400 hover:text-teal-800 dark:hover:text-teal-300 disabled:opacity-50"
+                >
+                  {bucketsBusy ? 'Listing…' : 'Browse buckets'}
+                </button>
+              </div>
               <input
                 id="conn-bucket"
                 className={INPUT_CLASS}
                 value={form.bucket}
                 onChange={(e) => setField('bucket', e.target.value)}
-                placeholder="my-bucket"
+                placeholder="archive"
                 spellCheck={false}
               />
+              {buckets && buckets.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {buckets.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setField('bucket', name)}
+                      className={`px-2 py-1 rounded-md border font-mono text-xs transition-colors ${
+                        form.bucket === name
+                          ? 'border-teal-500 bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300'
+                          : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800'
+                      }`}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {bucketsError && (
+                <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{bucketsError}</p>
+              )}
             </div>
 
             <div className="col-span-2">
@@ -439,27 +531,48 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
             </div>
           </div>
 
-          <label className="flex items-start gap-2.5 text-sm text-zinc-600 dark:text-zinc-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={form.pathStyle}
-              onChange={(e) => setField('pathStyle', e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-zinc-300 dark:border-zinc-600 text-teal-600 focus:ring-teal-500"
-            />
-            <span>
-              Path-style addressing{' '}
-              <span className="text-zinc-400 dark:text-zinc-500">
-                (required for MinIO, LocalStack and most self-hosted endpoints)
-              </span>
-            </span>
-          </label>
-
-          <CustomHeadersField
-            rows={form.headers}
-            onChange={(headers) => setField('headers', headers)}
-            inputClass={INPUT_CLASS}
-            labelClass={LABEL_CLASS}
-          />
+          <details
+            className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2"
+            open={advancedOpen}
+            onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+          >
+            <summary className="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-200">
+              Advanced settings
+            </summary>
+            <div className="mt-3 space-y-4">
+              <div>
+                <label htmlFor="conn-region" className={LABEL_CLASS}>Region</label>
+                <input
+                  id="conn-region"
+                  className={INPUT_CLASS}
+                  value={form.region}
+                  onChange={(e) => setField('region', e.target.value)}
+                  placeholder="us-east-1"
+                  spellCheck={false}
+                />
+              </div>
+              <label className="flex items-start gap-2.5 text-sm text-zinc-600 dark:text-zinc-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.pathStyle}
+                  onChange={(e) => setField('pathStyle', e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-zinc-300 dark:border-zinc-600 text-teal-600 focus:ring-teal-500"
+                />
+                <span>
+                  Path-style addressing
+                  <span className="block text-zinc-500 dark:text-zinc-400">
+                    Required for most MinIO and on-premises endpoints.
+                  </span>
+                </span>
+              </label>
+              <CustomHeadersField
+                rows={form.headers}
+                onChange={(headers) => setField('headers', headers)}
+                inputClass={INPUT_CLASS}
+                labelClass={LABEL_CLASS}
+              />
+            </div>
+          </details>
 
           {error && (
             <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-900/30">
@@ -509,7 +622,7 @@ export function ConnectionDialog({ db, open, onClose, editing, onSaved }: Connec
               {cors.status === 'testing' ? (
                 <>
                   <Loader2 size={15} className="flex-none mt-0.5 animate-spin" />
-                  Running CORS preflight…
+                  Checking whether this server can reach the bucket…
                 </>
               ) : cors.status === 'ok' ? (
                 <>

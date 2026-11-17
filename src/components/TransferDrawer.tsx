@@ -275,6 +275,11 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                               ? task.error_message
                               : task.status}
                           </span>
+                          {task.status === 'failed' && /InvalidObjectState/i.test(task.error_message ?? '') && (
+                            <span className="block text-[10px] text-sky-600 dark:text-sky-400">
+                              Archived object — restore it from Details, then retry.
+                            </span>
+                          )}
                         </div>
                       </div>
 

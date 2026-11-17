@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { clearProxyToken, enableProxyToken, getProxyToken, readProxyHealth } from '../server/session';
 
 /**
- * Shown only when the app server demands a gate before it will forward S3
- * traffic. Loopback `bun run dev` / `bun run server` do not, so this stays hidden.
+ * Shown only when the app server demands a gate before it will open S3
+ * sessions. Loopback `bun run dev` / `bun run server` do not, so this stays hidden.
  */
 export function ProxyAccessPanel() {
   const [required, setRequired] = useState(false);
@@ -29,12 +29,12 @@ export function ProxyAccessPanel() {
   return (
     <section className="mb-6 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900" aria-labelledby="proxy-gate-heading">
       <h3 id="proxy-gate-heading" className="font-semibold text-zinc-900 dark:text-zinc-50">
-        Server network gate
+        Server access
       </h3>
       <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">
         {accepted && getProxyToken()
-          ? 'On for this tab. Server-network connections can leave through this Galiot server.'
-          : 'This Galiot server will not forward S3 traffic until you enter the gate configured where it is running. It is not an S3 key.'}
+          ? 'On for this tab. This server can open S3 connections.'
+          : 'This server will not connect to S3 until you enter the gate set where Galiot is running. It is not an S3 key.'}
       </p>
       {!(accepted && getProxyToken()) && (
         <form

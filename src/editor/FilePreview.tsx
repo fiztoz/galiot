@@ -12,14 +12,13 @@ interface FilePreviewProps {
   kind: 'image' | 'pdf' | 'audio' | 'video';
 }
 
-/** Presigned, short-lived URL so <img>/<video> can stream without a worker round trip. */
-async function presign(db: AppDB, profile: ConnectionRow, key: string): Promise<string> {
+/** Same-origin media URL. The Galiot server streams the object, so the browser need not reach S3. */
+async function previewUrl(db: AppDB, profile: ConnectionRow, key: string): Promise<string> {
   const sealed = await getSealedCredentials(db, profile.id);
-  const { url } = await vaultService.call('s3.presignGet', {
+  const { url } = await vaultService.call('s3.mediaUrl', {
     profile: profileConfig(profile),
     credentials: { sealed },
     key,
-    expiresIn: 900,
   });
   return url;
 }
@@ -35,7 +34,7 @@ export function FilePreview({ db, profile, file, kind }: FilePreviewProps) {
     let cancelled = false;
     void (async () => {
       try {
-        const signed = await presign(db, profile, file.key);
+        const signed = await previewUrl(db, profile, file.key);
         if (!cancelled) setUrl(signed);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));

@@ -25,11 +25,13 @@ import {
 } from '../localfs/localDirectory';
 import { formatBytes, formatDate } from '../lib/format';
 
-/** Payload the remote pane drops onto us: JSON list of {key,size,name}. */
+/** Payload the remote pane drops onto us: JSON list of {key,size,name,is_dir,storage_class}. */
 export interface RemoteDropItem {
   key: string;
   name: string;
   size: number;
+  is_dir?: boolean;
+  storage_class?: string | null;
 }
 
 export const REMOTE_OBJECT_MIME = 'application/x-galiot-objects';
@@ -191,23 +193,26 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
       <aside className="w-80 flex-none border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex flex-col">
         <div className="flex-none px-4 py-3 border-b border-zinc-100 dark:border-zinc-800">
           <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100 flex items-center gap-2">
-            <HardDrive size={15} className="text-teal-500" />
-            Local
+            <HardDrive size={15} className="text-zinc-500" />
+            Download folder
           </h3>
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Files you download land here. This is not remote storage.
+          </p>
         </div>
 
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
           <FolderOpen size={30} className="text-zinc-300 dark:text-zinc-600 mb-3" />
-          <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Mount a folder</p>
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-            Drag files from here to upload, or drop remote objects here to save them locally.
+          <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Choose a folder</p>
+          <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+            Downloads from the bucket can be saved here. This folder is on this computer, not in S3.
           </p>
 
           {supported ? (
             <button
               type="button"
               onClick={() => void mount()}
-              className="mt-4 px-4 py-2 text-sm font-medium rounded-lg bg-teal-600 hover:bg-teal-700 text-white transition-colors"
+              className="mt-4 px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800"
             >
               Choose folder…
             </button>
@@ -216,7 +221,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
               <button
                 type="button"
                 onClick={() => listingInputRef.current?.click()}
-                className="mt-4 px-4 py-2 text-sm font-medium rounded-lg bg-teal-600 hover:bg-teal-700 text-white transition-colors"
+                className="mt-4 px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800"
               >
                 Choose folder…
               </button>
@@ -262,9 +267,10 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
       onDrop={handleRemoteDrop}
     >
       <div className="flex-none px-3 py-2 border-b border-zinc-100 dark:border-zinc-800 flex items-center gap-2">
-        <HardDrive size={15} className="text-teal-500 flex-none" />
-        <span className="text-sm font-semibold text-zinc-800 dark:text-zinc-100 truncate">
-          {rootName}
+        <HardDrive size={15} className="text-zinc-500 flex-none" />
+        <span className="min-w-0">
+          <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">Download folder</span>
+          <span className="block text-sm font-semibold text-zinc-800 dark:text-zinc-100 truncate">{rootName}</span>
         </span>
         {root.kind === 'listing' && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400">

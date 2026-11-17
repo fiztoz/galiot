@@ -18,8 +18,10 @@ import {
   createLink,
   deleteLink,
   isExpired,
+  isServerLink,
   purgeExpiredLinks,
   revocationHint,
+  serverLinkHint,
   type LinkPermission,
   type PresignedRecord,
 } from '../s3/links';
@@ -33,6 +35,7 @@ interface ShareDialogProps {
 
 export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
   const [permission, setPermission] = useState<LinkPermission>('read');
+  const [via, setVia] = useState<'server' | 's3'>('server');
   const [expirySeconds, setExpirySeconds] = useState(EXPIRY_PRESETS[0]?.seconds ?? 3600);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,13 +59,13 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
     setBusy(true);
     setError(null);
     try {
-      await createLink(db, profile, file.key, permission, expirySeconds);
+      await createLink(db, profile, file.key, permission, expirySeconds, permission === 'write' ? 's3' : via);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, [db, profile, file.key, permission, expirySeconds]);
+  }, [db, profile, file.key, permission, expirySeconds, via]);
 
   const handleCopy = useCallback(async (link: PresignedRecord) => {
     try {
@@ -162,10 +165,50 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
             </div>
           </div>
 
+          {permission === 'read' && (
+            <div>
+              <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+                Link route
+              </label>
+              <div className="flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setVia('server')}
+                  aria-pressed={via === 'server'}
+                  className={`flex-1 px-2 py-1.5 text-xs transition-colors ${
+                    via === 'server'
+                      ? 'bg-teal-600 text-white'
+                      : 'text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-800'
+                  }`}
+                >
+                  Through this server
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVia('s3')}
+                  aria-pressed={via === 's3'}
+                  className={`flex-1 px-2 py-1.5 text-xs transition-colors ${
+                    via === 's3'
+                      ? 'bg-teal-600 text-white'
+                      : 'text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-800'
+                  }`}
+                >
+                  Direct S3
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                {via === 'server'
+                  ? 'Streams from this Galiot host. Works for people who cannot reach S3, and can be revoked here.'
+                  : 'A presigned S3 URL. The recipient must be able to reach the bucket themselves.'}
+              </p>
+            </div>
+          )}
+
           {permission === 'write' && (
             <p className="text-[11px] text-amber-600 dark:text-amber-400">
-              Write links are signed with <code>Content-Type: application/octet-stream</code> — the
-              uploader must send exactly that header.
+              Write links are presigned S3 URLs signed with{' '}
+              <code>Content-Type: application/octet-stream</code> — the uploader must reach S3 and
+              send exactly that header.
             </p>
           )}
 
@@ -222,6 +265,9 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
                         {new Date(link.expires_at).toLocaleString()}
                         {expired ? ' (expired)' : ''}
                       </span>
+                      <span className="flex-none text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+                        {isServerLink(link.url) ? 'server' : 'S3'}
+                      </span>
                       <button
                         type="button"
                         onClick={() => void handleCopy(link)}
@@ -245,7 +291,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
                       >
                         <Link2 size={12} />
                       </a>
-                      <DeleteLinkButton db={db} id={link.id} />
+                      <DeleteLinkButton db={db} link={link} />
                     </li>
                   );
                 })}
@@ -255,7 +301,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
 
           <p className="flex items-start gap-2 text-[11px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
             <Clock size={13} className="flex-none mt-0.5" />
-            {revocationHint}
+            {rows.some((link) => isServerLink(link.url)) ? serverLinkHint : revocationHint}
           </p>
         </div>
       </div>
@@ -263,25 +309,37 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
   );
 }
 
-function DeleteLinkButton({ db, id }: { db: AppDB; id: string }) {
+function DeleteLinkButton({ db, link }: { db: AppDB; link: PresignedRecord }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const server = isServerLink(link.url);
   return (
+    <span className="relative flex-none">
     <button
       type="button"
       disabled={busy}
       onClick={async () => {
         setBusy(true);
+        setError(null);
         try {
-          await deleteLink(db, id);
+          await deleteLink(db, link.id);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
         } finally {
           setBusy(false);
         }
       }}
       className="p-1.5 rounded text-zinc-400 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
-      title="Forget this link"
-      aria-label="Forget this link"
+      title={server ? 'Revoke this link now' : 'Forget this link'}
+      aria-label={server ? 'Revoke this link now' : 'Forget this link'}
     >
       {busy ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
     </button>
+    {error && (
+      <span role="alert" className="absolute right-0 top-full z-10 mt-1 w-48 rounded-lg border border-red-200 bg-red-50 p-2 text-[10px] text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+        {error}
+      </span>
+    )}
+    </span>
   );
 }

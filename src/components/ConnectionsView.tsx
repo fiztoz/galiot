@@ -11,7 +11,12 @@ import {
   Settings,
   FileDown,
   Pencil,
+  Share2,
+  FileUp,
 } from 'lucide-react';
+import { useRef } from 'react';
+import { ShareConnectionDialog } from './ShareConnectionDialog';
+import { parseConnectionShare, type ConnectionShare } from '../vault/share';
 import type { AppDB, ConnectionRow } from '../db/client';
 import { deleteConnection } from '../vault/repository';
 import { ConnectionDialog } from './ConnectionDialog';
@@ -42,6 +47,10 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [sharingId, setSharingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<ConnectionShare | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const connectionFileRef = useRef<HTMLInputElement>(null);
 
   const connections = useLiveQuery<ConnectionRow>(
     `SELECT ${CONNECTION_COLUMNS} FROM profiles ORDER BY name ASC`,
@@ -50,6 +59,18 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const rows = connections?.rows ?? [];
   const active = activeId ? rows.find((r) => r.id === activeId) ?? null : null;
   const editing = editingId ? rows.find((r) => r.id === editingId) ?? null : null;
+  const sharing = sharingId ? rows.find((r) => r.id === sharingId) ?? null : null;
+
+  const handleConnectionFile = useCallback(async (file: File) => {
+    setImportError(null);
+    try {
+      const parsed = parseConnectionShare(await file.text());
+      setDraft(parsed);
+      setDialogOpen(true);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -83,11 +104,11 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
       <div className="max-w-5xl w-full mx-auto p-6 md:p-12">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Connections</h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Buckets</h2>
+            <p className="text-sm text-zinc-600 dark:text-zinc-300 mt-1">
               {rows.length === 0
-                ? 'Add an S3-compatible connection to start exploring your buckets.'
-                : `${rows.length} connection${rows.length === 1 ? '' : 's'} · credentials sealed in your vault`}
+                ? 'Add an S3 bucket. This server connects to it.'
+                : `${rows.length} bucket${rows.length === 1 ? '' : 's'}`}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -100,6 +121,15 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
             >
               <Settings size={16} />
             </button>
+            <button
+              type="button"
+              onClick={() => connectionFileRef.current?.click()}
+              className="inline-flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+              title="Import a shared Galiot connection file (no keys included)"
+            >
+              <FileUp size={15} />
+              <span className="hidden sm:inline">Import connection</span>
+            </button>
             {rows.length > 0 && (
               <button
                 type="button"
@@ -110,6 +140,18 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                 Import from Galeon
               </button>
             )}
+            <input
+              ref={connectionFileRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              aria-label="Choose a Galiot connection file"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleConnectionFile(file);
+                event.target.value = '';
+              }}
+            />
             {rows.length > 0 && (
               <button
                 type="button"
@@ -117,15 +159,15 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                 className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 rounded-lg font-medium text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-950"
               >
                 <Plus size={16} />
-                Add Connection
+                Add connection
               </button>
             )}
           </div>
         </div>
 
-        {deleteError && (
+        {(deleteError || importError) && (
           <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-900/30">
-            {deleteError}
+            {deleteError ?? importError}
           </div>
         )}
 
@@ -136,10 +178,9 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
             <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-6">
               <Sailboat size={32} className="text-zinc-400 dark:text-zinc-500" />
             </div>
-            <h3 className="text-xl font-semibold mb-2">No connections yet</h3>
-            <p className="text-zinc-500 dark:text-zinc-400 mb-8 max-w-md">
-              Add an S3-compatible cloud storage connection to get started managing your buckets and
-              objects — 100% client-side, credentials never leave this browser.
+            <h3 className="text-xl font-semibold mb-2">No buckets yet</h3>
+            <p className="text-zinc-600 dark:text-zinc-300 mb-8 max-w-md">
+              Add an S3 bucket. Galiot's server connects to it, so the machine running Galiot must be able to reach the endpoint.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
@@ -148,7 +189,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                 className="inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900"
               >
                 <Plus size={18} />
-                Add Connection
+                Add connection
               </button>
               <button
                 type="button"
@@ -165,22 +206,22 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
             {rows.map((row) => (
               <div
                 key={row.id}
-                className="group bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 hover:border-teal-500/60 dark:hover:border-teal-500/40 hover:shadow-sm transition-all"
+                className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 hover:border-teal-500/60 dark:hover:border-teal-500/40 transition-colors"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <button
-                      type="button"
-                      onClick={() => setActiveId(row.id)}
-                      className="text-left font-semibold text-zinc-900 dark:text-zinc-50 hover:text-teal-600 dark:hover:text-teal-400 transition-colors flex items-center gap-1.5"
-                    >
+                  <button
+                    type="button"
+                    onClick={() => setActiveId(row.id)}
+                    className="min-w-0 flex-1 text-left rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  >
+                    <span className="font-semibold text-zinc-900 dark:text-zinc-50 hover:text-teal-700 dark:hover:text-teal-400 flex items-center gap-1.5">
                       <span className="truncate">{row.name}</span>
-                      <ChevronRight size={15} className="flex-none text-zinc-400 group-hover:text-teal-500 transition-colors" />
-                    </button>
-                    <p className="mt-1 text-xs font-mono text-zinc-500 dark:text-zinc-400 truncate">
+                      <ChevronRight size={15} className="flex-none text-zinc-400" />
+                    </span>
+                    <span className="mt-1 block text-xs font-mono text-zinc-600 dark:text-zinc-300 truncate">
                       {hostOf(row.endpoint)}
-                    </p>
-                  </div>
+                    </span>
+                  </button>
 
                   {pendingDeleteId === row.id ? (
                     <div className="flex items-center gap-1.5 flex-none">
@@ -204,8 +245,17 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                     <div className="flex items-center gap-1 flex-none">
                       <button
                         type="button"
+                        onClick={() => setSharingId(row.id)}
+                        className="p-2 -mt-1 rounded-md text-zinc-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20"
+                        aria-label={`Share ${row.name}`}
+                        title="Share connection (no keys)"
+                      >
+                        <Share2 size={15} />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => setEditingId(row.id)}
-                        className="p-2 -mt-1 rounded-md text-zinc-400 hover:text-teal-600 hover:bg-teal-50 dark:hover:bg-teal-900/20 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all"
+                        className="p-2 -mt-1 rounded-md text-zinc-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20"
                         aria-label={`Edit ${row.name}`}
                         title="Edit connection"
                       >
@@ -214,7 +264,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                       <button
                         type="button"
                         onClick={() => setPendingDeleteId(row.id)}
-                        className="p-2 -mt-1 -mr-1 rounded-md text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all"
+                        className="p-2 -mt-1 -mr-1 rounded-md text-zinc-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
                         aria-label={`Delete ${row.name}`}
                         title="Delete connection"
                       >
@@ -252,10 +302,19 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
         onClose={() => {
           setDialogOpen(false);
           setEditingId(null);
+          setDraft(null);
         }}
         editing={editing}
-        onSaved={() => setEditingId(null)}
+        draft={draft}
+        onSaved={() => {
+          setEditingId(null);
+          setDraft(null);
+        }}
       />
+
+      {sharing && (
+        <ShareConnectionDialog profile={sharing} onClose={() => setSharingId(null)} />
+      )}
 
       <GaleonImportDialog db={db} open={importOpen} onClose={() => setImportOpen(false)} />
 

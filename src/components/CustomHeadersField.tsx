@@ -144,14 +144,8 @@ export function CustomHeadersField({
             <span className="font-mono">authorization</span> is refused outright.
           </p>
           <p>
-            <span className="font-medium text-zinc-600 dark:text-zinc-300">CORS:</span> the bucket
-            must allow the header, or the browser's preflight will fail. Galiot's recommended
-            policy already allows <span className="font-mono">*</span>.
-          </p>
-          <p>
-            <span className="font-medium text-zinc-600 dark:text-zinc-300">Not sent with share
-            links</span> or the image, audio, video and PDF previews — a presigned URL has to work
-            for whoever receives it, and they cannot add your headers.
+            The server sends these on listing, transfer, edit, and preview. Share links are
+            presigned S3 URLs and cannot carry them.
           </p>
         </div>
       </div>
