@@ -3,7 +3,9 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { pipeline } from 'node:stream/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
-import { assertBindAllowed, handleS3Proxy, PROXY_GATE_ENV, PROXY_OPEN_ENV, S3_PROXY_PATH } from './proxy';
+import { handleAppRequest } from './api';
+import { isAppApiPath } from './protocol';
+import { accessGate, assertBindAllowed } from './proxy';
 
 /** Same proxy and bind policy for Vite dev and preview, under Bun or Node. */
 export function s3ProxyPlugin(env: NodeJS.ProcessEnv = process.env): Plugin {
@@ -13,10 +15,11 @@ export function s3ProxyPlugin(env: NodeJS.ProcessEnv = process.env): Plugin {
   ) => {
     // Vite resolves undefined/false to localhost and true/empty to all interfaces.
     const hostname = host === undefined || host === false ? 'localhost' : host === true || host === '' ? '0.0.0.0' : host;
-    const gate = env[PROXY_GATE_ENV]?.trim() || null;
-    assertBindAllowed(hostname, gate, env[PROXY_OPEN_ENV] === '1');
+    const gate = accessGate(env);
+    assertBindAllowed(hostname, gate.token, gate.open);
     middlewares.use(async (req, res, next) => {
-      if (req.url?.split('?')[0] !== S3_PROXY_PATH) return next();
+      const pathname = req.url?.split('?')[0];
+      if (!pathname || !isAppApiPath(pathname)) return next();
       const controller = new AbortController();
       const abort = () => controller.abort();
       res.once('close', abort);
@@ -35,7 +38,7 @@ export function s3ProxyPlugin(env: NodeJS.ProcessEnv = process.env): Plugin {
           signal: controller.signal,
           duplex: 'half',
         } as RequestInit);
-        const response = await handleS3Proxy(request, { expectedToken: gate });
+        const response = await handleAppRequest(request, { expectedToken: gate.token });
         res.statusCode = response.status;
         response.headers.forEach((value, key) => res.setHeader(key, value));
         if (response.body) await pipeline(Readable.fromWeb(response.body as unknown as NodeReadableStream), res);

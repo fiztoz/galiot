@@ -161,17 +161,32 @@ describe('Vite streaming middleware', () => {
       const address = listener.address();
       if (!address || typeof address === 'string') throw new Error('No port');
       try {
-        const url = `http://127.0.0.1:${address.port}${S3_PROXY_PATH}`;
-        const target = `http://127.0.0.1:${upstream.port}/example-bucket/key`;
-        const put = await fetch(url, { method: 'PUT', body: payload, headers: await signedHeaders(target, 'PUT', payload) });
+        const origin = `http://127.0.0.1:${address.port}`;
+        const opened = await fetch(`${origin}/api/s3/sessions`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: `http://127.0.0.1:${upstream.port}`,
+            region: 'us-east-1',
+            bucket: 'example-bucket',
+            pathStyle: true,
+            accessKeyId: 'review-key',
+            secretAccessKey: 'review-secret',
+          }),
+        });
+        expect(opened.status).toBe(200);
+        const sessionId = ((await opened.json()) as { result: { sessionId: string } }).result.sessionId;
+        const put = await fetch(`${origin}/api/s3/sessions/${sessionId}/object?key=key`, {
+          method: 'PUT',
+          body: payload,
+          headers: { 'content-type': 'text/plain' },
+        });
         expect(put.status).toBe(200);
         await put.text();
         expect(calls.at(-1)?.body).toBe(payload);
         expect(calls.at(-1)?.length).toBe(String(Buffer.byteLength(payload)));
-        const post = await fetch(url, { method: 'POST', headers: await signedHeaders(target, 'POST') });
-        expect(post.status).toBe(200);
-        await post.text();
-        const gzip = await fetch(url, { headers: await signedHeaders(`http://127.0.0.1:${upstream.port}/example-bucket/compressed`) });
+        expect(calls.at(-1)?.authorization).toContain('AWS4-HMAC-SHA256');
+        const gzip = await fetch(`${origin}/api/s3/sessions/${sessionId}/object?key=compressed`);
         expect(await gzip.text()).toBe(payload);
         expect(gzip.headers.get('cache-control')).toBe('no-store');
       } finally {

@@ -11,16 +11,14 @@ import {
 import type {
   CompletedPart,
   DownloadJob,
-  S3Target,
-  SignRequest,
-  SignResponse,
+  SessionRequest,
+  SessionResponse,
   TransferCommand,
   TransferEvent,
   UploadJob,
 } from '../transfer/protocol';
-import { buildS3Url } from '../s3/url';
-import { xmlBlocks, xmlFirst } from '../s3/xml';
-import { fetchViaServer } from '../server/transport';
+import { S3_ACCESS_TOKEN_HEADER } from '../server/protocol';
+import { isSessionExpired, sessionCacheKey } from '../transfer/session';
 
 /** Per-part retry policy for transient network failures. */
 const MAX_ATTEMPTS = 3;
@@ -46,47 +44,33 @@ type SyncCapableFileHandle = FileSystemFileHandle & {
   createSyncAccessHandle?: () => Promise<SyncAccessHandle>;
 };
 
-/** Mirrors S3Client.buildUrl so signed URLs match the client's addressing. */
-function buildObjectUrl(
-  target: S3Target,
-  key: string,
-  query?: Record<string, string>,
-): URL {
-  return buildS3Url(
-    { endpoint: target.endpoint, bucket: target.bucket, pathStyle: target.pathStyle },
-    key,
-    query,
-  );
-}
-
-/** Requests signatures from the vault worker over the shared port. */
-class PortSigner {
-  private pending = new Map<number, { resolve: (v: SignResponse & { type: 'signed' }) => void; reject: (e: Error) => void }>();
+/** Asks the vault worker for a server session. The secret never arrives here. */
+class PortSession {
+  private pending = new Map<number, { resolve: (sessionId: string) => void; reject: (e: Error) => void }>();
   private nextId = 1;
 
-  constructor(private port: MessagePort) {
-    port.onmessage = (event: MessageEvent<SignResponse>) => this.handle(event.data);
+  constructor(private port: MessagePort, private onClosed: () => void) {
+    port.onmessage = (event: MessageEvent<SessionResponse>) => this.handle(event.data);
     port.start();
   }
 
-  private handle(msg: SignResponse): void {
+  private handle(msg: SessionResponse): void {
+    if (msg.type === 'sessions-closed') {
+      this.onClosed();
+      return;
+    }
     const entry = this.pending.get(msg.id);
     if (!entry) return;
     this.pending.delete(msg.id);
-    if (msg.type === 'signed') {
-      entry.resolve(msg);
-    } else {
-      entry.reject(new Error(msg.error));
-    }
+    if (msg.type === 'session') entry.resolve(msg.sessionId);
+    else entry.reject(new Error(msg.error));
   }
 
-  sign(
-    request: Omit<SignRequest, 'type' | 'id'>,
-  ): Promise<SignResponse & { type: 'signed' }> {
+  open(request: Omit<SessionRequest, 'type' | 'id'>): Promise<string> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.port.postMessage({ type: 'sign', id, ...request } satisfies SignRequest);
+      this.port.postMessage({ type: 'session', id, ...request } satisfies SessionRequest);
     });
   }
 }
@@ -110,7 +94,15 @@ class DownloadTarget {
     let handle: FileSystemFileHandle;
 
     if (destination.kind === 'directory') {
-      handle = await destination.handle.getFileHandle(destination.filename, { create: true });
+      // Folder downloads carry relative names with subdirectories; create the
+      // chain so the structure survives instead of flattening or failing.
+      const segments = destination.filename.split('/').filter((s) => s.length > 0 && s !== '.' && s !== '..');
+      const filename = segments.pop() ?? destination.filename;
+      let dir = destination.handle;
+      for (const segment of segments) {
+        dir = await dir.getDirectoryHandle(segment, { create: true });
+      }
+      handle = await dir.getFileHandle(filename, { create: true });
     } else {
       const root = await navigator.storage.getDirectory();
       const dir = await root.getDirectoryHandle(STAGING_DIR, { create: true });
@@ -184,10 +176,11 @@ interface TaskRuntime {
 
 class TransferEngine {
   private readonly tasks = new Map<string, TaskRuntime>();
-  private signer: PortSigner | null = null;
+  private sessions: PortSession | null = null;
+  private sessionIds = new Map<string, string>();
 
   attachPort(port: MessagePort): void {
-    this.signer = new PortSigner(port);
+    this.sessions = new PortSession(port, () => this.sessionIds.clear());
   }
 
   private runtime(taskId: string): TaskRuntime {
@@ -228,30 +221,90 @@ class TransferEngine {
     });
   }
 
-  private async signedFetch(
-    job: UploadJob | DownloadJob,
-    method: string,
-    url: URL,
-    options: { headers?: Record<string, string>; body?: string | Blob; signal?: AbortSignal } = {},
-  ): Promise<Response> {
-    if (!this.signer) throw new Error('Transfer worker has no signing channel');
-    const signed = await this.signer.sign({
+  private async sessionFor(job: UploadJob | DownloadJob): Promise<string> {
+    if (!this.sessions) throw new Error('Transfer worker has no session channel');
+    const cacheKey = sessionCacheKey({
       profileId: job.profileId,
+      endpoint: job.target.endpoint,
+      bucket: job.target.bucket,
+      headers: job.target.headers,
+    });
+    const cached = this.sessionIds.get(cacheKey);
+    if (cached) return cached;
+    const sessionId = await this.sessions.open({
+      profileId: job.profileId,
+      endpoint: job.target.endpoint,
       region: job.target.region,
+      bucket: job.target.bucket,
+      pathStyle: job.target.pathStyle,
       credentials: job.credentials,
-      method,
-      url: url.toString(),
-      headers: options.headers ?? {},
-      // Custom headers ride along so the vault worker can fold them into the
-      // signature. A resumed download's Range stays authoritative.
-      customHeaders: job.target.headers,
-      ...(typeof options.body === 'string' ? { body: options.body } : {}),
+      headers: job.target.headers,
+      accessToken: job.target.proxyToken,
     });
-    const signedRequest = new Request(signed.url, {
-      method: signed.method,
-      headers: signed.headers,
+    this.sessionIds.set(cacheKey, sessionId);
+    return sessionId;
+  }
+
+  private async serverFetch(
+    job: UploadJob | DownloadJob,
+    path: string,
+    options: { method?: string; headers?: Record<string, string>; body?: BodyInit | null; signal?: AbortSignal } = {},
+  ): Promise<Response> {
+    // A cached session can die mid-transfer (vault lock, idle expiry). Reopen
+    // once on the server's own expired-session answer; an S3 404 is not that.
+    for (let attempt = 0; ; attempt += 1) {
+      const sessionId = await this.sessionFor(job);
+      const headers = new Headers(options.headers);
+      if (job.target.proxyToken) headers.set(S3_ACCESS_TOKEN_HEADER, job.target.proxyToken);
+      let response: Response;
+      try {
+        response = await fetch(`/api/s3/sessions/${sessionId}${path}`, {
+          method: options.method ?? 'GET',
+          headers,
+          body: options.body ?? undefined,
+          signal: options.signal,
+          cache: 'no-store',
+        });
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+        throw new Error(
+          'Cannot reach the Galiot server. Run `bun run dev` or `bun run server`. S3 is called from that process, so the machine running Galiot must be able to reach the bucket.',
+          { cause: error },
+        );
+      }
+      if (attempt === 0 && response.status === 404) {
+        const text = await response.clone().text();
+        if (isSessionExpired(response.status, text)) {
+          this.sessionIds.delete(sessionCacheKey({
+            profileId: job.profileId,
+            endpoint: job.target.endpoint,
+            bucket: job.target.bucket,
+            headers: job.target.headers,
+          }));
+          continue;
+        }
+      }
+      return response;
+    }
+  }
+
+  private async serverCall<T>(
+    job: UploadJob | DownloadJob,
+    op: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const response = await this.serverFetch(job, '/call', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ op, ...body }),
+      signal,
     });
-    return fetchViaServer(signedRequest, job.target.proxyToken, options.body, options.signal);
+    const payload = (await response.json()) as { ok?: boolean; result?: T; error?: string };
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `S3 ${op} failed: ${response.status}`);
+    }
+    return payload.result as T;
   }
 
   pause(taskId: string): void {
@@ -372,12 +425,9 @@ class TransferEngine {
     const controller = new AbortController();
     rt.controllers.add(controller);
     try {
-      const url = buildObjectUrl(job.target, job.key);
-      const res = await this.signedFetch(job, 'PUT', url, {
-        headers: {
-          'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
-          'content-type': contentType,
-        },
+      const res = await this.serverFetch(job, `/object?key=${encodeURIComponent(job.key)}`, {
+        method: 'PUT',
+        headers: { 'content-type': contentType },
         body,
         signal: controller.signal,
       });
@@ -407,12 +457,13 @@ class TransferEngine {
       const controller = new AbortController();
       rt.controllers.add(controller);
       try {
-        const url = buildObjectUrl(job.target, job.key, {
+        const query = new URLSearchParams({
+          key: job.key,
           uploadId,
           partNumber: String(part.partNumber),
         });
-        const res = await this.signedFetch(job, 'PUT', url, {
-          headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' },
+        const res = await this.serverFetch(job, `/part?${query}`, {
+          method: 'PUT',
           body: blob,
           signal: controller.signal,
         });
@@ -423,9 +474,7 @@ class TransferEngine {
 
         const eTag = res.headers.get('etag');
         if (!eTag) {
-          throw new Error(
-            'Missing ETag response header — add "ETag" to Access-Control-Expose-Headers in the bucket CORS policy',
-          );
+          throw new Error('The S3 server did not return an ETag for this part.');
         }
 
         const completed: CompletedPart = {
@@ -455,39 +504,33 @@ class TransferEngine {
     );
   }
 
-  private async createMultipart(rt: TaskRuntime, job: UploadJob): Promise<string> {
-    const url = buildObjectUrl(job.target, job.key, { uploads: '' });
-    const res = await this.signedFetch(job, 'POST', url, { signal: this.track(rt) });
-    if (!res.ok) {
-      throw new Error(`CreateMultipartUpload failed: ${res.status} ${res.statusText}`);
-    }
-    const uploadId = xmlFirst(await res.text(), 'UploadId');
-    if (!uploadId) throw new Error('Failed to parse UploadId from response');
-    return uploadId;
+  private async createMultipart(_rt: TaskRuntime, job: UploadJob): Promise<string> {
+    const result = await this.serverCall<{ uploadId: string }>(job, 'createMultipart', {
+      key: job.key,
+      contentType: job.file.type || undefined,
+    }, this.track(_rt));
+    if (!result.uploadId) throw new Error('Failed to parse UploadId from response');
+    return result.uploadId;
   }
 
   private async listParts(
-    rt: TaskRuntime,
+    _rt: TaskRuntime,
     job: UploadJob,
     uploadId: string,
   ): Promise<Map<number, CompletedPart>> {
-    const url = buildObjectUrl(job.target, job.key, { uploadId });
-    const res = await this.signedFetch(job, 'GET', url, { signal: this.track(rt) });
-    if (!res.ok) {
-      throw new Error(`ListParts failed: ${res.status} ${res.statusText}`);
-    }
-
-    const text = await res.text();
+    const result = await this.serverCall<{ parts: { partNumber: number; eTag: string; size: number }[] }>(
+      job,
+      'listParts',
+      { key: job.key, uploadId },
+      this.track(_rt),
+    );
     const parts = new Map<number, CompletedPart>();
-    for (const block of xmlBlocks(text, 'Part')) {
-      const partNumber = parseInt(xmlFirst(block, 'PartNumber') ?? '0', 10);
-      const size = parseInt(xmlFirst(block, 'Size') ?? '0', 10);
-      const eTag = xmlFirst(block, 'ETag') ?? '';
-      if (!partNumber) continue;
-      parts.set(partNumber, {
-        partNumber,
-        eTag,
-        size,
+    for (const part of result.parts) {
+      if (!part.partNumber) continue;
+      parts.set(part.partNumber, {
+        partNumber: part.partNumber,
+        eTag: part.eTag,
+        size: part.size,
         startByte: 0,
         endByte: 0,
       });
@@ -496,47 +539,24 @@ class TransferEngine {
   }
 
   private async completeMultipart(
-    rt: TaskRuntime,
+    _rt: TaskRuntime,
     job: UploadJob,
     uploadId: string,
     parts: CompletedPart[],
   ): Promise<void> {
-    const escapeXml = (value: string): string =>
-      value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
-
-    const xml =
-      `<?xml version="1.0" encoding="UTF-8"?>\n<CompleteMultipartUpload>` +
-      parts
-        .map(
-          (part) =>
-            `<Part><PartNumber>${part.partNumber}</PartNumber><ETag>${escapeXml(part.eTag)}</ETag></Part>`,
-        )
-        .join('') +
-      `</CompleteMultipartUpload>`;
-
-    const url = buildObjectUrl(job.target, job.key, { uploadId });
-    const res = await this.signedFetch(job, 'POST', url, {
-      headers: { 'content-type': 'application/xml' },
-      body: xml,
-      signal: this.track(rt),
-    });
-    if (!res.ok) {
-      throw new Error(`CompleteMultipartUpload failed: ${res.status} ${res.statusText}`);
-    }
+    await this.serverCall(job, 'completeMultipart', {
+      key: job.key,
+      uploadId,
+      parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.eTag })),
+    }, this.track(_rt));
   }
 
   private async abortMultipart(
-    rt: TaskRuntime,
+    _rt: TaskRuntime,
     job: UploadJob,
     uploadId: string,
   ): Promise<void> {
-    const url = buildObjectUrl(job.target, job.key, { uploadId });
-    await this.signedFetch(job, 'DELETE', url, { signal: this.track(rt) });
+    await this.serverCall(job, 'abortMultipart', { key: job.key, uploadId }, this.track(_rt));
   }
 
   private track(rt: TaskRuntime): AbortSignal {
@@ -572,8 +592,7 @@ class TransferEngine {
         const headers: Record<string, string> = {};
         if (offset > 0) headers['Range'] = `bytes=${offset}-`;
 
-        const url = buildObjectUrl(job.target, job.key);
-        const res = await this.signedFetch(job, 'GET', url, { headers });
+        const res = await this.serverFetch(job, `/object?key=${encodeURIComponent(job.key)}`, { headers });
 
         if (offset > 0 && res.status === 200) {
           // Server ignored the range header — restart from zero.

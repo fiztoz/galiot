@@ -1,8 +1,8 @@
 /**
  * Galiot app server — provider-neutral.
  *
- * Serves the built SPA and forwards already-signed S3 requests. Run it on any
- * host that can run Bun. It does not call Cloudflare, Vercel, or any other
+ * Serves the built SPA and calls S3 from this process. Run it on a host that
+ * can reach the bucket. It does not call Cloudflare, Vercel, or any other
  * platform API.
  *
  *   bun run build && bun run server
@@ -10,7 +10,9 @@
 
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { handleS3Proxy, proxyListenConfig, S3_PROXY_PATH } from '../src/server/proxy';
+import { handleAppRequest } from '../src/server/api';
+import { isAppApiPath } from '../src/server/protocol';
+import { proxyListenConfig } from '../src/server/proxy';
 import { contentTypeFor, headersForPath, parseHeadersFile, resolveStaticPath } from '../src/server/static';
 
 const { hostname, port, gate, open } = proxyListenConfig();
@@ -27,8 +29,8 @@ const server = Bun.serve({
   port,
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname === S3_PROXY_PATH) {
-      return handleS3Proxy(request, { expectedToken: gate });
+    if (isAppApiPath(url.pathname)) {
+      return handleAppRequest(request, { expectedToken: gate });
     }
 
     const filePath = resolveStaticPath(root, url.pathname);
@@ -52,9 +54,9 @@ console.log(`
 Galiot server listening on http://${server.hostname}:${server.port}
 
   Static files: ${root}
-  S3 proxy:     ${S3_PROXY_PATH}
-  Proxy gate:   ${gateLabel}
+  S3 API:       /api/s3
+  Access gate:  ${gateLabel}
 
-The proxy forwards signed requests only. It never receives raw S3 keys.
-Every connection uses this process's network.
+This process signs S3 requests and opens the connection. The machine running
+it must be able to reach the bucket. Credentials stay in memory for the session.
 `);

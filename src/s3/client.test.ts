@@ -110,17 +110,64 @@ describe('probeAddressing', () => {
   });
 });
 
-describe('server network routing', () => {
-  test('sends the signed bucket request to the same-origin proxy', async () => {
-    const calls: { url: string; headers: Headers; cache?: RequestCache }[] = [];
-    globalThis.fetch = mock(async (input: string | URL | Request, init: RequestInit = {}) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      calls.push({ url, headers: new Headers(init.headers), cache: init.cache });
-      return new Response('<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>', {
-        status: 200,
-      });
-    }) as unknown as typeof fetch;
+describe('ListObjects v1 fallback for older gateways', () => {
+  test('a 501 on v2 retries with marker paging and reads NextMarker', async () => {
+    const urls: string[] = [];
+    const client = new S3Client({
+      endpoint: 'https://s3.example.com',
+      bucket: 'archive',
+      region: 'us-east-1',
+      pathStyle: true,
+      accessKeyId: 'AKIA',
+      secretAccessKey: 'secret',
+      dispatch: async (signed) => {
+        urls.push(signed.url);
+        if (urls.length === 1) {
+          return new Response('<Error><Code>NotImplemented</Code></Error>', { status: 501 });
+        }
+        return new Response(
+          '<ListBucketResult><IsTruncated>true</IsTruncated><NextMarker>docs/a.txt</NextMarker>' +
+            '<Contents><Key>docs/a.txt</Key><Size>1</Size></Contents></ListBucketResult>',
+          { status: 200 },
+        );
+      },
+    });
+    const page = await client.listObjects('docs/');
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain('list-type=2');
+    expect(urls[1]).not.toContain('list-type');
+    expect(page.objects.map((o) => o.key)).toEqual(['docs/a.txt']);
+    expect(page.nextContinuationToken).toBe('docs/a.txt');
 
+    const second = await client.listObjects('docs/', { continuationToken: page.nextContinuationToken });
+    expect(urls).toHaveLength(3);
+    expect(urls[2]).toContain('marker=docs%2Fa.txt');
+    expect(urls[2]).not.toContain('list-type');
+    expect(second.isTruncated).toBe(true);
+    expect(second.nextContinuationToken).toBe('docs/a.txt');
+  });
+
+  test('a genuine refusal is not retried as v1', async () => {
+    let calls = 0;
+    const client = new S3Client({
+      endpoint: 'https://s3.example.com',
+      bucket: 'archive',
+      region: 'us-east-1',
+      pathStyle: true,
+      accessKeyId: 'AKIA',
+      secretAccessKey: 'secret',
+      dispatch: async () => {
+        calls += 1;
+        return new Response('<Error><Code>AccessDenied</Code></Error>', { status: 403 });
+      },
+    });
+    await expect(client.listObjects()).rejects.toThrow(/AccessDenied/);
+    expect(calls).toBe(1);
+  });
+});
+
+describe('server network routing', () => {
+  test('refuses to call S3 from a client that has no server dispatch', async () => {
     const viaServer = new S3Client({
       endpoint: 'https://s3.example.com',
       bucket: 'archive',
@@ -129,14 +176,28 @@ describe('server network routing', () => {
       accessKeyId: 'AKIA',
       secretAccessKey: 'secret',
     });
-    await viaServer.listObjects();
+    await expect(viaServer.listObjects()).rejects.toThrow(/self-hosted Galiot server/);
+  });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe('/api/s3-proxy');
-    expect(calls[0]?.cache).toBe('no-store');
-    expect(calls[0]?.headers.get('x-galiot-s3-target')).toBe(
-      'https://s3.example.com/archive/?list-type=2',
-    );
-    expect(calls[0]?.headers.get('authorization')).toContain('AWS4-HMAC-SHA256');
+  test('a server dispatch receives the signed bucket URL, not a browser fetch', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = mock(async () => {
+      throw new Error('browser fetch must not run');
+    }) as unknown as typeof fetch;
+    const viaServer = new S3Client({
+      endpoint: 'https://s3.example.com',
+      bucket: 'archive',
+      region: 'us-east-1',
+      pathStyle: true,
+      accessKeyId: 'AKIA',
+      secretAccessKey: 'secret',
+      dispatch: async (signed) => {
+        calls.push(signed.url);
+        expect(signed.headers.get('authorization')).toContain('AWS4-HMAC-SHA256');
+        return new Response('<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>', { status: 200 });
+      },
+    });
+    await viaServer.listObjects();
+    expect(calls).toEqual(['https://s3.example.com/archive/?list-type=2']);
   });
 });

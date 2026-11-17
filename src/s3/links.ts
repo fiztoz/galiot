@@ -2,6 +2,8 @@ import type { AppDB, ConnectionRow } from '../db/client';
 import { profileConfig } from '../db/objects';
 import { getSealedCredentials } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
+import { getProxyToken } from '../server/session';
+import { S3_ACCESS_TOKEN_HEADER } from '../server/protocol';
 
 export type LinkPermission = 'read' | 'write';
 
@@ -31,24 +33,39 @@ export const EXPIRY_PRESETS: { label: string; seconds: number }[] = [
  * credentials. `deleteLink` therefore only forgets the local record; see
  * `revocationHint` for the honest wording shown in the UI.
  */
+/** True for links that stream from this Galiot server rather than from S3. */
+export function isServerLink(url: string): boolean {
+  try {
+    return new URL(url, window.location.origin).pathname.startsWith('/api/s3/media/');
+  } catch {
+    return false;
+  }
+}
+
 export async function createLink(
   db: AppDB,
   profile: ConnectionRow,
   key: string,
   permission: LinkPermission,
   expiresIn: number,
+  via: 'server' | 's3' = 'server',
 ): Promise<PresignedRecord> {
   const sealed = await getSealedCredentials(db, profile.id);
   const config = profileConfig(profile);
 
   const common = { profile: config, credentials: { sealed }, key, expiresIn };
-  const { url } =
-    permission === 'read'
-      ? await vaultService.call('s3.presignGet', common)
-      : await vaultService.call('s3.presignPut', {
-          ...common,
-          contentType: 'application/octet-stream',
-        });
+  let url: string;
+  if (permission === 'read' && via === 'server') {
+    const grant = await vaultService.call('s3.shareLink', common);
+    url = `${window.location.origin}${grant.url}`;
+  } else if (permission === 'read') {
+    url = (await vaultService.call('s3.presignGet', common)).url;
+  } else {
+    url = (await vaultService.call('s3.presignPut', {
+      ...common,
+      contentType: 'application/octet-stream',
+    })).url;
+  }
 
   const id = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
@@ -79,7 +96,24 @@ export async function listLinks(db: AppDB, limit = 50): Promise<PresignedRecord[
   return res.rows;
 }
 
+/**
+ * Server links are cut off for real: the grant is deleted on the server, so
+ * the URL stops working immediately. Presigned S3 links cannot be revoked;
+ * deleting those only forgets the local record.
+ */
 export async function deleteLink(db: AppDB, id: string): Promise<void> {
+  const found = await db.query<PresignedRecord>(`SELECT url FROM presigned_history WHERE id = $1`, [id]);
+  const url = found.rows[0]?.url;
+  if (url && isServerLink(url)) {
+    const path = new URL(url, window.location.origin).pathname;
+    const token = getProxyToken();
+    const headers = new Headers();
+    if (token) headers.set(S3_ACCESS_TOKEN_HEADER, token);
+    const response = await fetch(path, { method: 'DELETE', headers, cache: 'no-store' });
+    if (!response.ok && response.status !== 404) {
+      throw new Error('The server did not revoke this link. It is still valid until it expires.');
+    }
+  }
   await db.query(`DELETE FROM presigned_history WHERE id = $1`, [id]);
 }
 
@@ -96,3 +130,6 @@ export function isExpired(link: Pick<PresignedRecord, 'expires_at'>): boolean {
 
 export const revocationHint =
   'A presigned URL is a bearer token: it stays valid until it expires. Deleting the record here only removes it from Galiot — to truly invalidate it, rotate the access key that signed it.';
+
+export const serverLinkHint =
+  'A server link streams from this Galiot host, so it works for people who cannot reach S3 themselves. Revoke it here and it stops working at once.';

@@ -3,10 +3,10 @@
  *
  * Two channels exist:
  * 1. Main thread ↔ transfer worker (TransferCommand / TransferEvent).
- * 2. Transfer worker ↔ vault worker over a shared MessagePort (SignRequest /
- *    SignResponse). The transfer worker never sees raw credentials — it asks
- *    the vault worker to sign each request, which satisfies the "secrets never
- *    reach the main thread" rule and keeps signing in one place.
+ * 2. Transfer worker ↔ vault worker over a shared MessagePort (SessionRequest /
+ *    SessionResponse). The transfer worker never sees raw credentials. It asks
+ *    the vault worker for a server session id. The self-hosted server signs
+ *    and calls S3.
  */
 
 /** Non-secret connection target; credentials are resolved by profileId. */
@@ -92,37 +92,24 @@ export type TransferEvent =
 /* Vault port (transfer worker → vault worker)                          */
 /* ------------------------------------------------------------------ */
 
-export type SignRequest = {
-  type: 'sign';
+export type SessionRequest = {
+  type: 'session';
   id: number;
   profileId: string;
-  /** SigV4 region (non-secret, per connection). */
+  endpoint: string;
   region: string;
-  /** Sealed credentials; only ever decrypted inside the vault worker. */
+  bucket: string;
+  pathStyle: boolean;
+  /** Sealed credentials; decrypted only inside the vault worker. */
   credentials: import('../vault/crypto').EncryptedPayload;
-  method: string;
-  url: string;
-  headers: Record<string, string>;
-  /**
-   * The connection's custom headers, from `S3Target.headers`. Kept separate from
-   * `headers` so the vault worker can apply the usual precedence — per-call
-   * headers win — and screen them again before they reach the signature.
-   */
-  customHeaders?: Record<string, string>;
-  /**
-   * Only for small text bodies (multipart completion XML) that must be hashed
-   * into the signature. Binary payloads use `x-amz-content-sha256:
-   * UNSIGNED-PAYLOAD` instead so large Blobs are never hashed.
-   */
-  body?: string;
+  /** Connection headers. The server screens them again before signing. */
+  headers?: Record<string, string>;
+  /** Gate for a public Galiot server. Not an S3 key. */
+  accessToken?: string;
 };
 
-export type SignResponse =
-  | {
-      type: 'signed';
-      id: number;
-      url: string;
-      method: string;
-      headers: Record<string, string>;
-    }
-  | { type: 'sign-error'; id: number; error: string };
+export type SessionResponse =
+  | { type: 'session'; id: number; sessionId: string }
+  | { type: 'session-error'; id: number; error: string }
+  /** Sent when the vault locks: every cached session id is now dead. */
+  | { type: 'sessions-closed' };

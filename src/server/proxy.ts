@@ -1,8 +1,8 @@
 /**
- * Provider-neutral signed-request proxy.
+ * Retired signed-request forwarder. Not mounted.
  *
- * The vault worker signs. This process only forwards that request, so raw S3
- * keys never arrive here. The transport streams HTTP on the server's network.
+ * The app server signs and calls S3 itself (`src/server/api.ts`). These helpers
+ * remain for the transport tests and the target checks the API still uses.
  */
 
 import { S3_PROXY_PATH, S3_PROXY_TARGET_HEADER, S3_PROXY_TOKEN_HEADER, S3_PROXY_DEFAULT_PORT } from './protocol';
@@ -184,8 +184,14 @@ export function proxyListenConfig(env: NodeJS.ProcessEnv = process.env): {
 } {
   const hostname = env[PROXY_HOST_ENV] || '127.0.0.1';
   const port = Number(env[PROXY_PORT_ENV] || S3_PROXY_DEFAULT_PORT);
-  const gate = env[PROXY_GATE_ENV]?.trim() || null;
-  const open = env[PROXY_OPEN_ENV] === '1';
-  assertBindAllowed(hostname, gate, open);
-  return { hostname, port, gate, open };
+  const gate = accessGate(env);
+  assertBindAllowed(hostname, gate.token, gate.open);
+  return { hostname, port, gate: gate.token, open: gate.open };
+}
+
+/** Gate for a non-loopback bind. The previous proxy env names still work. */
+export function accessGate(env: NodeJS.ProcessEnv = process.env): { token: string | null; open: boolean } {
+  const named = env.GALIOT_GATE?.trim() || env[PROXY_GATE_ENV]?.trim() || null;
+  const open = env.GALIOT_GATE_OPEN === '1' || env[PROXY_OPEN_ENV] === '1';
+  return { token: named, open };
 }

@@ -1,5 +1,5 @@
 import type { EncryptedPayload } from './crypto';
-import type { CorsConfiguration, ListObjectsResult } from '../s3/client';
+import type { BucketSearchResult, CorsConfiguration, ListObjectsResult, ObjectMeta, VersionListResult } from '../s3/client';
 import type { GaleonImportPrepareResult, GaleonImportPreview } from './galeonImport';
 
 /**
@@ -7,11 +7,12 @@ import type { GaleonImportPrepareResult, GaleonImportPreview } from './galeonImp
  *
  * Security invariants enforced by this protocol:
  * - The DEK never leaves the vault worker.
- * - Decrypted credentials never leave the vault worker: S3 operations are
- *   executed inside the worker and only results come back.
- * - The only secret-bearing payloads that cross the boundary are *plaintext
- *   credentials typed into the connection dialog* (sent once for encryption /
-   connection testing) and *ciphertext* read from PGlite.
+ * - Decrypted credentials never reach the main thread. S3 operations are
+ *   executed by the self-hosted server. The worker sends credentials to that
+ *   same-origin server once per session, and only results come back here.
+ * - The only secret-bearing payloads that cross into the main thread are
+ *   *plaintext credentials typed into the connection dialog* (sent once for
+ *   encryption / connection testing) and *ciphertext* read from PGlite.
  */
 
 export const VAULT_CHANNEL = 'galiot' as const;
@@ -134,6 +135,20 @@ export type VaultMethod =
   | 's3.putText'
   | 's3.presignGet'
   | 's3.presignPut'
+  | 's3.mediaUrl'
+  | 's3.head'
+  | 's3.createFolder'
+  | 's3.copy'
+  | 's3.rename'
+  | 's3.shareLink'
+  | 's3.listBuckets'
+  | 's3.listVersions'
+  | 's3.deleteVersion'
+  | 's3.restoreVersion'
+  | 's3.versionUrl'
+  | 's3.search'
+  | 's3.listTree'
+  | 's3.restore'
   | 'galeon.preview'
   | 'galeon.prepare';
 
@@ -205,6 +220,27 @@ export interface VaultParams {
     contentType?: string;
     expiresIn?: number;
   };
+  /** Same-origin preview URL. The browser does not need a route to S3. */
+  's3.mediaUrl': {
+    profile: S3ProfileConfig;
+    credentials: Credentials;
+    key: string;
+  };
+  's3.head': { profile: S3ProfileConfig; credentials: Credentials; key: string };
+  's3.createFolder': { profile: S3ProfileConfig; credentials: Credentials; key: string };
+  's3.copy': { profile: S3ProfileConfig; credentials: Credentials; sourceKey: string; destKey: string };
+  's3.rename': { profile: S3ProfileConfig; credentials: Credentials; sourceKey: string; destKey: string };
+  /** Server-streamed share link. Relative URL; the caller makes it absolute. */
+  's3.shareLink': { profile: S3ProfileConfig; credentials: Credentials; key: string; expiresIn: number };
+  's3.listBuckets': { profile: S3ProfileConfig; credentials: Credentials };
+  's3.listVersions': { profile: S3ProfileConfig; credentials: Credentials; key: string };
+  's3.deleteVersion': { profile: S3ProfileConfig; credentials: Credentials; key: string; versionId: string };
+  's3.restoreVersion': { profile: S3ProfileConfig; credentials: Credentials; key: string; versionId: string };
+  /** Same-origin media URL for one version, so old versions download through the server. */
+  's3.versionUrl': { profile: S3ProfileConfig; credentials: Credentials; key: string; versionId: string };
+  's3.search': { profile: S3ProfileConfig; credentials: Credentials; query: string; prefix?: string };
+  's3.listTree': { profile: S3ProfileConfig; credentials: Credentials; prefix: string };
+  's3.restore': { profile: S3ProfileConfig; credentials: Credentials; key: string; days: number };
   /**
    * Parses a Galeon profile export inside the worker and returns a preview with
    * no credential material in it. `text` is the raw file the user picked.
@@ -246,6 +282,20 @@ export type VaultResults = {
   's3.putText': { eTag: string };
   's3.presignGet': PresignResult;
   's3.presignPut': PresignResult;
+  's3.mediaUrl': { url: string };
+  's3.head': ObjectMeta;
+  's3.createFolder': { created: boolean };
+  's3.copy': { copied: number };
+  's3.rename': { moved: number };
+  's3.shareLink': { url: string; expiresIn: number };
+  's3.listBuckets': { buckets: string[] };
+  's3.listVersions': VersionListResult;
+  's3.deleteVersion': { deleted: boolean };
+  's3.restoreVersion': { restored: boolean };
+  's3.versionUrl': { url: string };
+  's3.search': BucketSearchResult;
+  's3.listTree': { objects: { key: string; size: number; storageClass: string | null }[] };
+  's3.restore': { requested: boolean };
   'galeon.preview': GaleonImportPreview;
   'galeon.prepare': GaleonImportPrepareResult;
 };

@@ -19,7 +19,7 @@ function connectSrc(policy: string): string {
 }
 
 describe('deployed CSP', () => {
-  test('connect-src is the app and https, with no loopback companion', () => {
+  test('connect-src is only the app, with no loopback companion and no direct S3', () => {
     const headerSources: Record<string, string> = {
       'public/_headers': read('public', '_headers'),
       'vercel.json': read('vercel.json'),
@@ -29,7 +29,7 @@ describe('deployed CSP', () => {
     for (const [file, text] of Object.entries(headerSources)) {
       expect(text, `${file} still names the retired companion`).not.toContain('127.0.0.1:8787');
       for (const directive of text.match(/connect-src[^;"]*/g) ?? []) {
-        expect(connectSrc(directive), `${file} connect-src drifted`).toBe(`'self' https:`);
+        expect(connectSrc(directive), `${file} connect-src drifted`).toBe(`'self'`);
       }
     }
   });
@@ -137,7 +137,7 @@ const META_CSP =
  *   frame-src     the PDF <iframe>, also fed a presigned https URL
  *   img-src       image preview
  *   worker-src    the PGlite / vault / transfer workers
- *   connect-src   every S3 request
+ *   connect-src   the same-origin Galiot server only; S3 is not called from the page
  */
 const REQUIRED_DIRECTIVES = [
   'default-src',
@@ -194,7 +194,7 @@ describe('CSP completeness', () => {
       expect(meta.has(name), `meta policy is missing ${name}`).toBe(true);
       if (name === 'connect-src') {
         expect(meta.get(name)).toBe(headerValue);
-        expect(meta.get(name)).toBe(`'self' https:`);
+        expect(meta.get(name)).toBe(`'self'`);
       } else {
         expect(meta.get(name), `${name} drifted between the meta and header policies`).toBe(headerValue);
       }

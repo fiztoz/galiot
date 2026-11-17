@@ -49,23 +49,22 @@ describe('worker wiring for custom headers', () => {
   const vaultWorker = read('workers', 'vault.worker.ts');
   const transferWorker = read('workers', 'transfer.worker.ts');
 
-  test('the transfer-signing path merges the job headers', () => {
-    expect(vaultWorker).toContain('mergeScreenedHeaders(request.customHeaders, request.headers)');
+  test('the transfer worker sends connection headers when opening a server session', () => {
+    expect(transferWorker).toContain('headers: job.target.headers');
   });
 
-  test('the transfer worker forwards its target headers to the signer', () => {
-    expect(transferWorker).toContain('customHeaders: job.target.headers');
+  test('the vault worker opens a server session instead of signing', () => {
+    expect(vaultWorker).toContain('openServerSession');
+    expect(vaultWorker).not.toContain('s3ClientForProfile');
+    expect(vaultWorker).not.toContain('AwsClient');
   });
 
-  test('the worker builds clients through the factory that carries headers', () => {
-    // makeS3Client is the seam every S3Client in the worker comes from; if it
-    // stops delegating, custom headers stop being applied to listing, the editor
-    // and delete, none of which the integration test would notice.
-    expect(vaultWorker).toMatch(/function makeS3Client[\s\S]{0,200}?return s3ClientForProfile\(profile, creds\);/);
+  test('the server screens stored headers before the signer sees them', () => {
+    expect(read('server', 'api.ts')).toContain('parseStoredHeaders');
+    expect(read('server', 'engine.ts')).toContain('s3ClientForProfile');
   });
 
-  test('the signing protocol actually carries the field', () => {
-    expect(read('transfer', 'protocol.ts')).toMatch(/customHeaders\?:\s*Record<string, string>/);
+  test('the session protocol carries connection headers', () => {
     expect(read('transfer', 'protocol.ts')).toMatch(/headers\?:\s*Record<string, string>/);
   });
 });

@@ -1,15 +1,11 @@
 /// <reference lib="webworker" />
 import { VaultManager } from '../vault/vault';
-import { S3Client, S3RequestError, s3ClientForProfile } from '../s3/client';
-import { AwsClient } from '../lib/aws4fetch';
-import { presignGetUrl, presignPutBucketCors, presignPutUrl } from '../s3/presign';
-import { mergeScreenedHeaders } from '../transfer/signing';
+import { RemoteS3, RemoteS3Error, closeServerSession, listBucketsFromServer, openServerSession, probeFromServer } from '../s3/remote';
 import {
   buildGaleonPreview,
   prepareGaleonImport,
 } from '../vault/galeonImport';
-import type { EncryptedPayload } from '../vault/crypto';
-import type { SignRequest, SignResponse } from '../transfer/protocol';
+import type { SessionRequest, SessionResponse } from '../transfer/protocol';
 import {
   VAULT_CHANNEL,
   VAULT_EVENT_CHANNEL,
@@ -37,25 +33,23 @@ function formatBytesForWorker(bytes: number): string {
 }
 
 
-/** A SigV4 signer for a profile's region, from already-resolved credentials. */
-function signerFor(creds: CredentialPlaintext, region: string): AwsClient {
-  return new AwsClient({
-    accessKeyId: creds.accessKeyId,
-    secretAccessKey: creds.secretAccessKey,
-    sessionToken: creds.sessionToken,
-    region,
-    service: 's3',
-  });
-}
-
 let vault: VaultManager | null = null;
-/** Direct channel to the transfer worker for signing. */
+/** Direct channel to the transfer worker for server sessions. */
 let transferPort: MessagePort | null = null;
-/** AwsClient cache per profile, wiped whenever the vault locks. */
-const signerCache = new Map<string, AwsClient>();
+/** Server sessions opened by this worker, closed when the vault locks. */
+const openSessions = new Map<string, string | undefined>();
 
 function emitLocked(): void {
+  void closeSessions();
   postMessage({ channel: VAULT_EVENT_CHANNEL, event: 'locked' });
+}
+
+async function closeSessions(): Promise<void> {
+  const open = [...openSessions];
+  openSessions.clear();
+  await Promise.all(open.map(([id, token]) => closeServerSession(id, token)));
+  // The transfer worker caches session ids; tell it they are all dead.
+  transferPort?.postMessage({ type: 'sessions-closed' });
 }
 
 function requireUnlocked(): VaultManager {
@@ -72,64 +66,36 @@ async function resolveCredentials(credentials: Credentials): Promise<CredentialP
   return requireUnlocked().decryptCredentials(credentials.sealed);
 }
 
-/**
- * Resolves a signing client for a profile from the sealed credential blob the
- * transfer worker forwards. Credentials are decrypted here and never leave this
- * worker — the transfer worker only ever receives signed requests.
- */
-async function getSigner(profileId: string, sealed: EncryptedPayload): Promise<AwsClient> {
-  const cached = signerCache.get(profileId);
-  if (cached) return cached;
-
-  const creds = await requireUnlocked().decryptCredentials(sealed);
-  const client = new AwsClient({
-    accessKeyId: creds.accessKeyId,
-    secretAccessKey: creds.secretAccessKey,
-    sessionToken: creds.sessionToken,
-    // Region/endpoint live on the (non-secret) target the transfer worker holds;
-    // SigV4 needs the region, which the worker passes per request when known.
-    region: undefined,
-    service: 's3',
-  });
-  signerCache.set(profileId, client);
-  return client;
+/** Opens a server session. Credentials go to the self-hosted origin, not the main thread. */
+async function sessionClient(profile: S3ProfileConfig, creds: CredentialPlaintext): Promise<RemoteS3> {
+  const sessionId = await openServerSession(profile, creds, profile.proxyToken);
+  openSessions.set(sessionId, profile.proxyToken);
+  return new RemoteS3(sessionId, profile.proxyToken);
 }
 
-/** Signs one request for the transfer worker. */
-async function handleSignRequest(request: SignRequest): Promise<void> {
-  if (!transferPort || request.type !== 'sign') return;
-
+/** Gives the transfer worker a session id. It never receives the secret. */
+async function handleSessionRequest(request: SessionRequest): Promise<void> {
+  if (!transferPort || request.type !== 'session') return;
   try {
-    const signer = await getSigner(request.profileId, request.credentials);
-    // Screened again here rather than trusted from the port: the transfer worker
-    // is a separate realm and the stored column is cleartext, so a row written
-    // before a rule existed must not reach the signature unscreened. Per-call
-    // headers (a resumed download's Range) still win.
-    const headers = new Headers(mergeScreenedHeaders(request.customHeaders, request.headers));
-    const signed = await signer.sign(new URL(request.url), {
-      method: request.method,
-      headers,
-      body: request.body,
-      // Region is per-connection and non-secret: the transfer worker passes it.
-      aws: { region: request.region },
-    });
-
-    const signedHeaders: Record<string, string> = {};
-    signed.headers.forEach((value, key) => {
-      signedHeaders[key] = value;
-    });
-
-    const response: SignResponse = {
-      type: 'signed',
-      id: request.id,
-      url: signed.url,
-      method: signed.method,
-      headers: signedHeaders,
-    };
+    const creds = await requireUnlocked().decryptCredentials(request.credentials);
+    const sessionId = await openServerSession(
+      {
+        endpoint: request.endpoint,
+        region: request.region,
+        bucket: request.bucket,
+        pathStyle: request.pathStyle,
+        headers: request.headers,
+        proxyToken: request.accessToken,
+      },
+      creds,
+      request.accessToken,
+    );
+    openSessions.set(sessionId, request.accessToken);
+    const response: SessionResponse = { type: 'session', id: request.id, sessionId };
     transferPort.postMessage(response);
   } catch (err) {
-    const response: SignResponse = {
-      type: 'sign-error',
+    const response: SessionResponse = {
+      type: 'session-error',
       id: request.id,
       error: err instanceof Error ? err.message : String(err),
     };
@@ -138,21 +104,12 @@ async function handleSignRequest(request: SignRequest): Promise<void> {
 }
 
 /**
- * Delegates to the shared factory in `src/s3/client.ts` so the profile-to-client
- * mapping is unit-testable. This is the line that decides whether a connection's
- * custom headers reach the signer at all.
- */
-function makeS3Client(profile: S3ProfileConfig, creds: CredentialPlaintext): S3Client {
-  return s3ClientForProfile(profile, creds);
-}
-
-/**
  * Walks a folder subtree depth-first with delimiter listing, collecting every
  * directory and file entry for an exact roll-up (roadmap 2.4). Capped so a
  * single click can never run away on a huge bucket.
  */
 async function collectFolderStats(
-  client: S3Client,
+  client: RemoteS3,
   rootKey: string,
   maxEntries: number,
 ): Promise<FolderStatsResult> {
@@ -227,7 +184,7 @@ async function dispatch<M extends VaultMethod>(
     }
 
     case 'vault.lock': {
-      signerCache.clear();
+      await closeSessions();
       vault?.lock();
       vault = null;
       return { locked: true as const };
@@ -248,8 +205,8 @@ async function dispatch<M extends VaultMethod>(
       // in the transfer worker. From now on this worker signs for it.
       const p = params as { port: MessagePort };
       transferPort = p.port;
-      transferPort.onmessage = (event: MessageEvent<SignRequest>) => {
-        void handleSignRequest(event.data);
+      transferPort.onmessage = (event: MessageEvent<SessionRequest>) => {
+        void handleSessionRequest(event.data);
       };
       return { attached: true as const };
     }
@@ -281,7 +238,7 @@ async function dispatch<M extends VaultMethod>(
       const p = params as { profile: S3ProfileConfig; credentials: Credentials };
       try {
         const creds = await resolveCredentials(p.credentials);
-        const client = makeS3Client(p.profile, creds);
+        const client = await sessionClient(p.profile, creds);
         const listing = await client.listObjects('', { delimiter: '/', maxKeys: 5 });
         return {
           ok: true,
@@ -295,28 +252,24 @@ async function dispatch<M extends VaultMethod>(
 
     case 's3.probe': {
       const p = params as { profile: S3ProfileConfig };
-      // No credentials needed: this only asks whether the host answers.
-      const client = makeS3Client(p.profile, { accessKeyId: '', secretAccessKey: '' });
-      return client.probeAddressing();
+      return probeFromServer(p.profile, p.profile.proxyToken);
     }
 
     case 's3.cors.get': {
       const p = params as NonNullable<VaultRequest<'s3.cors.get'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      return makeS3Client(p.profile, creds).getBucketCors();
+      return (await sessionClient(p.profile, creds)).getBucketCors();
     }
 
     case 's3.cors.put': {
       const p = params as NonNullable<VaultRequest<'s3.cors.put'>['params']>;
       const creds = await resolveCredentials(p.credentials);
       try {
-        await makeS3Client(p.profile, creds).putBucketCors(p.config);
+        await (await sessionClient(p.profile, creds)).putBucketCors(p.config);
         return { applied: true as const };
       } catch (err) {
-        // The distinction the UI needs: this endpoint has no bucket-CORS API
-        // (MinIO answers 501 NotImplemented), which no amount of retrying or
-        // different credentials will fix.
-        if (err instanceof S3RequestError) {
+        // MinIO answers 501 NotImplemented. That is not a permissions problem.
+        if (err instanceof RemoteS3Error) {
           return {
             applied: false,
             error: err.message,
@@ -333,26 +286,21 @@ async function dispatch<M extends VaultMethod>(
       const p = params as NonNullable<VaultRequest<'s3.cors.presign'>['params']>;
       const creds = await resolveCredentials(p.credentials);
       const expiresIn = p.expiresIn ?? 3600;
-      const url = await presignPutBucketCors(
-        signerFor(creds, p.profile.region),
-        p.profile,
-        'application/xml',
-        expiresIn,
-      );
+      const { url } = await (await sessionClient(p.profile, creds)).presignCors(expiresIn);
       return { url, expiresIn };
     }
 
     case 's3.cors.delete': {
       const p = params as NonNullable<VaultRequest<'s3.cors.delete'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      await makeS3Client(p.profile, creds).deleteBucketCors();
+      await (await sessionClient(p.profile, creds)).deleteBucketCors();
       return { deleted: true as const };
     }
 
     case 's3.list': {
       const p = params as NonNullable<VaultRequest<'s3.list'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      const client = makeS3Client(p.profile, creds);
+      const client = await sessionClient(p.profile, creds);
       return client.listObjects(p.prefix, {
         delimiter: p.delimiter ?? '/',
         maxKeys: p.maxKeys,
@@ -363,21 +311,21 @@ async function dispatch<M extends VaultMethod>(
     case 's3.folderStats': {
       const p = params as NonNullable<VaultRequest<'s3.folderStats'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      const client = makeS3Client(p.profile, creds);
+      const client = await sessionClient(p.profile, creds);
       return collectFolderStats(client, p.rootKey, p.maxEntries ?? 20000);
     }
 
     case 's3.delete': {
       const p = params as NonNullable<VaultRequest<'s3.delete'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      const client = makeS3Client(p.profile, creds);
+      const client = await sessionClient(p.profile, creds);
       return client.deleteObjects(p.keys);
     }
 
     case 's3.getText': {
       const p = params as NonNullable<VaultRequest<'s3.getText'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      const client = makeS3Client(p.profile, creds);
+      const client = await sessionClient(p.profile, creds);
       const maxBytes = p.maxBytes ?? 2 * 1024 * 1024;
       const res = await client.getObject(p.key);
       if (!res.ok) throw new Error(`GetObject failed: ${res.status} ${res.statusText}`);
@@ -405,7 +353,7 @@ async function dispatch<M extends VaultMethod>(
     case 's3.putText': {
       const p = params as NonNullable<VaultRequest<'s3.putText'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      const client = makeS3Client(p.profile, creds);
+      const client = await sessionClient(p.profile, creds);
       const result = await client.putObject(p.key, p.body, p.contentType);
       return { eTag: result.eTag };
     }
@@ -413,39 +361,98 @@ async function dispatch<M extends VaultMethod>(
     case 's3.presignGet': {
       const p = params as NonNullable<VaultRequest<'s3.presignGet'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      const aws = new AwsClient({
-        accessKeyId: creds.accessKeyId,
-        secretAccessKey: creds.secretAccessKey,
-        sessionToken: creds.sessionToken,
-        region: p.profile.region,
-        service: 's3',
-      });
-      const target = {
-        endpoint: p.profile.endpoint,
-        bucket: p.profile.bucket,
-        pathStyle: p.profile.pathStyle,
-      };
-      const url = await presignGetUrl(aws, target, p.key, p.expiresIn ?? 3600);
-      return { url };
+      return (await sessionClient(p.profile, creds)).presignGet(p.key, p.expiresIn ?? 3600);
     }
 
     case 's3.presignPut': {
       const p = params as NonNullable<VaultRequest<'s3.presignPut'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      const aws = new AwsClient({
-        accessKeyId: creds.accessKeyId,
-        secretAccessKey: creds.secretAccessKey,
-        sessionToken: creds.sessionToken,
-        region: p.profile.region,
-        service: 's3',
-      });
-      const target = {
-        endpoint: p.profile.endpoint,
-        bucket: p.profile.bucket,
-        pathStyle: p.profile.pathStyle,
-      };
-      const url = await presignPutUrl(aws, target, p.key, p.contentType, p.expiresIn ?? 3600);
-      return { url };
+      return (await sessionClient(p.profile, creds)).presignPut(p.key, p.contentType, p.expiresIn ?? 3600);
+    }
+
+    case 's3.mediaUrl': {
+      const p = params as NonNullable<VaultRequest<'s3.mediaUrl'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).mediaUrl(p.key);
+    }
+
+    case 's3.head': {
+      const p = params as NonNullable<VaultRequest<'s3.head'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).head(p.key);
+    }
+
+    case 's3.createFolder': {
+      const p = params as NonNullable<VaultRequest<'s3.createFolder'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).createFolder(p.key);
+    }
+
+    case 's3.copy': {
+      const p = params as NonNullable<VaultRequest<'s3.copy'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).copy(p.sourceKey, p.destKey);
+    }
+
+    case 's3.rename': {
+      const p = params as NonNullable<VaultRequest<'s3.rename'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).rename(p.sourceKey, p.destKey);
+    }
+
+    case 's3.shareLink': {
+      const p = params as NonNullable<VaultRequest<'s3.shareLink'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).shareLink(p.key, p.expiresIn);
+    }
+
+    case 's3.listBuckets': {
+      const p = params as NonNullable<VaultRequest<'s3.listBuckets'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      const buckets = await listBucketsFromServer(p.profile, creds, p.profile.proxyToken);
+      return { buckets };
+    }
+
+    case 's3.listVersions': {
+      const p = params as NonNullable<VaultRequest<'s3.listVersions'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).listVersions(p.key);
+    }
+
+    case 's3.deleteVersion': {
+      const p = params as NonNullable<VaultRequest<'s3.deleteVersion'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).deleteVersion(p.key, p.versionId);
+    }
+
+    case 's3.restoreVersion': {
+      const p = params as NonNullable<VaultRequest<'s3.restoreVersion'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).restoreVersion(p.key, p.versionId);
+    }
+
+    case 's3.versionUrl': {
+      const p = params as NonNullable<VaultRequest<'s3.versionUrl'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).mediaUrl(p.key, p.versionId);
+    }
+
+    case 's3.search': {
+      const p = params as NonNullable<VaultRequest<'s3.search'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).search(p.query, p.prefix);
+    }
+
+    case 's3.listTree': {
+      const p = params as NonNullable<VaultRequest<'s3.listTree'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).listTree(p.prefix);
+    }
+
+    case 's3.restore': {
+      const p = params as NonNullable<VaultRequest<'s3.restore'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).restore(p.key, p.days);
     }
 
     default: {

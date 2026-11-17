@@ -99,7 +99,7 @@ export interface DiagnoseInput {
 
 function isProxyTransportFailure(error?: string | null): boolean {
   if (!error) return false;
-  return /server proxy request failed|\b502\b|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|getaddrinfo/i.test(error);
+  return /server proxy request failed|could not reach|\b502\b|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|getaddrinfo/i.test(error);
 }
 
 /**
@@ -126,7 +126,7 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
     return {
       reachable: true,
       reason: 'ok',
-      detail: 'The bucket answered a signed request through the Galiot server. Bucket CORS was not required.',
+      detail: 'The bucket answered through the Galiot server, which signed the request and called S3. Bucket CORS was not required.',
       probedUrl: probeUrl,
     };
   }
@@ -138,10 +138,10 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
         reachable: !transportFailure,
         reason: transportFailure ? 'host-unreachable' : 'request-rejected',
         detail: transportFailure
-          ? 'The Galiot server could not complete the signed request. Bucket CORS is not involved on the server route.'
+          ? 'The Galiot server could not reach the endpoint. Bucket CORS is not involved, because the browser does not call S3.'
           : `The server route returned an error${requestError ? `: ${requestError}` : ''}. Bucket CORS is not involved.`,
         hint: transportFailure
-          ? 'Check that the machine running Galiot can reach the endpoint, including the host, port, and whether it needs http:// instead of https://.'
+          ? 'The machine running Galiot must be able to reach the endpoint, including DNS, the port, and whether it needs http:// instead of https://.'
           : 'Check the server gate, S3 credentials, bucket name, and permissions for this request.',
         probedUrl: probeUrl,
       };

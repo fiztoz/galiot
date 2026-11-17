@@ -1,8 +1,7 @@
 import { AwsClient, type AwsSignOptions } from '../lib/aws4fetch';
-import { buildS3Url } from './url';
+import { buildS3Url, encodeKey } from './url';
 import { md5Base64 } from '../transfer/integrity';
 import { withCustomHeaders } from './customHeaders';
-import { fetchViaServer, serverGate } from '../server/transport';
 import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
 import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
 
@@ -20,14 +19,33 @@ export interface S3ClientOptions {
    * the canonical request.
    */
   headers?: Record<string, string>;
-  /** Public app-server gate. Not an S3 key. */
+  /** Public app-server gate. Not an S3 key. Retained on the profile; the server session is the gate. */
   proxyToken?: string;
   /**
-   * Call S3 from this process. Set only by Bun tools and tests that already
-   * run outside the browser (the MinIO suite, the integrity check). The app
-   * factory never sets it: the vault worker always uses the proxy.
+   * Call S3 with global fetch. Bun tools and tests only. The app does not set it.
    */
   direct?: boolean;
+  /**
+   * Sign, then hand the signed request to the self-hosted server transport.
+   * The browser does not set this.
+   */
+  dispatch?: S3Dispatch;
+}
+
+/** Receives an already-signed request. The server pins DNS before connecting. */
+export type S3Dispatch = (signed: Request, signal?: AbortSignal) => Promise<Response>;
+
+/**
+ * Byte length of a body whose size is known without reading it. S3 refuses a
+ * PUT without Content-Length (411), and a server-originated request has no
+ * browser to add the header, so the client must supply it before signing.
+ */
+function bodyByteLength(body: BodyInit): number | null {
+  if (typeof body === 'string') return new TextEncoder().encode(body).length;
+  if (body instanceof Blob) return body.size;
+  if (body instanceof ArrayBuffer) return body.byteLength;
+  if (ArrayBuffer.isView(body)) return body.byteLength;
+  return null;
 }
 
 /** Normalises the three `HeadersInit` shapes to a plain record. */
@@ -63,10 +81,49 @@ export interface ObjectMeta {
   contentType: string;
   lastModified: string;
   eTag: string;
+  /** Absent on STANDARD objects; providers only send the header otherwise. */
+  storageClass: string | null;
+  /** `x-amz-restore`: ongoing-request="false" plus an expiry once restored. */
+  restore: string | null;
+}
+
+/** Storage classes whose objects must be restored before they can be read. */
+export const ARCHIVE_STORAGE_CLASSES = new Set(['GLACIER', 'DEEP_ARCHIVE', 'GLACIER_IR']);
+
+export function isArchiveClass(storageClass: string | null | undefined): boolean {
+  return storageClass != null && ARCHIVE_STORAGE_CLASSES.has(storageClass);
+}
+
+/** True when a restore has finished and the copy is still readable. */
+export function isRestored(restore: string | null | undefined): boolean {
+  if (!restore) return false;
+  return /ongoing-request="false"/.test(restore);
 }
 
 export interface PutObjectResult {
   eTag: string;
+}
+
+export interface ObjectVersion {
+  versionId: string;
+  isLatest: boolean;
+  lastModified: string;
+  size: number;
+  eTag: string;
+  /** A delete marker hides the object; it carries no bytes. */
+  isDeleteMarker: boolean;
+}
+
+export interface VersionListResult {
+  versions: ObjectVersion[];
+  /** True when the bucket has never had versioning enabled. */
+  unversioned: boolean;
+}
+
+export interface BucketSearchResult {
+  objects: { key: string; size: number; lastModified: string }[];
+  scanned: number;
+  truncated: boolean;
 }
 
 export interface DeleteResult {
@@ -206,17 +263,15 @@ async function throwS3Error(res: Response, operation: string): Promise<never> {
 }
 
 /**
- * Builds the client every worker request path uses.
+ * Builds the client the server and Bun tools use.
  *
- * Extracted from the vault worker so the profile-to-client mapping is testable
- * without a worker harness. This is the line that decides whether a connection's
- * custom headers are applied at all, so it is the one most worth having a test
- * on — and a worker-local function cannot have one.
+ * The profile-to-client mapping is the line that decides whether a connection's
+ * custom headers are applied at all, so it stays testable outside a worker.
  */
 export function s3ClientForProfile(
   profile: S3ProfileConfig,
   creds: CredentialPlaintext,
-  options?: { direct?: boolean },
+  options?: { direct?: boolean; dispatch?: S3Dispatch },
 ): S3Client {
   return new S3Client({
     endpoint: profile.endpoint,
@@ -227,8 +282,9 @@ export function s3ClientForProfile(
     secretAccessKey: creds.secretAccessKey,
     sessionToken: creds.sessionToken,
     headers: profile.headers,
-    proxyToken: serverGate(profile),
+    proxyToken: profile.proxyToken,
     direct: options?.direct,
+    dispatch: options?.dispatch,
   });
 }
 
@@ -238,8 +294,10 @@ export class S3Client {
   private bucket: string;
   private pathStyle: boolean;
   private customHeaders: Record<string, string>;
-  private proxyToken?: string;
   private direct: boolean;
+  private dispatch?: S3Dispatch;
+  /** Set once a gateway proves it only speaks ListObjects v1; pages stay on v1. */
+  private listV1 = false;
 
   constructor(options: S3ClientOptions) {
     this.awsClient = new AwsClient({
@@ -253,8 +311,13 @@ export class S3Client {
     this.bucket = options.bucket;
     this.pathStyle = options.pathStyle ?? false;
     this.customHeaders = options.headers ?? {};
-    this.proxyToken = serverGate(options);
     this.direct = options.direct === true;
+    this.dispatch = options.dispatch;
+  }
+
+  /** Signed request, used by the server for operations that stream a body. */
+  public send(url: URL, init?: RequestInit & AwsSignOptions): Promise<Response> {
+    return this.request(url, init);
   }
 
   /**
@@ -271,15 +334,29 @@ export class S3Client {
    * displaced by a stale row that predates the screening rule.
    */
   private async request(url: URL, init?: RequestInit & AwsSignOptions): Promise<Response> {
-    const requestInit = Object.keys(this.customHeaders).length === 0
+    let requestInit = Object.keys(this.customHeaders).length === 0
       ? init
       : {
           ...init,
           headers: withCustomHeaders(this.customHeaders, headersToRecord(init?.headers)),
         };
+    if (this.dispatch) {
+      if (requestInit?.body != null) {
+        const headers = headersToRecord(requestInit.headers);
+        if (!Object.keys(headers).some((name) => name.toLowerCase() === 'content-length')) {
+          const length = bodyByteLength(requestInit.body);
+          if (length !== null) {
+            requestInit = { ...requestInit, headers: { ...headers, 'content-length': String(length) } };
+          }
+        }
+      }
+      const signed = await this.awsClient.sign(url, requestInit);
+      return this.dispatch(signed, requestInit?.signal ?? undefined);
+    }
     if (this.direct) return this.awsClient.fetch(url, requestInit);
-    const signed = await this.awsClient.sign(url, requestInit);
-    return fetchViaServer(signed, this.proxyToken, requestInit?.body, requestInit?.signal ?? undefined);
+    throw new Error(
+      'This process does not call S3. The self-hosted Galiot server signs and connects. The machine running it must be able to reach the bucket.',
+    );
   }
 
 /** Public accessor for the endpoint/bucket/addressing (used by tooling). */
@@ -296,9 +373,29 @@ export class S3Client {
   }
 
   public async listObjects(prefix?: string, options?: { delimiter?: string; maxKeys?: number; continuationToken?: string }): Promise<ListObjectsResult> {
-    const url = this.buildUrl(undefined, listObjectsQuery(prefix, options));
+    const v1Query = (): Record<string, string> => {
+      const query: Record<string, string> = {};
+      if (prefix) query.prefix = prefix;
+      if (options?.delimiter) query.delimiter = options.delimiter;
+      if (options?.maxKeys !== undefined) query['max-keys'] = options.maxKeys.toString();
+      if (options?.continuationToken) query.marker = options.continuationToken;
+      return query;
+    };
+    const url = this.buildUrl(undefined, this.listV1 ? v1Query() : listObjectsQuery(prefix, options));
 
-    const res = await this.request(url);
+    let res = await this.request(url);
+    let v1 = this.listV1;
+    if (!res.ok && (res.status === 501 || res.status === 400)) {
+      // Older S3 gateways (Dell ECS family and other on-premises systems) may
+      // implement only ListObjects v1. Retry once with marker paging; a real
+      // permissions or bucket error fails the same way on both and surfaces.
+      const body = await res.clone().text();
+      if (/NotImplemented|InvalidArgument|InvalidRequest|not supported/i.test(body)) {
+        res = await this.request(this.buildUrl(undefined, v1Query()));
+        v1 = true;
+        this.listV1 = true;
+      }
+    }
     if (!res.ok) await throwS3Error(res, 'ListObjects');
 
     const text = await res.text();
@@ -317,7 +414,10 @@ export class S3Client {
     // Trimmed here, and only here: the reader is verbatim so object keys keep
     // any leading/trailing spaces S3 allows.
     const isTruncated = (xmlFirst(text, 'IsTruncated') ?? '').trim() === 'true';
-    const nextContinuationToken = xmlFirst(text, 'NextContinuationToken');
+    // v1 pages with NextMarker (or the last key when the provider omits it).
+    const nextContinuationToken = v1
+      ? xmlFirst(text, 'NextMarker') ?? (isTruncated ? objects[objects.length - 1]?.key : undefined)
+      : xmlFirst(text, 'NextContinuationToken');
 
     return { objects, prefixes, isTruncated, nextContinuationToken };
   }
@@ -332,7 +432,151 @@ export class S3Client {
       contentType: res.headers.get('content-type') || 'application/octet-stream',
       lastModified: res.headers.get('last-modified') || '',
       eTag: res.headers.get('etag') || '',
+      storageClass: res.headers.get('x-amz-storage-class'),
+      restore: res.headers.get('x-amz-restore'),
     };
+  }
+
+  /**
+   * Asks the provider to make an archived object readable for `days` days.
+   * Providers without archive tiers answer 501/NotImplemented, which the
+   * caller surfaces as unsupported rather than as a permissions problem.
+   */
+  public async restoreObject(key: string, days = 1): Promise<void> {
+    const url = this.buildUrl(key, { restore: '' });
+    const xml =
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+      `<RestoreRequest><Days>${Math.max(1, Math.floor(days))}</Days>` +
+      '<GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters></RestoreRequest>';
+    const res = await this.request(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/xml' },
+      body: xml,
+    });
+    // 200 = restore already in progress or done; 202 = accepted.
+    if (!res.ok && res.status !== 202) await throwS3Error(res, 'RestoreObject');
+  }
+
+  /**
+   * Server-side copy. The bytes never leave S3: one PUT with a copy-source
+   * header. Objects above 5 GiB must use `copyPart` instead (AWS limit).
+   */
+  public async copyObject(sourceKey: string, destKey: string, versionId?: string): Promise<{ eTag: string }> {
+    const url = this.buildUrl(destKey);
+    const res = await this.request(url, {
+      method: 'PUT',
+      headers: { 'x-amz-copy-source': this.copySource(sourceKey, versionId) },
+    });
+    if (!res.ok) await throwS3Error(res, 'CopyObject');
+    return { eTag: xmlFirst(await res.text(), 'ETag') ?? '' };
+  }
+
+  /**
+   * Versions of one exact key. ListObjectVersions is prefix-based, so the
+   * response is filtered to the key itself. A bucket that never had versioning
+   * answers with a single `null` version — reported as `unversioned`.
+   */
+  public async listVersions(key: string): Promise<VersionListResult> {
+    const url = this.buildUrl(undefined, { versions: '', prefix: key, 'max-keys': '1000' });
+    const res = await this.request(url);
+    if (!res.ok) await throwS3Error(res, 'ListObjectVersions');
+    const text = await res.text();
+    const parse = (block: string, isDeleteMarker: boolean): ObjectVersion & { key: string } => ({
+      key: xmlFirst(block, 'Key') ?? '',
+      versionId: xmlFirst(block, 'VersionId') ?? 'null',
+      isLatest: (xmlFirst(block, 'IsLatest') ?? '').trim() === 'true',
+      lastModified: xmlFirst(block, 'LastModified') ?? '',
+      size: parseInt(xmlFirst(block, 'Size') ?? '0', 10),
+      eTag: xmlFirst(block, 'ETag') ?? '',
+      isDeleteMarker,
+    });
+    const versions: ObjectVersion[] = [
+      ...xmlBlocks(text, 'Version').map((block) => parse(block, false)),
+      ...xmlBlocks(text, 'DeleteMarker').map((block) => parse(block, true)),
+    ]
+      .filter((version) => version.key === key)
+      .map(({ key: _key, ...version }) => version)
+      .sort((a, b) => b.lastModified.localeCompare(a.lastModified));
+    const unversioned = versions.length > 0 && versions.every((v) => v.versionId === 'null');
+    return { versions, unversioned };
+  }
+
+  /** Deletes one specific version. Without versionId this would write a marker. */
+  public async deleteVersion(key: string, versionId: string): Promise<void> {
+    const url = this.buildUrl(key, { versionId });
+    const res = await this.request(url, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) await throwS3Error(res, 'DeleteObjectVersion');
+  }
+
+  /**
+   * Flat walk of the bucket (no delimiter), matching key names server-side.
+   * Capped so one search cannot run away on a huge bucket.
+   */
+  public async searchKeys(
+    needle: string,
+    options?: { prefix?: string; maxMatches?: number; maxScanned?: number },
+  ): Promise<BucketSearchResult> {
+    const maxMatches = options?.maxMatches ?? 500;
+    const maxScanned = options?.maxScanned ?? 50_000;
+    const lower = needle.toLowerCase();
+    const objects: BucketSearchResult['objects'] = [];
+    let scanned = 0;
+    let truncated = false;
+    let continuationToken: string | undefined;
+    do {
+      const page = await this.listObjects(options?.prefix, { maxKeys: 1000, continuationToken });
+      for (const object of page.objects) {
+        scanned += 1;
+        if (object.key.toLowerCase().includes(lower)) {
+          objects.push({ key: object.key, size: object.size, lastModified: object.lastModified });
+          if (objects.length >= maxMatches) {
+            return { objects, scanned, truncated: true };
+          }
+        }
+        if (scanned >= maxScanned) {
+          return { objects, scanned, truncated: true };
+        }
+      }
+      continuationToken = page.isTruncated ? page.nextContinuationToken : undefined;
+    } while (continuationToken);
+    return { objects, scanned, truncated };
+  }
+
+  /** One part of a multipart server-side copy, over a byte range of the source. */
+  public async copyPart(
+    sourceKey: string,
+    destKey: string,
+    uploadId: string,
+    partNumber: number,
+    startByte: number,
+    endByte: number,
+  ): Promise<string> {
+    const url = this.buildUrl(destKey, { uploadId, partNumber: String(partNumber) });
+    const res = await this.request(url, {
+      method: 'PUT',
+      headers: {
+        'x-amz-copy-source': this.copySource(sourceKey),
+        'x-amz-copy-source-range': `bytes=${startByte}-${endByte}`,
+      },
+    });
+    if (!res.ok) await throwS3Error(res, 'UploadPartCopy');
+    return xmlFirst(await res.text(), 'ETag') ?? '';
+  }
+
+  private copySource(key: string, versionId?: string): string {
+    const base = `/${encodeURIComponent(this.bucket)}/${encodeKey(key)}`;
+    return versionId ? `${base}?versionId=${encodeURIComponent(versionId)}` : base;
+  }
+
+  /** Buckets this key can see. Uses the endpoint root, not a bucket URL. */
+  public async listBuckets(): Promise<string[]> {
+    const url = new URL(`${this.endpoint}/`);
+    const res = await this.request(url);
+    if (!res.ok) await throwS3Error(res, 'ListBuckets');
+    const text = await res.text();
+    return xmlBlocks(text, 'Bucket')
+      .map((block) => xmlFirst(block, 'Name') ?? '')
+      .filter(Boolean);
   }
 
   public async getObject(key: string): Promise<Response> {
