@@ -1183,5 +1183,42 @@ cold storage, keyboard flow, live verification (AWS, ECS scoped, Zenko).
 
 ---
 
+## 31. Evaluation — Elysia and TanStack Start (asked 2026-11-17, not adopted)
+
+**Elysia.** There is no "Elysia 2": npm `elysia@latest` is **1.4.32**. Adoption
+would be cheap and compatible: the whole server core is a framework-agnostic
+`(Request) => Promise<Response>` (`handleAppRequest`), so Elysia could sit in
+front as a thin adapter on the same Bun runtime, adding TypeBox validation,
+OpenAPI, and plugins. Costs: one dependency, an adapter layer, and re-verifying
+stream/abort passthrough; the Vite dev middleware would still call the core
+directly (Elysia is not connect middleware). No vault/PGlite/transfer/S3 logic
+changes. Not adopted: the API is one handler plus a session store with
+hand-rolled, tested validation; no functional gain today.
+
+**TanStack Start.** npm `@tanstack/react-start@latest` is **1.169.5**, with
+`engines: node >=22.12` — our runtime is Bun. Start does offer SPA mode
+(`ssr: false`), but its server functions/routes still require its own server
+runtime, replacing the deliberate plain Bun server. Conflicts with this
+product: (1) the shell injects inline serialization scripts, against the
+no-inline-script CSP rule unless nonce/hash plumbing is added; (2) all crypto
+and PGlite must stay client-side by design, so SSR/server-functions bring no
+place to put the logic we actually have; (3) the app has no router today —
+file-based routing is a real restructure for zero SEO value behind a vault
+gate. Workers/WASM would still bundle (Vite-based), and the live suites are
+HTTP-level so they would survive. Verdict: possible in SPA mode with careful
+CSP, high cost, ~no benefit. If type-safe routing is ever wanted, TanStack
+Router client-only (`--router-only`) is the proportionate choice, not Start.
+
+**Decision: keep Vite 8 SPA + plain Bun server.** Revisit Elysia only if the
+API grows enough to want schema/OpenAPI tooling; revisit routing only if the
+shell outgrows conditional views.
+
+Sources:
+- https://registry.npmjs.org/elysia/latest (1.4.32)
+- https://registry.npmjs.org/@tanstack/react-start/latest (1.169.5; engines node >=22.12)
+- https://tanstack.com/start/latest/docs/framework/react/guide/spa-mode (SPA mode caveats; server functions/routes still need a server)
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*
