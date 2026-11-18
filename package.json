@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The Agile Cloud Explorer \u2014 a self-hosted S3 client. The server signs and connects; the host must be able to reach the bucket.",
+  "description": "Galiot — a self-hosted S3 file browser. The Bun server signs and connects to S3; the host must be able to reach the bucket. MIT.",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
@@ -49,7 +49,6 @@
     "@vitejs/plugin-react": "^4.5.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.3.0",
-    "wrangler": "^4.0.0"
+    "vite": "^8.3.0"
   }
 }

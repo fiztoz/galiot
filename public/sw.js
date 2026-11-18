@@ -42,6 +42,13 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
+  // 0. API and non-GET -> Network Only, never cached. Session and share-grant
+  //    responses must not be stored by the service worker.
+  if (url.pathname.startsWith('/api/') || event.request.method !== 'GET') {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
   // 1. Cloud Storage Requests -> Network Only
   if (CLOUD_URL_PATTERNS.some((pattern) => pattern.test(url.href))) {
     event.respondWith(fetch(event.request));

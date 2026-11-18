@@ -44,19 +44,18 @@ jobs:
             exit 1
           fi
 
-      - name: Assert the CSP headers file shipped
-        run: test -f dist/_headers
-
-      - name: Smoke-test the provider-neutral server
+      - name: Smoke-test the self-hosted server and its security headers
         run: |
           bun run scripts/server.ts &
           pid=$!
           trap 'kill $pid' EXIT
           for _ in 1 2 3 4 5 6 7 8 9 10; do
-            if curl -sf http://127.0.0.1:8788/api/s3-proxy >/dev/null; then
-              exit 0
+            if curl -sf http://127.0.0.1:8788/api/health >/dev/null; then
+              break
             fi
             sleep 0.5
           done
-          echo "::error::app server did not answer /api/s3-proxy"
-          exit 1
+          curl -sf http://127.0.0.1:8788/api/health >/dev/null || { echo "::error::app server did not answer /api/health"; exit 1; }
+          headers=$(curl -sI http://127.0.0.1:8788/)
+          echo "$headers" | grep -qi "content-security-policy: default-src 'none'" || { echo "::error::CSP header missing"; exit 1; }
+          echo "$headers" | grep -qi "x-content-type-options: nosniff" || { echo "::error::nosniff header missing"; exit 1; }

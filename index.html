@@ -4,15 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      Keep this policy in sync with the response headers in public/_headers
-      and vercel.json. Signed S3 calls go to the same origin.
+      Defence in depth: the self-hosted server sends the same policy as a
+      response header (src/server/securityHeaders.ts). releaseConfig.test.ts
+      asserts the two match. S3 calls go to the same origin only.
     -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https:; media-src 'self' blob: https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'self' blob: https:; worker-src 'self' blob:; manifest-src 'self'"
     />
     <title>Galiot — The Agile Cloud Explorer</title>
-    <meta name="description" content="A 100% client-side cloud storage explorer powered by PGlite WASM Postgres" />
+    <meta name="description" content="A self-hosted S3 file browser: your server signs and connects to S3, your browser keeps the vault. PGlite WASM Postgres catalog, resumable transfers, in-browser editor." />
     <meta name="theme-color" content="#0d9488" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

@@ -1,43 +1,5 @@
 import { resolve, sep } from 'node:path';
 
-export interface HeaderRule {
-  path: string;
-  headers: Record<string, string>;
-}
-
-/** Parses a `_headers` file (path block, then `Name: value` lines). */
-export function parseHeadersFile(text: string): HeaderRule[] {
-  const rules: HeaderRule[] = [];
-  let current: HeaderRule | null = null;
-  for (const raw of text.split('\n')) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    if (line.startsWith('/')) {
-      current = { path: line, headers: {} };
-      rules.push(current);
-      continue;
-    }
-    const sepIndex = line.indexOf(':');
-    if (!current || sepIndex === -1) continue;
-    current.headers[line.slice(0, sepIndex).trim()] = line.slice(sepIndex + 1).trim();
-  }
-  return rules;
-}
-
-function ruleMatches(pattern: string, pathname: string): boolean {
-  if (pattern === '/*') return true;
-  if (pattern.endsWith('/*')) return pathname.startsWith(pattern.slice(0, -1));
-  return pathname === pattern;
-}
-
-export function headersForPath(rules: HeaderRule[], pathname: string): Record<string, string> {
-  const headers: Record<string, string> = {};
-  for (const rule of rules) {
-    if (ruleMatches(rule.path, pathname)) Object.assign(headers, rule.headers);
-  }
-  return headers;
-}
-
 /**
  * Resolves a URL path under `root`, or null when it would escape the root.
  * `/` maps to `index.html`. Missing files are the caller's problem.

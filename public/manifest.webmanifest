@@ -1,7 +1,7 @@
 {
   "name": "Galiot",
   "short_name": "Galiot",
-  "description": "The Agile Cloud Explorer — a 100% client-side S3 storage client",
+  "description": "The Agile Cloud Explorer — a self-hosted S3 file browser",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
