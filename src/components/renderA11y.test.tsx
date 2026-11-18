@@ -15,6 +15,11 @@ import type { ConnectionRow } from '../db/client';
 import { ObjectActionDialog } from './ObjectActionDialog';
 import { ShareConnectionDialog } from './ShareConnectionDialog';
 import { CommandPalette } from './CommandPalette';
+import { BucketSearchDialog } from './BucketSearchDialog';
+import { LocalPane } from './LocalPane';
+import { ExplorerFilterBar, EMPTY_FILTER_PANEL } from './ExplorerFilterBar';
+import { CustomHeadersField } from './CustomHeadersField';
+import type { AppDB } from '../db/client';
 
 const window = new Window();
 // Minimal DOM globals for react-dom/client and the focus trap.
@@ -113,5 +118,50 @@ describe('rendered dialog accessibility', () => {
     const labels = [...el.querySelectorAll('li button')].map((b) => b.textContent ?? '');
     expect(labels.some((n) => n.includes('Upload files'))).toBe(true);
     expect(labels.some((n) => n.includes('Refresh listing'))).toBe(true);
+  });
+
+  test('BucketSearchDialog is a labelled modal with a named query field', () => {
+    const el = render(
+      <BucketSearchDialog
+        db={{} as AppDB}
+        profile={profile}
+        initialQuery=""
+        onNavigate={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    const dialog = el.querySelector('[role="dialog"]');
+    expect(dialog?.getAttribute('aria-modal')).toBe('true');
+    expect(el.querySelector('#bucket-search-title')?.textContent).toContain('Search whole bucket');
+    expect(el.querySelector('input')?.getAttribute('aria-label')).toBe('Search query');
+    expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('Search'))).toBe(true);
+  });
+
+  test('LocalPane frames the local folder as a download destination, not storage', () => {
+    const el = render(<LocalPane onDownloadToLocal={() => {}} onError={() => {}} />);
+    expect(el.textContent).toContain('Download folder');
+    expect(el.textContent).toContain('This is not remote storage');
+    expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('Choose folder'))).toBe(true);
+  });
+
+  test('ExplorerFilterBar toggles an accessible panel with labelled inputs', () => {
+    const el = render(<ExplorerFilterBar value={EMPTY_FILTER_PANEL} onChange={() => {}} />);
+    const trigger = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('Filters'));
+    expect(trigger?.getAttribute('aria-expanded')).toBe('false');
+    act(() => trigger?.click());
+    expect(trigger?.getAttribute('aria-expanded')).toBe('true');
+    expect(el.querySelector('#filter-min-size')).not.toBeNull();
+    expect(el.querySelector('label[for="filter-min-size"]')?.textContent).toContain('Minimum size');
+    const close = el.querySelector<HTMLButtonElement>('button[aria-label="Close filters"]');
+    act(() => close?.click());
+    expect(el.querySelector('#filter-min-size')).toBeNull();
+  });
+
+  test('CustomHeadersField offers an add action and warns against secrets', () => {
+    const el = render(
+      <CustomHeadersField rows={[]} onChange={() => {}} inputClass="" labelClass="" />,
+    );
+    expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('Add header'))).toBe(true);
+    expect(el.textContent).toContain('Not for secrets');
   });
 });

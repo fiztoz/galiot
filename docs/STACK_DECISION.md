@@ -1266,11 +1266,14 @@ overflow, visible focus ring, real labels, corrected contrast and copy. Screens
 behind the vault (connections, explorer, dialogs, palette) were NOT pixel-
 verified in a browser: the isolated profile has no vault, and creating one needs
 a master password the interactive tool refuses to enter (a boundary not bypassed
-via other tools). Instead, `src/components/renderA11y.test.tsx` mounts the
-dialogs in a real DOM (happy-dom) and asserts the rendered accessibility
+via other tools). Instead, `src/components/renderA11y.test.tsx` mounts the vault-gated dialogs and
+aux surfaces in a real DOM (happy-dom) and asserts the rendered accessibility
 contract — dialog role, aria-modal, labelled heading, associated input labels,
-named actions, and a key-free share payload. Explorer toolbar responsiveness
-remains covered by the wrapping classes and source guards. 417 unit tests pass;
+named actions, a key-free share payload, the filter panel's aria-expanded toggle,
+and the local pane's "not remote storage" framing. Covers ObjectActionDialog,
+ShareConnectionDialog, CommandPalette, BucketSearchDialog, LocalPane,
+ExplorerFilterBar and CustomHeadersField. Explorer toolbar responsiveness
+remains covered by the wrapping classes and source guards. 421 unit tests pass;
 typecheck and build clean.
 
 ---
