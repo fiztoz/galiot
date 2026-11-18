@@ -1160,10 +1160,10 @@ Recorded here so nothing promised in conversation is lost. Ordered by value:
 
 1. ~~Server-mediated write share links.~~ **Done — see §32.** Upload grants
    (single key, byte cap, expiry, revoke, gate-only management) now exist.
-2. **Responsive and accessibility pass.** Code pass done (§33); rendered gate
-   check done at 1440/768/390. Remaining: rendered check of vault-gated screens
-   (needs an operator to unlock the isolated browser; the tool will not type a
-   master password).
+2. **Responsive and accessibility pass.** Done (§33): code guards, rendered gate
+   check at 1440/768/390, and rendered-DOM dialog checks (happy-dom). Only
+   pixel-level browser inspection of vault-gated screens remains, which needs an
+   operator to unlock the isolated browser (the tool will not type a password).
 3. ~~Ops packaging.~~ **Done — see §34.** GHCR publish on tag, Dockerfile
    HEALTHCHECK, compose example.
 4. **Multi-operator server-stored connections.** Only worth building if several
@@ -1263,11 +1263,15 @@ in S3 byte-exact. Presigned S3 PUT remains the explicit "Direct S3" option.
 
 Rendered check: the unlock gate and header were verified at 1440/768/390 — no
 overflow, visible focus ring, real labels, corrected contrast and copy. Screens
-behind the vault (connections, explorer, dialogs, palette) were NOT rendered-
-verified: the isolated profile has no vault, and creating one needs a master
-password the interactive tool refuses to enter (a boundary not bypassed via
-other tools). Their a11y/responsive behaviour is covered by the code-level
-guards above. 414 unit tests pass; typecheck and build clean.
+behind the vault (connections, explorer, dialogs, palette) were NOT pixel-
+verified in a browser: the isolated profile has no vault, and creating one needs
+a master password the interactive tool refuses to enter (a boundary not bypassed
+via other tools). Instead, `src/components/renderA11y.test.tsx` mounts the
+dialogs in a real DOM (happy-dom) and asserts the rendered accessibility
+contract — dialog role, aria-modal, labelled heading, associated input labels,
+named actions, and a key-free share payload. Explorer toolbar responsiveness
+remains covered by the wrapping classes and source guards. 417 unit tests pass;
+typecheck and build clean.
 
 ---
 
