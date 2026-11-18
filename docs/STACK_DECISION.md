@@ -1160,12 +1160,10 @@ Recorded here so nothing promised in conversation is lost. Ordered by value:
 
 1. ~~Server-mediated write share links.~~ **Done — see §32.** Upload grants
    (single key, byte cap, expiry, revoke, gate-only management) now exist.
-2. **Responsive and accessibility pass.** Code pass done (§33): focus traps,
-   dialog/listbox/progressbar semantics, toolbar wrapping, contrast, reduced
-   motion, source-level guards. Remaining: the batched rendered check at
-   390/768/1440 — browser approval was cancelled twice, and deeper screens
-   need a master password the tool will not type (an operator can enter it in
-   the isolated browser window).
+2. **Responsive and accessibility pass.** Code pass done (§33); rendered gate
+   check done at 1440/768/390. Remaining: rendered check of vault-gated screens
+   (needs an operator to unlock the isolated browser; the tool will not type a
+   master password).
 3. ~~Ops packaging.~~ **Done — see §34.** GHCR publish on tag, Dockerfile
    HEALTHCHECK, compose example.
 4. **Multi-operator server-stored connections.** Only worth building if several
@@ -1263,9 +1261,13 @@ in S3 byte-exact. Presigned S3 PUT remains the explicit "Direct S3" option.
 - **Guards:** `src/components/a11y.test.ts` asserts the wiring as source (no DOM
   env in the unit suite), same pattern as the signing guards.
 
-Not done: the rendered check at 390/768/1440. Browser approval was cancelled,
-and deeper screens require a master password the interactive tool refuses to
-enter. 423 unit tests pass; typecheck and build clean.
+Rendered check: the unlock gate and header were verified at 1440/768/390 — no
+overflow, visible focus ring, real labels, corrected contrast and copy. Screens
+behind the vault (connections, explorer, dialogs, palette) were NOT rendered-
+verified: the isolated profile has no vault, and creating one needs a master
+password the interactive tool refuses to enter (a boundary not bypassed via
+other tools). Their a11y/responsive behaviour is covered by the code-level
+guards above. 414 unit tests pass; typecheck and build clean.
 
 ---
 
