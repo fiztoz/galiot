@@ -63,7 +63,7 @@ export function FilePreview({ db, profile, file, kind }: FilePreviewProps) {
   if (!url) {
     return (
       <div className="h-full flex items-center justify-center">
-        <Loader2 size={20} className="animate-spin text-zinc-400" />
+        <Loader2 size={20} className="animate-spin text-zinc-500" />
       </div>
     );
   }
@@ -128,7 +128,7 @@ export function FilePreview({ db, profile, file, kind }: FilePreviewProps) {
         >
           <Maximize2 size={14} />
         </button>
-        <span className="ml-2 text-zinc-400">drag to pan when zoomed</span>
+        <span className="ml-2 text-zinc-500">drag to pan when zoomed</span>
       </div>
 
       <div

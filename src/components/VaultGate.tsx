@@ -179,7 +179,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 focus:outline-none"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 focus:outline-none"
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -205,13 +205,13 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
           )}
 
           {error && (
-            <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-900/30">
+            <div role="alert" className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-900/30">
               {error}
             </div>
           )}
 
           {notice && !error && (
-            <div className="p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-sm rounded-lg border border-amber-100 dark:border-amber-900/30">
+            <div role="status" className="p-3 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-sm rounded-lg border border-amber-100 dark:border-amber-900/30">
               {notice}
             </div>
           )}
@@ -240,7 +240,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
           </button>
         </form>
 
-        <p className="mt-6 flex items-start gap-2 text-xs text-zinc-400 dark:text-zinc-500 leading-relaxed">
+        <p className="mt-6 flex items-start gap-2 text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
           <ShieldCheck size={14} className="flex-none mt-0.5" />
           <span>
             The password stays in this browser. S3 keys are sealed here, then used only by the server you are running, and only while unlocked.

@@ -17,6 +17,7 @@ import {
 import { useRef } from 'react';
 import { ShareConnectionDialog } from './ShareConnectionDialog';
 import { parseConnectionShare, type ConnectionShare } from '../vault/share';
+import { useFocusTrap } from '../lib/useFocusTrap';
 import type { AppDB, ConnectionRow } from '../db/client';
 import { deleteConnection } from '../vault/repository';
 import { ConnectionDialog } from './ConnectionDialog';
@@ -51,6 +52,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const [draft, setDraft] = useState<ConnectionShare | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const connectionFileRef = useRef<HTMLInputElement>(null);
+  const settingsTrapRef = useFocusTrap<HTMLDivElement>(settingsOpen);
 
   const connections = useLiveQuery<ConnectionRow>(
     `SELECT ${CONNECTION_COLUMNS} FROM profiles ORDER BY name ASC`,
@@ -176,7 +178,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
         {rows.length === 0 ? (
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-12 flex flex-col items-center text-center">
             <div className="w-16 h-16 bg-zinc-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-6">
-              <Sailboat size={32} className="text-zinc-400 dark:text-zinc-500" />
+              <Sailboat size={32} className="text-zinc-500 dark:text-zinc-400" />
             </div>
             <h3 className="text-xl font-semibold mb-2">No buckets yet</h3>
             <p className="text-zinc-600 dark:text-zinc-300 mb-8 max-w-md">
@@ -216,7 +218,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                   >
                     <span className="font-semibold text-zinc-900 dark:text-zinc-50 hover:text-teal-700 dark:hover:text-teal-400 flex items-center gap-1.5">
                       <span className="truncate">{row.name}</span>
-                      <ChevronRight size={15} className="flex-none text-zinc-400" />
+                      <ChevronRight size={15} className="flex-none text-zinc-500" />
                     </span>
                     <span className="mt-1 block text-xs font-mono text-zinc-600 dark:text-zinc-300 truncate">
                       {hostOf(row.endpoint)}
@@ -325,10 +327,16 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
             if (e.target === e.currentTarget) setSettingsOpen(false);
           }}
         >
-          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
+          <div
+            ref={settingsTrapRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="vault-settings-title"
+            className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-md p-6"
+          >
             <div className="flex items-start justify-between gap-3 mb-4">
               <div>
-                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                <h2 id="vault-settings-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
                   Vault settings
                 </h2>
                 <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">
@@ -338,7 +346,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
               <button
                 type="button"
                 onClick={() => setSettingsOpen(false)}
-                className="p-2 -mr-2 -mt-1 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                className="p-2 -mr-2 -mt-1 rounded-lg text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                 aria-label="Close settings"
               >
                 <X size={18} />

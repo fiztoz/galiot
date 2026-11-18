@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import type { AppDB } from '../db/client';
+import { useFocusTrap } from '../lib/useFocusTrap';
 import { vaultService } from '../vault/vaultService';
 import { insertSealedConnections } from '../vault/repository';
 import {
@@ -41,6 +42,7 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<GaleonImportPreview | null>(null);
+  const trapRef = useFocusTrap<HTMLDivElement>();
   const [importedCount, setImportedCount] = useState(0);
   const [importedSkipped, setImportedSkipped] = useState<GaleonSkippedEntry[]>([]);
   const fileRef = useRef<File | null>(null);
@@ -139,10 +141,16 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
         if (e.target === e.currentTarget && !busy) onClose();
       }}
     >
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="galeon-import-title"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto"
+      >
         <div className="flex items-start justify-between gap-3 px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+            <h2 id="galeon-import-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
               Import from Galeon
             </h2>
             <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">
@@ -153,7 +161,7 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="p-2 -mr-2 -mt-1 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            className="p-2 -mr-2 -mt-1 rounded-lg text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
             aria-label="Close import dialog"
           >
             <X size={18} />
@@ -177,7 +185,7 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
                 {busy ? (
                   <Loader2 size={20} className="animate-spin text-teal-600" />
                 ) : (
-                  <FileJson size={20} className="text-zinc-400" />
+                  <FileJson size={20} className="text-zinc-500" />
                 )}
                 <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                   {busy ? 'Reading the file…' : 'Choose a Galeon export (.json)'}
@@ -313,7 +321,7 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
                 </ul>
               )}
 
-              <p className="flex items-start gap-2 text-[11px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
+              <p className="flex items-start gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
                 <ShieldCheck size={13} className="flex-none mt-0.5" />
                 Each connection was sealed by the vault worker. The keys in the Galeon file are not
                 stored in plaintext anywhere in Galiot.

@@ -6,6 +6,7 @@ import { profileConfig } from '../db/objects';
 import { getSealedCredentials } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 import { formatBytes, formatDate } from '../lib/format';
+import { useFocusTrap } from '../lib/useFocusTrap';
 
 interface ObjectDetailsDialogProps {
   db: AppDB;
@@ -26,6 +27,7 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
   const [restoreDays, setRestoreDays] = useState(1);
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [restoreNote, setRestoreNote] = useState<string | null>(null);
+  const trapRef = useFocusTrap<HTMLDivElement>();
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -144,16 +146,22 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto">
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="object-details-title"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto"
+      >
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
+          <h2 id="object-details-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
             <Info size={18} className="text-zinc-500" />
             Object details
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            className="p-2 -mr-2 rounded-lg text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             aria-label="Close details"
           >
             <X size={18} />

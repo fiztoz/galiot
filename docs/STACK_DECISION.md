@@ -1159,11 +1159,12 @@ Recorded here so nothing promised in conversation is lost. Ordered by value:
 
 1. ~~Server-mediated write share links.~~ **Done — see §32.** Upload grants
    (single key, byte cap, expiry, revoke, gate-only management) now exist.
-2. **Responsive and accessibility pass.** Explorer toolbar crowding at phone
-   width; dialog focus traps and aria labelling; palette screen-reader names;
-   one batched rendered check at 390/768/1440. Deeper screens need a master
-   password, which the interactive browser tool will not type — an operator
-   can enter it in the isolated browser window for the check.
+2. **Responsive and accessibility pass.** Code pass done (§33): focus traps,
+   dialog/listbox/progressbar semantics, toolbar wrapping, contrast, reduced
+   motion, source-level guards. Remaining: the batched rendered check at
+   390/768/1440 — browser approval was cancelled twice, and deeper screens
+   need a master password the tool will not type (an operator can enter it in
+   the isolated browser window).
 3. **Ops packaging.** Publish the container to GHCR on tag; Dockerfile
    HEALTHCHECK; a compose example. CI already verifies build + server smoke.
 4. **Multi-operator server-stored connections.** Only worth building if several
@@ -1239,6 +1240,31 @@ Verified: unit tests (bounded PUT, over-cap 413, missing length 411, wrong
 method 405, anonymous revoke 403, revoked 404, read-grant PUT 405) and live
 against Zenko CloudServer: 31/31 server-path checks including upload landing
 in S3 byte-exact. Presigned S3 PUT remains the explicit "Direct S3" option.
+
+---
+
+## 33. Responsive and accessibility pass (backlog item 2, code pass)
+
+- **Focus management:** `useFocusTrap` (Tab cycles inside the modal, focus
+  restored on close) applied to all eight dialogs plus the inline vault-settings
+  modal (active only while open). Dialogs carry `role="dialog"`, `aria-modal`,
+  and a labelled heading.
+- **Semantics:** object list/grid is a multiselectable listbox with
+  `aria-selected` rows; transfer bars are progressbars with values; vault gate
+  errors/notices are `alert`/`status`; palette is a labelled dialog.
+- **Responsive:** explorer toolbar wraps; search takes a full row below `sm`;
+  filter panel clamped to viewport width; action labels collapse to icons
+  below `md`.
+- **Contrast:** light-mode zinc-400 text (≈2.6:1) replaced with zinc-500
+  (≈4.6:1); dark captions moved zinc-500 → zinc-400; placeholders likewise.
+- **Motion:** global `prefers-reduced-motion` block; loading state remains
+  conveyed by text and colour.
+- **Guards:** `src/components/a11y.test.ts` asserts the wiring as source (no DOM
+  env in the unit suite), same pattern as the signing guards.
+
+Not done: the rendered check at 390/768/1440. Browser approval was cancelled,
+and deeper screens require a master password the interactive tool refuses to
+enter. 423 unit tests pass; typecheck and build clean.
 
 ---
 

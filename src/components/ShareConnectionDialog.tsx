@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, Download, Share2, X } from 'lucide-react';
 import type { ConnectionRow } from '../db/client';
 import { connectionShareText } from '../vault/share';
+import { useFocusTrap } from '../lib/useFocusTrap';
 
 interface ShareConnectionDialogProps {
   profile: ConnectionRow;
@@ -12,6 +13,7 @@ interface ShareConnectionDialogProps {
 export function ShareConnectionDialog({ profile, onClose }: ShareConnectionDialogProps) {
   const [copied, setCopied] = useState(false);
   const text = connectionShareText(profile);
+  const trapRef = useFocusTrap<HTMLDivElement>();
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -49,16 +51,22 @@ export function ShareConnectionDialog({ profile, onClose }: ShareConnectionDialo
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg">
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-connection-title"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg"
+      >
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
+          <h2 id="share-connection-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
             <Share2 size={18} className="text-zinc-500" />
             Share connection
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            className="p-2 -mr-2 rounded-lg text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             aria-label="Close dialog"
           >
             <X size={18} />

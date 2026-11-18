@@ -188,7 +188,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                   <button
                     type="button"
                     onClick={() => void run(() => transferManager.clearFinished())}
-                    className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                    className="p-1 rounded text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
                     title="Clear finished"
                     aria-label="Clear finished"
                   >
@@ -198,7 +198,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                 <button
                   type="button"
                   onClick={() => setOpen(false)}
-                  className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                  className="p-1 rounded text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
                   aria-label="Collapse transfers"
                 >
                   <ChevronDown size={13} />
@@ -219,7 +219,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                 return (
                   <li key={task.id} className="px-3 py-2.5">
                     <div className="flex items-start gap-2">
-                      <span className="mt-0.5 flex-none text-zinc-400">
+                      <span className="mt-0.5 flex-none text-zinc-500">
                         {task.direction === 'upload' ? (
                           <ArrowUpFromLine size={14} />
                         ) : (
@@ -235,7 +235,14 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           {task.remote_key}
                         </p>
 
-                        <div className="mt-1 h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                        <div
+                          className="mt-1 h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden"
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={percent}
+                          aria-label={`Transfer progress for ${task.remote_key}`}
+                        >
                           <div
                             className={`h-full rounded-full transition-all ${
                               task.status === 'failed'
@@ -254,7 +261,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           </div>
                         )}
 
-                        <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-zinc-400 dark:text-zinc-500">
+                        <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-zinc-500 dark:text-zinc-400">
                           <span className="tabular-nums">
                             {formatBytes(done)} / {formatBytes(total)}
                             {isActive && Number(task.speed_bytes_sec) > 0
@@ -288,7 +295,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           <button
                             type="button"
                             onClick={() => transferManager.pause(task.id)}
-                            className="p-1 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            className="p-1 rounded text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                             title="Pause"
                             aria-label="Pause transfer"
                           >
@@ -300,7 +307,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           <button
                             type="button"
                             onClick={() => handleResume(task)}
-                            className="p-1 rounded text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            className="p-1 rounded text-zinc-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                             title={task.direction === 'upload' ? 'Re-select file to resume' : 'Resume'}
                             aria-label="Resume transfer"
                           >
@@ -312,7 +319,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           <button
                             type="button"
                             onClick={() => handleResume(task)}
-                            className="p-1 rounded text-zinc-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            className="p-1 rounded text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                             title="Retry with the same file"
                             aria-label="Retry transfer"
                           >
@@ -324,7 +331,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           <button
                             type="button"
                             onClick={() => transferManager.cancel(task.id)}
-                            className="p-1 rounded text-zinc-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            className="p-1 rounded text-zinc-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                             title="Cancel"
                             aria-label="Cancel transfer"
                           >
@@ -336,7 +343,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           <button
                             type="button"
                             onClick={() => void run(() => transferManager.removeTask(task.id))}
-                            className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                            className="p-1 rounded text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                             title="Remove from list"
                             aria-label="Remove transfer"
                           >

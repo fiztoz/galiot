@@ -95,7 +95,7 @@ export function ExplorerFilterBar({ value, onChange }: ExplorerFilterBarProps) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-40 w-72 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl p-4 space-y-3">
+        <div className="absolute right-0 top-full mt-1 z-40 w-72 max-w-[calc(100vw-1.5rem)] rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl p-4 space-y-3">
           <div className="flex items-center justify-between">
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-200">
               <SlidersHorizontal size={13} className="text-teal-500" />
@@ -114,7 +114,7 @@ export function ExplorerFilterBar({ value, onChange }: ExplorerFilterBarProps) {
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                className="p-1 rounded text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-200"
                 aria-label="Close filters"
               >
                 <X size={13} />
@@ -186,7 +186,7 @@ export function ExplorerFilterBar({ value, onChange }: ExplorerFilterBarProps) {
             </select>
           </div>
 
-          <p className="text-[10px] leading-relaxed text-zinc-400 dark:text-zinc-500">
+          <p className="text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400">
             Filters run as SQL over cached objects. While searching, they apply to matches across
             the whole connection instead of the current folder.
           </p>

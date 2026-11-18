@@ -6,6 +6,7 @@ import { profileConfig } from '../db/objects';
 import { getSealedCredentials } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 import { formatBytes, formatDate } from '../lib/format';
+import { useFocusTrap } from '../lib/useFocusTrap';
 
 interface BucketSearchDialogProps {
   db: AppDB;
@@ -30,6 +31,7 @@ export function BucketSearchDialog({ db, profile, initialQuery, onNavigate, onCl
   const [result, setResult] = useState<BucketSearchResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const trapRef = useFocusTrap<HTMLDivElement>();
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -73,16 +75,22 @@ export function BucketSearchDialog({ db, profile, initialQuery, onNavigate, onCl
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-xl max-h-[85vh] flex flex-col">
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bucket-search-title"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-xl max-h-[85vh] flex flex-col"
+      >
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
+          <h2 id="bucket-search-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
             <Search size={18} className="text-zinc-500" />
             Search whole bucket
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            className="p-2 -mr-2 rounded-lg text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             aria-label="Close search"
           >
             <X size={18} />
@@ -140,7 +148,7 @@ export function BucketSearchDialog({ db, profile, initialQuery, onNavigate, onCl
                         className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg border border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 hover:border-teal-500/50 text-left transition-colors"
                         title="Open the folder containing this object"
                       >
-                        <FolderOpen size={13} className="flex-none text-zinc-400" />
+                        <FolderOpen size={13} className="flex-none text-zinc-500" />
                         <span className="min-w-0 flex-1">
                           <span className="block font-mono text-xs text-zinc-800 dark:text-zinc-100 break-all">{object.key}</span>
                           <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">

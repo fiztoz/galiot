@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Command } from 'lucide-react';
+import { useFocusTrap } from '../lib/useFocusTrap';
 
 export interface PaletteCommand {
   id: string;
@@ -18,6 +19,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
+  const trapRef = useFocusTrap<HTMLDivElement>();
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -68,18 +70,24 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+      >
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-zinc-100 dark:border-zinc-800">
-          <Command size={15} className="text-zinc-400 flex-none" />
+          <Command size={15} className="text-zinc-500 flex-none" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Type a command…"
             autoFocus
-            className="flex-1 bg-transparent text-sm text-zinc-800 dark:text-zinc-100 focus:outline-none placeholder:text-zinc-400"
+            className="flex-1 bg-transparent text-sm text-zinc-800 dark:text-zinc-100 focus:outline-none placeholder:text-zinc-500"
             aria-label="Command palette"
           />
-          <kbd className="text-[10px] text-zinc-400 border border-zinc-200 dark:border-zinc-700 rounded px-1">esc</kbd>
+          <kbd className="text-[10px] text-zinc-500 border border-zinc-200 dark:border-zinc-700 rounded px-1">esc</kbd>
         </div>
         <ul ref={listRef} className="max-h-72 overflow-y-auto py-1">
           {matches.length === 0 ? (
@@ -101,7 +109,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
                   }`}
                 >
                   <span>{command.label}</span>
-                  {command.hint && <span className="text-[11px] text-zinc-400 dark:text-zinc-500">{command.hint}</span>}
+                  {command.hint && <span className="text-[11px] text-zinc-500 dark:text-zinc-400">{command.hint}</span>}
                 </button>
               </li>
             ))

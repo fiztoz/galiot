@@ -292,7 +292,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
         <button
           type="button"
           onClick={() => void loadEntries(path)}
-          className="p-1.5 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          className="p-1.5 rounded text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
           title="Refresh"
           aria-label="Refresh local folder"
         >
@@ -301,7 +301,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
         <button
           type="button"
           onClick={eject}
-          className="p-1.5 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          className="p-1.5 rounded text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
           title="Unmount folder"
           aria-label="Unmount local folder"
         >
@@ -322,7 +322,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
           .filter(Boolean)
           .map((segment, i, all) => (
             <span key={`${segment}-${i}`} className="flex items-center">
-              <ChevronRight size={11} className="text-zinc-400" />
+              <ChevronRight size={11} className="text-zinc-500" />
               <button
                 type="button"
                 onClick={() => setPath(all.slice(0, i + 1).join('/'))}
@@ -337,7 +337,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
           <button
             type="button"
             onClick={() => setPath(parentPath(path))}
-            className="p-1 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+            className="p-1 rounded text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200"
             title="Up one level"
             aria-label="Up one level"
           >
@@ -350,7 +350,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
         {entries.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center p-6 text-center">
             {loading ? (
-              <Loader2 size={18} className="animate-spin text-zinc-400" />
+              <Loader2 size={18} className="animate-spin text-zinc-500" />
             ) : (
               <>
                 <FolderOpen size={22} className="text-zinc-300 dark:text-zinc-600 mb-2" />
@@ -372,7 +372,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
                   {entry.kind === 'directory' ? (
                     <Folder size={14} className="text-teal-500 flex-none" />
                   ) : (
-                    <FileText size={14} className="text-zinc-400 flex-none" />
+                    <FileText size={14} className="text-zinc-500 flex-none" />
                   )}
                   <span
                     className={`truncate text-xs flex-1 ${
@@ -385,7 +385,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
                     {entry.name}
                   </span>
                   {entry.kind === 'file' && (
-                    <span className="text-[10px] text-zinc-400 dark:text-zinc-500 tabular-nums flex-none">
+                    <span className="text-[10px] text-zinc-500 dark:text-zinc-400 tabular-nums flex-none">
                       {entry.size !== undefined ? formatBytes(entry.size) : ''}
                     </span>
                   )}
@@ -396,7 +396,7 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
         )}
       </div>
 
-      <div className="flex-none px-3 py-1.5 text-[10px] text-zinc-400 dark:text-zinc-500 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
+      <div className="flex-none px-3 py-1.5 text-[10px] text-zinc-500 dark:text-zinc-400 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
         <span>
           {entries.length} item{entries.length === 1 ? '' : 's'}
         </span>

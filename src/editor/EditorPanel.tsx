@@ -356,7 +356,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
         <button
           type="button"
           onClick={onClose}
-          className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+          className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
           aria-label="Close editor"
         >
           <X size={16} />
@@ -380,7 +380,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
       <div className="flex-1 min-h-0 relative">
         {loading ? (
           <div className="h-full flex items-center justify-center">
-            <Loader2 size={20} className="animate-spin text-zinc-400" />
+            <Loader2 size={20} className="animate-spin text-zinc-500" />
           </div>
         ) : media !== null ? (
           <FilePreview db={db} profile={profile} file={file} kind={media} />

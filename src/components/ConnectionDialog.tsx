@@ -14,6 +14,7 @@ import { diagnoseCors } from '../s3/diagnostics';
 import { normalizeEndpoint } from '../s3/url';
 import { getProxyToken } from '../server/session';
 import type { ConnectionShare } from '../vault/share';
+import { useFocusTrap } from '../lib/useFocusTrap';
 
 interface ConnectionDialogProps {
   db: AppDB;
@@ -76,6 +77,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
   const [buckets, setBuckets] = useState<string[] | null>(null);
   const [bucketsBusy, setBucketsBusy] = useState(false);
   const [bucketsError, setBucketsError] = useState<string | null>(null);
+  const trapRef = useFocusTrap<HTMLDivElement>();
 
   const isEdit = editing !== null && editing !== undefined;
   // Keyed on the id, not the object: the connections list re-renders with fresh
@@ -398,10 +400,16 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connection-title"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+      >
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+            <h2 id="connection-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
               {isEdit ? 'Edit connection' : 'Add connection'}
             </h2>
             <p className="text-sm text-zinc-600 dark:text-zinc-300 mt-0.5">
@@ -413,7 +421,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
           <button
             type="button"
             onClick={onClose}
-            className="p-2 -mr-2 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            className="p-2 -mr-2 rounded-lg text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
             aria-label="Close dialog"
           >
             <X size={18} />
@@ -493,7 +501,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
               <label htmlFor="conn-access-key" className={LABEL_CLASS}>
                 Access Key ID
                 {isEdit && (
-                  <span className="ml-1.5 font-normal text-zinc-400 dark:text-zinc-500">
+                  <span className="ml-1.5 font-normal text-zinc-500 dark:text-zinc-400">
                     {form.accessKeyId.trim() ? 'will be replaced' : 'keeping the stored key'}
                   </span>
                 )}
@@ -513,7 +521,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
               <label htmlFor="conn-secret-key" className={LABEL_CLASS}>
                 Secret Access Key
                 {isEdit && (
-                  <span className="ml-1.5 font-normal text-zinc-400 dark:text-zinc-500">
+                  <span className="ml-1.5 font-normal text-zinc-500 dark:text-zinc-400">
                     {form.secretAccessKey.trim() ? 'will be replaced' : 'keeping the stored key'}
                   </span>
                 )}

@@ -60,7 +60,7 @@ export function CustomHeadersField({
     <div className="col-span-2">
       <div className="flex items-baseline justify-between mb-1.5">
         <span className={labelClass.replace('mb-1.5', '')}>Custom headers</span>
-        <span className="text-xs text-zinc-400 dark:text-zinc-500 tabular-nums">
+        <span className="text-xs text-zinc-500 dark:text-zinc-400 tabular-nums">
           {rows.length}/{MAX_CUSTOM_HEADERS}
         </span>
       </div>
@@ -72,7 +72,7 @@ export function CustomHeadersField({
       </p>
 
       {rows.length === 0 && (
-        <p className="text-xs text-zinc-400 dark:text-zinc-500 mb-2.5 italic">
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-2.5 italic">
           None. Requests go out with only the headers Galiot computes itself.
         </p>
       )}
@@ -109,7 +109,7 @@ export function CustomHeadersField({
                   type="button"
                   onClick={() => remove(index)}
                   aria-label={`Remove header ${index + 1}`}
-                  className="flex-none mt-2 p-1.5 rounded-md text-zinc-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                  className="flex-none mt-2 p-1.5 rounded-md text-zinc-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                 >
                   <X size={15} />
                 </button>
@@ -135,7 +135,7 @@ export function CustomHeadersField({
       </button>
 
       <div className="mt-3 p-2.5 bg-zinc-50 dark:bg-zinc-800/60 rounded-lg border border-zinc-200 dark:border-zinc-700 flex gap-2">
-        <Info size={14} className="flex-none mt-0.5 text-zinc-400 dark:text-zinc-500" />
+        <Info size={14} className="flex-none mt-0.5 text-zinc-500 dark:text-zinc-400" />
         <div className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed space-y-1">
           <p>
             <span className="font-medium text-zinc-600 dark:text-zinc-300">Not for secrets.</span>{' '}

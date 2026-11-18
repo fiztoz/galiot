@@ -13,6 +13,7 @@ import {
   Clock,
 } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
+import { useFocusTrap } from '../lib/useFocusTrap';
 import {
   EXPIRY_PRESETS,
   createLink,
@@ -42,6 +43,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const trapRef = useFocusTrap<HTMLDivElement>();
 
   const links = useLiveQuery<PresignedRecord>(
     `SELECT * FROM presigned_history WHERE profile_id = $1 AND key = $2
@@ -88,10 +90,16 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto">
+      <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-title"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto"
+      >
         <div className="flex items-start justify-between gap-3 px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
           <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
+            <h2 id="share-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
               <Link2 size={18} className="text-teal-500" />
               Share link
             </h2>
@@ -102,7 +110,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
           <button
             type="button"
             onClick={onClose}
-            className="p-2 -mr-2 -mt-1 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            className="p-2 -mr-2 -mt-1 rounded-lg text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             aria-label="Close share dialog"
           >
             <X size={18} />
@@ -272,13 +280,13 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
                       className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40"
                     >
                       {link.permission === 'read' ? (
-                        <Download size={12} className="text-zinc-400 flex-none" />
+                        <Download size={12} className="text-zinc-500 flex-none" />
                       ) : (
-                        <Upload size={12} className="text-zinc-400 flex-none" />
+                        <Upload size={12} className="text-zinc-500 flex-none" />
                       )}
                       <span
                         className={`text-[11px] tabular-nums flex-1 ${
-                          expired ? 'text-zinc-400 line-through' : 'text-zinc-600 dark:text-zinc-300'
+                          expired ? 'text-zinc-500 line-through' : 'text-zinc-600 dark:text-zinc-300'
                         }`}
                       >
                         {new Date(link.expires_at).toLocaleString()}
@@ -290,7 +298,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
                       <button
                         type="button"
                         onClick={() => void handleCopy(link)}
-                        className="p-1.5 rounded text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400"
+                        className="p-1.5 rounded text-zinc-500 hover:text-teal-600 dark:hover:text-teal-400"
                         title="Copy URL"
                         aria-label="Copy URL"
                       >
@@ -304,7 +312,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
                         href={link.url}
                         target="_blank"
                         rel="noreferrer noopener"
-                        className="p-1.5 rounded text-zinc-400 hover:text-teal-600 dark:hover:text-teal-400"
+                        className="p-1.5 rounded text-zinc-500 hover:text-teal-600 dark:hover:text-teal-400"
                         title="Open link"
                         aria-label="Open link"
                       >
@@ -318,7 +326,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
             </div>
           )}
 
-          <p className="flex items-start gap-2 text-[11px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
+          <p className="flex items-start gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
             <Clock size={13} className="flex-none mt-0.5" />
             {rows.some((link) => isServerLink(link.url))
               ? permission === 'write' && via === 'server'
@@ -352,7 +360,7 @@ function DeleteLinkButton({ db, link }: { db: AppDB; link: PresignedRecord }) {
           setBusy(false);
         }
       }}
-      className="p-1.5 rounded text-zinc-400 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
+      className="p-1.5 rounded text-zinc-500 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
       title={server ? 'Revoke this link now' : 'Forget this link'}
       aria-label={server ? 'Revoke this link now' : 'Forget this link'}
     >
