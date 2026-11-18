@@ -68,3 +68,23 @@ describe('contrast and motion', () => {
     expect(css).toContain('prefers-reduced-motion: reduce');
   });
 });
+
+describe('responsive layout guards (pixel-pass regressions)', () => {
+  test('connections toolbar wraps so Add connection is never clipped at 390px', () => {
+    const source = read('ConnectionsView.tsx');
+    expect(source).toContain('flex flex-wrap items-center justify-between gap-3 mb-6');
+    expect(source).toContain('flex flex-wrap items-center gap-2');
+    // Galeon import collapses to an icon with an accessible name on phones.
+    expect(source).toContain('aria-label="Import from Galeon"');
+  });
+
+  test('explorer breadcrumb keeps a readable minimum width instead of collapsing', () => {
+    const source = read('Explorer.tsx');
+    expect(source).toContain('min-w-40 flex-1 overflow-x-auto whitespace-nowrap');
+  });
+
+  test('explorer status bar reserves space so the floating Transfers pill cannot overlap it', () => {
+    const source = read('Explorer.tsx');
+    expect(source).toContain('pt-1.5 pb-12 sm:pb-1.5');
+  });
+});

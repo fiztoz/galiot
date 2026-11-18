@@ -1276,6 +1276,32 @@ ExplorerFilterBar and CustomHeadersField. Explorer toolbar responsiveness
 remains covered by the wrapping classes and source guards. 421 unit tests pass;
 typecheck and build clean.
 
+**Browser pixel pass (2026-11-18, follow-up).** A fresh isolated `browser_use`
+session re-verified the real unlock gate at 1440/768/390 (no overflow, visible
+initial focus ring). Because the interactive tool will not enter a master
+password, the vault-gated surfaces were pixel-checked in a throwaway loopback
+preview that mounts the real components over an in-memory PGlite with stubbed
+S3 responses (no credentials, no real bucket, removed afterwards). Verified:
+empty + populated Buckets, explorer + filter panel, whole-bucket search results,
+object details/versions, command palette (ArrowDown moves the highlight), and
+the connection / new-folder / rename / copy / share / share-connection dialogs;
+Tab stays trapped and Escape dismisses. The page-level overflow flag alone
+missed clipping, so screenshots were the authority. Three regressions found and
+fixed:
+
+1. **390px populated Buckets toolbar clipped “Add connection.”** Header and
+   action row now `flex-wrap` with a gap; the Galeon import collapses to an icon
+   with `aria-label` below `sm` (ConnectionsView).
+2. **768/390px explorer breadcrumb collapsed to a few characters.** The path
+   `nav` gains `min-w-40` so it keeps a readable width and the toolbar wraps
+   instead of squeezing it (Explorer).
+3. **390px floating Transfers pill overlapped the explorer status text.** The
+   status bar reserves `pb-12` below `sm` so the pill sits clear of it (Explorer).
+
+Each fix is locked by a source guard in `a11y.test.ts` (“responsive layout
+guards”). 424 unit tests pass; typecheck and build clean. Live vault-unlock and
+real-S3 rendering remain outside this pass by design.
+
 ---
 
 ## 34. Public-repo preparation and ops packaging (2026-11-18)

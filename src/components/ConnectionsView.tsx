@@ -104,7 +104,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
       <div className="max-w-5xl w-full mx-auto p-6 md:p-12">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
           <div>
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">Buckets</h2>
             <p className="text-sm text-zinc-600 dark:text-zinc-300 mt-1">
@@ -113,7 +113,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                 : `${rows.length} bucket${rows.length === 1 ? '' : 's'}`}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
@@ -136,10 +136,12 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
               <button
                 type="button"
                 onClick={() => setImportOpen(true)}
+                title="Import connections from a Galeon export"
+                aria-label="Import from Galeon"
                 className="inline-flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
               >
                 <FileDown size={15} />
-                Import from Galeon
+                <span className="hidden sm:inline">Import from Galeon</span>
               </button>
             )}
             <input
