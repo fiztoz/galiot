@@ -1,0 +1,21 @@
+# Galiot — example compose file for self-hosting.
+#
+#   GALIOT_GATE=$(openssl rand -hex 24) docker compose -f deploy/compose.example.yml up -d
+#
+# The host running this container must be able to reach your S3 endpoint
+# (DNS, port, TLS). See docs/OPERATIONS.md.
+services:
+  galiot:
+    image: ghcr.io/fiztoz/galiot:latest
+    # build: .        # uncomment to build locally instead of pulling
+    ports:
+      - "8788:8788"
+    environment:
+      GALIOT_HOST: 0.0.0.0
+      GALIOT_PORT: "8788"
+      # Required for a non-loopback bind; the server refuses to start without it.
+      # This gate protects the Galiot API. It is NOT an S3 key.
+      GALIOT_GATE: ${GALIOT_GATE:?set GALIOT_GATE to a random secret, e.g. openssl rand -hex 24}
+    restart: unless-stopped
+    # No volumes: Galiot keeps no server-side state. Credentials live in each
+    # user's browser vault; server sessions are memory-only.

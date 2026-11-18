@@ -18,7 +18,19 @@ bun run build && bun run server  # production, serves dist/ and /api/s3
 ```
 
 Container: build the `Dockerfile`, run it with `GALIOT_HOST=0.0.0.0` (already set
-in the image) and a gate (below).
+in the image) and a gate (below). The image carries a HEALTHCHECK against
+`/api/health`.
+
+Prebuilt images are published to GHCR on version tags
+(`ghcr.io/fiztoz/galiot`). An example compose file lives at
+`deploy/compose.example.yml`:
+
+```bash
+GALIOT_GATE=$(openssl rand -hex 24) docker compose -f deploy/compose.example.yml up -d
+```
+
+There is no server-side state and no volume: credentials live in each user's
+browser vault; server sessions are memory-only.
 
 | Variable | Meaning |
 |---|---|
