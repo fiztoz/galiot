@@ -184,7 +184,7 @@ describe('repository hostnames', () => {
 
   test('rejects things that look like real services', () => {
     for (const host of [
-      'minio.example.com',
+      'minio.internal',
       'storage.customer-domain.tld',
       // A vendor domain with a real TLD bolted on the end is a lookalike, not
       // a vendor endpoint.
