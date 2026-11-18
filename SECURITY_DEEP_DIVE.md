@@ -164,10 +164,10 @@ frame-ancestors 'none';
 
 ### 3.2 Origin Isolation on GitHub Pages (`github.io`)
 - **Public Suffix List (PSL)**: `github.io` is registered on the global Public Suffix List. This means `alice.github.io` and `bob.github.io` are treated by all modern browsers as **separate, isolated origins**. Alice cannot access Bob's cookies, IndexedDB, or OPFS.
-- **Same-User Risk**: If a user hosts another application under the same GitHub account (e.g., `fiztoz.github.io/demo-app`), both apps share the `fiztoz.github.io` origin.
+- **Same-User Risk**: If a user hosts another application under the same GitHub account (e.g., `user.github.io/demo-app`), both apps share the `user.github.io` origin.
 - **Best Practice Recommendation**: 
-  - Host Galiot on a **custom domain** (e.g., `galiot.app` or `s3.fizto.dev`), or
-  - Dedicate the root `fiztoz.github.io` repository exclusively to Galiot.
+  - Host Galiot on a **custom domain** (e.g., `galiot.example.com` or `s3.example.com`), or
+  - Dedicate the root `user.github.io` repository exclusively to Galiot.
 
 ---
 
@@ -237,8 +237,8 @@ Galiot includes an interactive CORS validator that rejects wildcard policies and
 [
   {
     "AllowedOrigins": [
-      "https://fiztoz.github.io",
-      "https://galiot.app"
+      "https://user.github.io",
+      "https://galiot.example.com"
     ],
     "AllowedMethods": [
       "GET",
