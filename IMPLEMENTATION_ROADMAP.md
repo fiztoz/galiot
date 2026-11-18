@@ -109,4 +109,4 @@
   - Automated MinIO test suite verifying MD5/SHA256 checksums on parallel uploads, aborted parts, and network blip resumes. (`bun run test:integrity`)
 - [x] **5.3 Performance Benchmarks**:
   - Benchmark listing speed and memory usage against Galeon Desktop and Cyberduck. (`bun run bench`; engine results in [`benchmarks/ENGINE.md`](benchmarks/ENGINE.md); Galeon/Cyberduck comparison still needs a desktop run)
-- [ ] **5.4 Launch** (operational work: hosting decision, deploy secrets, real-bucket verification — tracked in [`LAUNCH.md`](LAUNCH.md))
+- [ ] **5.4 Launch** (operational work: hosting decision, deploy secrets, real-bucket verification — now tracked in [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`docs/STACK_DECISION.md`](docs/STACK_DECISION.md) §22–30; the original `LAUNCH.md` was deleted)

@@ -6,6 +6,13 @@
 > implementation detail, not a design constraint. See
 > [docs/STACK_DECISION.md](docs/STACK_DECISION.md) for the decision log. This
 > file is kept as the original spec; corrections live there.
+>
+> **⚠️ Architecture correction (2026-11-17):** Galiot is self-hosted; the Bun
+> server signs every S3 request (vendored aws4fetch) and opens the connection,
+> and the browser only calls same-origin `/api/s3`. A static file host cannot
+> run Galiot — the 2026-09-24 "any static host or edge CDN" line above is
+> superseded. Current model: [docs/OPERATIONS.md](docs/OPERATIONS.md) and
+> [docs/STACK_DECISION.md](docs/STACK_DECISION.md) §22.
 
 
 > *A deep dive into the modern web and build stack powering Galiot, focusing on **Bun 1.4**, **PGlite**, and modern browser APIs.*

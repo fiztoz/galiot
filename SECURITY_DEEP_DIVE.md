@@ -6,9 +6,44 @@
 > implementation detail, not a design constraint. See
 > [docs/STACK_DECISION.md](docs/STACK_DECISION.md) for the decision log. This
 > file is kept as the original spec; corrections live there.
+>
+> **⚠️ Security model correction (2026-11-17):** Galiot is self-hosted: the Bun
+> server signs every S3 request itself and holds session credentials **in
+> memory** (never at rest). The historical "zero-knowledge server" framing
+> below is false for the current model — the vault is zero-knowledge **at
+> rest** only. Read "Current security model (2026-11)" immediately below before
+> the historical sections. See [docs/OPERATIONS.md](docs/OPERATIONS.md) §3 and
+> [docs/STACK_DECISION.md](docs/STACK_DECISION.md) §22.
 
 
 > *A comprehensive security deep dive for running a 100% client-side, zero-knowledge cloud storage client in the browser and on GitHub Pages.*
+
+---
+
+## Current security model (2026-11)
+
+*Correction layer. The sections below this one are the original spec, kept as
+written; where they conflict with this section, this section wins.*
+
+- **Self-hosted, server-side signing.** One Bun process serves the SPA and the
+  S3 API on the same origin. The server signs every S3 request (vendored
+  aws4fetch) and opens the connection; the browser talks only to same-origin
+  `/api/s3` (CSP `connect-src 'self'`). A static host cannot run Galiot.
+- **The server sees credentials in memory, per session.** The old
+  "zero-knowledge server" claim is false now: the vault worker sends the
+  decrypted keys to the operator's own server once per session. The server
+  keeps them in memory only, wipes them on vault lock or session expiry
+  (15-minute idle), and never writes them to disk.
+- **The vault is zero-knowledge at rest.** Credentials are still sealed in the
+  browser WebCrypto vault (PBKDF2-600k, AES-GCM-256; the DEK lives only in the
+  vault worker; memory zeroing after use) and PGlite stores ciphertext only.
+- **CORS (§6) applies only to "Direct S3" presigned links.** Listing,
+  transfer, edit, and preview run through the server and need no bucket CORS
+  policy. §6's bucket-CORS guidance is relevant only for the explicit presigned
+  "Direct S3" share option, whose loads use the recipient's network.
+- **Share links:** default are revocable, expiring server-streamed grants;
+  upload grants cover one key with a byte cap; presigned S3 URLs are the
+  explicit "Direct S3" option and cannot be revoked.
 
 ---
 

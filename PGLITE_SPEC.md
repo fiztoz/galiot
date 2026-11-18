@@ -1,5 +1,12 @@
 # Galiot — PGlite (WASM Postgres) Engine Specification
 
+> **⚠️ Architecture correction (2026-11-17):** Galiot is self-hosted; the Bun
+> server signs and calls S3 and the browser only calls same-origin `/api/s3`.
+> PGlite itself is unchanged by that: it runs in the browser as specified below.
+> This file is kept as the original spec; corrections live in
+> [docs/STACK_DECISION.md](docs/STACK_DECISION.md) (§4, §22) and
+> [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 > *A complete technical blueprint for embedding PostgreSQL via WebAssembly into Galiot, powering client-side object indexing, reactive UI state, and instant metadata querying inside the browser.*
 
 ---
@@ -11,7 +18,7 @@ In traditional web storage clients:
 2. **Slow Filtering**: Browsing, regex matching, and date filtering across tens of thousands of objects in JavaScript locks the main thread.
 3. **Loss of Hierarchy**: Calculating folder sizes recursively in client-side code requires complex tree algorithms and multiple network requests.
 
-**PGlite (by ElectricSQL)** embeds a true, native PostgreSQL 16 engine compiled to WebAssembly directly in Galiot:
+**PGlite (by ElectricSQL)** embeds a true, native ~~PostgreSQL 16~~ **PostgreSQL 18.3 (PGlite 0.5.8)** *(correction 2026-11-17, per docs/FEASIBILITY_AND_RISKS.md §1)* engine compiled to WebAssembly directly in Galiot:
 - **Instant SQL Indexing**: Search, filter, and sort 500,000+ cached objects in under 2ms using B-Tree and GIN indexes.
 - **Recursive Folder Sizing**: Instant directory size rollups with standard SQL recursive Common Table Expressions (`WITH RECURSIVE`).
 - **Reactive UI with `live.query()`**: UI components subscribe to SQL queries. When transfers progress or new files are cached, UI updates trigger automatically at 60 FPS.

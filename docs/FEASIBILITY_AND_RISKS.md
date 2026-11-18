@@ -7,6 +7,13 @@
 > this document is the correction layer, consistent with `docs/STACK_DECISION.md` §6.
 > Related: [`STACK_DECISION.md`](STACK_DECISION.md) (stack pins), [`PGLITE_SPEC.md`](../PGLITE_SPEC.md),
 > [`SECURITY_DEEP_DIVE.md`](../SECURITY_DEEP_DIVE.md), [`../IMPLEMENTATION_ROADMAP.md`](../IMPLEMENTATION_ROADMAP.md).
+>
+> **⚠️ Architecture note (2026-11-17):** Galiot is now self-hosted — the Bun
+> server signs every S3 request and opens the connection; the browser only calls
+> same-origin `/api/s3` (see `docs/STACK_DECISION.md` §22 and
+> `docs/OPERATIONS.md`). The browser-capability findings below still apply to
+> the client half; the browser-to-S3 CORS/upload constraints apply only to the
+> explicit "Direct S3" presigned links.
 
 ---
 

@@ -20,19 +20,7 @@
 
 ---
 
-## 2. The Name: Why "Galiot"?
-
-In maritime history:
-- **The Galleon** (*Galeon*): A heavy, multi-deck ship of the line built to carry immense cargo across transatlantic ocean routes. Sturdy and deep-drafted.
-- **The Galiot** (*Galeot* / *Galiote*): A smaller, nimble, fast-sailing vessel developed by the same Mediterranean and Atlantic shipwrights. Designed for quick coastal maneuvering, shallow waters, and rapid voyages where a heavy galleon could not navigate.
-
-### The Metaphor
-- **Galeon** is the heavy desktop flagship with full OS-level capabilities.
-- **Galiot** is the nimble, zero-install web vessel that navigates any browser tab, tablet, or workstation instantly.
-
----
-
-## 3. High-Level Architecture
+## 2. High-Level Architecture
 
 ```
 +───────────────────────────────────────────────────────────────────────────+
@@ -105,7 +93,7 @@ shown there and checked before single-object delete, rename, or copy-over.
 
 ---
 
-## 4. Documentation Index
+## 3. Documentation Index
 
 The complete research and technical specification suite for Galiot:
 
@@ -114,9 +102,8 @@ The complete research and technical specification suite for Galiot:
 | [**docs/OPERATIONS.md**](docs/OPERATIONS.md) | Operator guide: running the server, host reachability, the access gate, where credentials live, and which network each feature uses. |
 | [**docs/STACK_DECISION.md**](docs/STACK_DECISION.md) | Verified stack comparison with sources, provisional decisions, and corrections to earlier specs (2026-09-17; pass 3 2026-09-18). |
 | [**docs/FEASIBILITY_AND_RISKS.md**](docs/FEASIBILITY_AND_RISKS.md) | Browser feasibility pass: Postgres 18.3, memory-resident IDB VFS, Safari 7-day storage deletion, part-buffered S3 uploads, and the revised Phase 1 spike list (2026-09-18). |
-| [**docs/HOSTING_COMPARISON.md**](docs/HOSTING_COMPARISON.md) | Free-tier hosting shootout for a public non-commercial OSS app: bandwidth, custom headers, billing risk. Dated research pass; its recommendation is superseded — see STACK_DECISION §12–13. Hosting is treated as an interchangeable implementation detail, not a design constraint. |
-| [**SECURITY_DEEP_DIVE.md**](SECURITY_DEEP_DIVE.md) | Comprehensive security threat model: WebAuthn PRF Passkey vault, memory zeroing, CSP, browser extension defense, and untrusted file sandboxing. |
-| [**ARCHITECTURE.md**](ARCHITECTURE.md) | Full architectural blueprint: client-only PWA, CORS solutions, security vault, and browser APIs. |
+| [**SECURITY_DEEP_DIVE.md**](SECURITY_DEEP_DIVE.md) | Comprehensive security threat model: WebCrypto vault, memory zeroing, CSP, browser extension defense, and untrusted file sandboxing. Historical spec — its "Current security model (2026-11)" correction covers the self-hosted server that now signs and calls S3. |
+| [**ARCHITECTURE.md**](ARCHITECTURE.md) | Original architectural blueprint (client-only PWA era). Its hosting and CORS model is superseded — see the correction banner at its top and STACK_DECISION §22. |
 | [**PGLITE_SPEC.md**](PGLITE_SPEC.md) | Complete WASM Postgres blueprint: schema, OPFS storage worker, live reactive queries, CTEs, and vector search. |
 | [**TECH_STACK.md**](TECH_STACK.md) | Original stack deep dive (Bun 1.4, React 19, Tailwind v4, editor choice, browser storage APIs). Its editor choice was superseded — see STACK_DECISION §3. |
 | [**GALEON_PARITY_MATRIX.md**](GALEON_PARITY_MATRIX.md) | Feature-by-feature parity analysis comparing Galeon (Desktop) with Galiot (Web). |
@@ -126,7 +113,7 @@ The complete research and technical specification suite for Galiot:
 
 ---
 
-## 5. Comparison: Galeon vs. Galiot
+## 4. Comparison: Galeon vs. Galiot
 
 | Dimension | Galeon (Desktop) | Galiot (Web) |
 |---|---|---|
@@ -140,11 +127,11 @@ The complete research and technical specification suite for Galiot:
 | **Local File Access** | Unrestricted `std::fs` | HTML5 File System Access API |
 | **File Editing** | Spawns external VS Code binary | Built-in CodeMirror 6 with side-by-side diff |
 | **S3 Protocol** | Direct TCP via OpenDAL | Signed HTTPS via the app server |
-| **Telemetry / Tracking**| Zero (Privacy first) | Zero (Privacy first, 100% local) |
+| **Telemetry / Tracking**| Zero (Privacy first) | Zero (no analytics; traffic goes only to your own server and S3) |
 
 ---
 
-## 6. Importing connections from Galeon
+## 5. Importing connections from Galeon
 
 **Connections → Import from Galeon** reads a Galeon profile export (`galeon.profiles`,
 version 1) and brings its S3 connections across.
@@ -182,7 +169,7 @@ thread. Galeon remains the tool for those connections.
 
 ---
 
-## 7. Editing a connection
+## 6. Editing a connection
 
 Every connection is editable — hover a card for the pencil icon. Name, endpoint,
 region, bucket, addressing and credentials can all change, and the same
@@ -211,7 +198,7 @@ Two consequences of editing, by design:
 
 ---
 
-## 8. Fixing CORS from a terminal, with nothing pre-configured
+## 7. Fixing CORS from a terminal, with nothing pre-configured
 
 The app itself does not need bucket CORS. Listing, transfer, edit, and preview
 go through the Galiot server. This section is only for a share link or other
@@ -264,7 +251,11 @@ bucket rejects — and the connection test says which.
 
 ---
 
-## 9. Verifying against a real server
+## 8. Verifying against a real server
+
+The primary live suite runs Zenko CloudServer in a container
+(`./scripts/live-s3-test.sh`; see [docs/OPERATIONS.md](docs/OPERATIONS.md) §7).
+`./scripts/minio-test.sh` remains for operators with cached MinIO images:
 
 ```bash
 ./scripts/minio-test.sh
@@ -272,8 +263,8 @@ bucket rejects — and the connection test says which.
 
 That starts MinIO in a container, creates the buckets, runs both live suites
 against it and removes it again. It needs Docker (colima or Docker Desktop) and
-pulls `quay.io/minio/minio` and `quay.io/minio/mc` — MinIO no longer publishes to
-Docker Hub.
+cached `quay.io/minio/minio` and `quay.io/minio/mc` images — MinIO images are no
+longer publicly pullable (upstream archived 2026-04-25).
 
 - `bun run test:integrity` — uploads round-trip byte-for-byte, multipart ETags are
   recomputed and compared with the bucket's own, interrupted uploads resume,
@@ -292,21 +283,21 @@ error-code loss that reported a `501` as a permissions problem. Details in
 
 ---
 
-## 10. Where S3 traffic goes
+## 9. Where S3 traffic goes
 
-Every signed request is posted to `/api/s3-proxy` on the Galiot origin. The Bun
-process calls S3, so the bucket does not need a CORS policy for listing,
-upload, download, or edit. The machine running Galiot has to be able to reach
-the endpoint. A bucket that is only visible on a laptop VPN stays unreachable
-until that machine can see it too.
+Every S3 request is posted to `/api/s3` on the Galiot origin. The Bun server
+signs it and calls S3, so the bucket does not need a CORS policy for listing,
+upload, download, edit, or preview. The machine running Galiot has to be able
+to reach the endpoint. A bucket that is only visible on a laptop VPN stays
+unreachable until that machine can see it too.
 
-Presigned share links and in-app media previews still open the object URL in a
-browser. Those loads use the viewer's network, and a preview can still need a
-bucket CORS rule.
+Only "Direct S3" presigned share links open the object URL in a browser. Those
+loads use the viewer's network and can need a bucket CORS rule; in-app
+previews stream through this server over a same-origin media URL and do not.
 
 ---
 
-## 11. Known Limitations
+## 10. Known Limitations
 
 | Area | Limitation | Why |
 |---|---|---|
@@ -317,3 +308,15 @@ bucket CORS rule.
 | Folder sizes | Exact only for folders you have visited or scanned with "Exact size" | The cache is populated by browsing; uncached branches are not included |
 | Recovering from a lost vault | Impossible without a passphrase or an exported backup | By design: Galiot cannot read its own vault. Export a backup from Vault settings |
 | Transfer checksums | Verified on demand, not continuously | ETags are content MD5s only for single-part, unencrypted uploads; multipart ETags are composite |
+
+---
+
+## 11. Security & contributing
+
+- Report vulnerabilities privately — see [SECURITY.md](SECURITY.md). The server
+  holds session credentials in memory; the vault is zero-knowledge at rest.
+- Development setup, checks, and conventions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 12. License
+
+[MIT](LICENSE) © Galiot Contributors. Self-host it, fork it, ship it.

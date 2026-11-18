@@ -6,6 +6,14 @@
 > implementation detail, not a design constraint. See
 > [docs/STACK_DECISION.md](docs/STACK_DECISION.md) for the decision log. This
 > file is kept as the original spec; corrections live there.
+>
+> **⚠️ Scope correction (2026-11-17):** Galiot is self-hosted — the Bun server
+> signs and calls S3 (same-origin `/api/s3`). **SFTP/FTP is out of scope**:
+> Galiot is S3-only. **Bucket CORS is not required** for listing, transfer,
+> edit, or preview (the "requires bucket CORS" cells below are stale); it
+> applies only to the explicit "Direct S3" presigned-share option. See
+> [docs/OPERATIONS.md](docs/OPERATIONS.md) and
+> [docs/STACK_DECISION.md](docs/STACK_DECISION.md) §22–23.
 
 
 > *A feature-by-feature evaluation comparing Galeon (Desktop / Rust / Tauri) with Galiot (100% Client-Side Web / GitHub Pages), detailing parity strategies, web trade-offs, and web-native superpowers.*

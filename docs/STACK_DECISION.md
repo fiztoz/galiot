@@ -245,7 +245,8 @@ escape hatch if header-controlled features are needed.**
 
 > **Superseded 2026-09-18:** the launch host is now **Cloudflare Pages** (free, no card, no
 > static-request/bandwidth cap, custom headers). GitHub Pages is demoted to docs mirror.
-> Full free-tier comparison for a non-commercial OSS project: [`HOSTING_COMPARISON.md`](HOSTING_COMPARISON.md).
+> Full free-tier comparison for a non-commercial OSS project: `HOSTING_COMPARISON.md`
+> (deleted 2026-11-18 when third-party deployment support was removed; see §34).
 
 Verified facts (all current as of 2026-09):
 - GitHub Pages CANNOT set custom response headers (`_headers`-style config is
@@ -1165,8 +1166,8 @@ Recorded here so nothing promised in conversation is lost. Ordered by value:
    390/768/1440 — browser approval was cancelled twice, and deeper screens
    need a master password the tool will not type (an operator can enter it in
    the isolated browser window).
-3. **Ops packaging.** Publish the container to GHCR on tag; Dockerfile
-   HEALTHCHECK; a compose example. CI already verifies build + server smoke.
+3. ~~Ops packaging.~~ **Done — see §34.** GHCR publish on tag, Dockerfile
+   HEALTHCHECK, compose example.
 4. **Multi-operator server-stored connections.** Only worth building if several
    people share one Galiot host without each holding S3 keys. Today the
    browser vault + secret-free connection share + ciphertext vault backup
@@ -1265,6 +1266,35 @@ in S3 byte-exact. Presigned S3 PUT remains the explicit "Direct S3" option.
 Not done: the rendered check at 390/768/1440. Browser approval was cancelled,
 and deeper screens require a master password the interactive tool refuses to
 enter. 423 unit tests pass; typecheck and build clean.
+
+---
+
+## 34. Public-repo preparation and ops packaging (2026-11-18)
+
+**Third-party deployment removed.** `vercel.json`, `wrangler.jsonc`,
+`public/_headers`, `docs/HOSTING_COMPARISON.md`, and `LAUNCH.md` are deleted;
+the `wrangler` devDependency is gone. Security headers now have a single source
+(`src/server/securityHeaders.ts`), applied by the Bun server and mirrored by
+the index.html meta CSP; `src/releaseConfig.test.ts` guards that no platform
+config returns and that the two policies match (minus `frame-ancestors`, inert
+in meta). The service worker never caches `/api/` or non-GET responses. CI
+smokes `/api/health` and asserts the CSP and nosniff headers on `/`.
+
+**Public under MIT.** LICENSE already MIT. Added SECURITY.md (private advisory
+reporting; honest trust model: the server is not zero-knowledge while sessions
+are open) and CONTRIBUTING.md (setup, checks, live-suite rules, conventions).
+README refreshed: name-etymology section removed by operator request, stale
+hosting/client-only claims corrected, license and security/contributing
+sections added. Historical specs keep correction banners; SECURITY_DEEP_DIVE
+gains a "Current security model (2026-11)" layer because its zero-knowledge
+server framing became materially false.
+
+**Ops packaging (backlog item 3).** `.github/workflows/release.yml` publishes
+the container to `ghcr.io/fiztoz/galiot` on `v*` tags (semver + latest), all
+actions SHA-pinned; Dockerfile gains a HEALTHCHECK against `/api/health`;
+`deploy/compose.example.yml` shows a gated single-service deployment with no
+volumes (no server-side state). OPERATIONS §1 documents the image and compose
+path.
 
 ---
 
