@@ -77,7 +77,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
   const [buckets, setBuckets] = useState<string[] | null>(null);
   const [bucketsBusy, setBucketsBusy] = useState(false);
   const [bucketsError, setBucketsError] = useState<string | null>(null);
-  const trapRef = useFocusTrap<HTMLDivElement>();
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
 
   const isEdit = editing !== null && editing !== undefined;
   // Keyed on the id, not the object: the connections list re-renders with fresh
@@ -459,7 +459,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
 
             <div className="col-span-2">
               <div className="flex items-center justify-between">
-                <label htmlFor="conn-bucket" className={LABEL_CLASS}>Bucket</label>
+                <label id="conn-bucket-label" htmlFor="conn-bucket" className={LABEL_CLASS}>Bucket</label>
                 <button
                   type="button"
                   onClick={() => void handleBrowseBuckets()}
@@ -471,6 +471,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
               </div>
               <input
                 id="conn-bucket"
+                aria-labelledby="conn-bucket-label"
                 className={INPUT_CLASS}
                 value={form.bucket}
                 onChange={(e) => setField('bucket', e.target.value)}

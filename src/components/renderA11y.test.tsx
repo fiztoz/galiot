@@ -18,6 +18,7 @@ import { ShareConnectionDialog } from './ShareConnectionDialog';
 import { CommandPalette } from './CommandPalette';
 import { BucketSearchDialog } from './BucketSearchDialog';
 import { ConnectionDialog } from './ConnectionDialog';
+import { GaleonImportDialog } from './GaleonImportDialog';
 import { TransferDrawer } from './TransferDrawer';
 import { LocalPane } from './LocalPane';
 import { ExplorerFilterBar, EMPTY_FILTER_PANEL } from './ExplorerFilterBar';
@@ -185,8 +186,10 @@ describe('rendered dialog accessibility', () => {
 
     const bucketLabel = el.querySelector('label[for="conn-bucket"]');
     const bucketInput = el.querySelector<HTMLInputElement>('#conn-bucket');
+    expect(bucketLabel?.id).toBe('conn-bucket-label');
     expect(bucketLabel?.textContent).toBe('Bucket');
     expect(bucketInput).not.toBeNull();
+    expect(bucketInput?.getAttribute('aria-labelledby')).toBe('conn-bucket-label');
 
     const setInputValue = (input: HTMLInputElement, value: string) => {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
@@ -318,5 +321,18 @@ describe('rendered dialog accessibility', () => {
     expect(progress).not.toBeNull();
     expect(progress?.getAttribute('aria-valuenow')).toBe('40');
     expect(progress?.getAttribute('aria-label')).toContain('docs/report.txt');
+  });
+
+  test('GaleonImportDialog is a labelled modal only rendered when open', () => {
+    const el = render(
+      <GaleonImportDialog db={{} as AppDB} open={true} onClose={() => {}} />,
+    );
+    const dialog = el.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute('aria-modal')).toBe('true');
+    const labelledby = dialog?.getAttribute('aria-labelledby');
+    expect(labelledby).toBe('galeon-import-title');
+    expect(el.querySelector(`#${labelledby}`)?.textContent).toBe('Import from Galeon');
+    expect(el.querySelector('button[aria-label="Close import dialog"]')).not.toBeNull();
   });
 });

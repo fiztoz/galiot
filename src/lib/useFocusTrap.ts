@@ -22,7 +22,9 @@ export function useFocusTrap<T extends HTMLElement>(active = true) {
         (element) => element.getClientRects().length > 0,
       );
 
-    focusables()[0]?.focus();
+    if (!node.contains(document.activeElement)) {
+      focusables()[0]?.focus();
+    }
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return;

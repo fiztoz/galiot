@@ -42,7 +42,7 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<GaleonImportPreview | null>(null);
-  const trapRef = useFocusTrap<HTMLDivElement>();
+  const trapRef = useFocusTrap<HTMLDivElement>(open);
   const [importedCount, setImportedCount] = useState(0);
   const [importedSkipped, setImportedSkipped] = useState<GaleonSkippedEntry[]>([]);
   const fileRef = useRef<File | null>(null);

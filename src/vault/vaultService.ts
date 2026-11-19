@@ -19,6 +19,7 @@ class VaultService {
   private nextId = 1;
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
   private lockedListeners = new Set<EventListener>();
+  private deletedListeners = new Set<() => void>();
 
   /** Lazily spawns the vault worker and wires response routing. */
   private ensureWorker(): Worker {
@@ -90,6 +91,19 @@ class VaultService {
   public onLocked(listener: EventListener): () => void {
     this.lockedListeners.add(listener);
     return () => this.lockedListeners.delete(listener);
+  }
+
+  /** Subscribes to explicit vault deletion events after storage wipe completes. */
+  public onDeleted(listener: () => void): () => void {
+    this.deletedListeners.add(listener);
+    return () => this.deletedListeners.delete(listener);
+  }
+
+  /** Broadcasts that the vault was deleted and storage wiped. */
+  public notifyDeleted(): void {
+    for (const listener of this.deletedListeners) {
+      listener();
+    }
   }
 
   /**

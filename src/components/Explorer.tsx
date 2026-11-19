@@ -1401,7 +1401,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       </div>
 
       {/* Status bar */}
-      <div className="flex-none border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 pt-1.5 pb-12 sm:pb-1.5 sm:pr-48 flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
+      <div className="flex-none border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 pt-1.5 pb-14 sm:pb-1.5 sm:pr-48 flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
         <span>
           {rows.length} item{rows.length === 1 ? '' : 's'}
           {!isSearching && !filtersActive && rows.length > 0 ? ` · ${formatBytes(totalVisibleSize)}` : ''}

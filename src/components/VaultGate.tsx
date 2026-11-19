@@ -69,9 +69,21 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       })();
     });
 
+    const unsubscribeDeleted = vaultService.onDeleted(() => {
+      if (cancelled) return;
+      setPassword('');
+      setConfirmPassword('');
+      setShowConfirmPassword(false);
+      setError(null);
+      onUnlockChange?.(false);
+      setNotice('The vault was deleted. Create a new one to continue.');
+      setState('create');
+    });
+
     return () => {
       cancelled = true;
       unsubscribe();
+      unsubscribeDeleted();
     };
   }, [db, onUnlockChange]);
 
@@ -125,6 +137,16 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
         setState('unlocked');
         onUnlockChange?.(true);
       } catch (err) {
+        try {
+          if (!(await vaultExists(db))) {
+            setError(null);
+            setNotice('The vault was deleted. Create a new one to continue.');
+            setState('create');
+            return;
+          }
+        } catch {
+          // Keep original unlock error when existence check fails.
+        }
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);

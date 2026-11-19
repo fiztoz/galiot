@@ -107,6 +107,7 @@ export async function deleteVault(db: AppDB): Promise<void> {
   // principle be created before the rows are gone.
   await lockVault();
   await wipeVaultData(db);
+  vaultService.notifyDeleted();
 }
 
 export async function isVaultUnlocked(): Promise<boolean> {

@@ -37,6 +37,11 @@ describe('dialog accessibility wiring', () => {
     expect(source).toContain('aria-labelledby="vault-settings-title"');
   });
 
+  test('open-controlled dialogs only activate the focus trap when open', () => {
+    expect(read('GaleonImportDialog.tsx')).toContain('useFocusTrap<HTMLDivElement>(open)');
+    expect(read('ConnectionDialog.tsx')).toContain('useFocusTrap<HTMLDivElement>(open)');
+  });
+
   test('the object list exposes selection to assistive tech', () => {
     const source = read('Explorer.tsx');
     expect(source).toContain('role="listbox"');
@@ -85,6 +90,6 @@ describe('responsive layout guards (pixel-pass regressions)', () => {
 
   test('explorer status bar reserves space so the floating Transfers pill cannot overlap it', () => {
     const source = read('Explorer.tsx');
-    expect(source).toContain('pt-1.5 pb-12 sm:pb-1.5');
+    expect(source).toContain('pt-1.5 pb-14 sm:pb-1.5 sm:pr-48');
   });
 });
