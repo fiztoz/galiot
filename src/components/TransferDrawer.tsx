@@ -174,8 +174,11 @@ export function TransferDrawer(_props: TransferDrawerProps) {
           </div>
         )}
 
-        {open && rows.length > 0 && (
-          <div className="w-full max-h-[60vh] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl">
+        {open && (
+          <div
+            id="transfer-drawer-panel"
+            className="w-full max-h-[60vh] overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl"
+          >
             <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-100 dark:border-zinc-800 sticky top-0 bg-white dark:bg-zinc-900">
               <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
                 Transfers
@@ -206,7 +209,17 @@ export function TransferDrawer(_props: TransferDrawerProps) {
               </div>
             </div>
 
-            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {rows.length === 0 ? (
+              <div className="px-4 py-6 text-center">
+                <p className="text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                  No transfers yet
+                </p>
+                <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Uploads and downloads appear here with progress and resume controls.
+                </p>
+              </div>
+            ) : (
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {rows.map((task) => {
                 const total = Number(task.file_size);
                 const done = Number(task.bytes_transferred);
@@ -356,12 +369,15 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                 );
               })}
             </ul>
+            )}
           </div>
         )}
 
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-controls="transfer-drawer-panel"
           className="inline-flex items-center gap-2 rounded-full border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300 shadow-lg hover:border-teal-500/60 transition-colors"
         >
           {activeCount > 0 ? (
@@ -370,7 +386,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
             <ArrowUpFromLine size={13} className="text-teal-500" />
           )}
           {activeCount > 0 ? `${activeCount} transfer${activeCount === 1 ? '' : 's'} running` : 'Transfers'}
-          {open ? <ChevronUp size={12} /> : rows.length > 0 ? <ChevronDown size={12} /> : null}
+          {open ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
         </button>
       </div>
     </>

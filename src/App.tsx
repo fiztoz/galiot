@@ -102,7 +102,7 @@ function Shell({ db }: { db: AppDB }) {
         </VaultGate>
       </main>
 
-      <TransferDrawer db={db} />
+      {isUnlocked && <TransferDrawer db={db} />}
     </div>
   );
 }

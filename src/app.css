@@ -34,6 +34,10 @@
 }
 
 /* Base resets */
+:root {
+  color-scheme: light dark;
+}
+
 *,
 *::before,
 *::after {

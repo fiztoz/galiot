@@ -143,6 +143,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
 
   const setField = useCallback(<K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+    setError(null);
     setTest({ status: 'idle' });
     setCors({ status: 'idle' });
   }, []);
@@ -235,6 +236,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
   }, [form, isEdit, editing, db]);
 
   const handleTest = useCallback(async () => {
+    setError(null);
     const check = buildPayload();
     if (!check.ok) {
       setTest({ status: 'fail', message: check.error });
@@ -405,9 +407,9 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
         role="dialog"
         aria-modal="true"
         aria-labelledby="connection-title"
-        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden"
       >
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
+        <div className="flex-none flex items-center justify-between px-6 pt-6 pb-4 border-b border-zinc-100 dark:border-zinc-800">
           <div>
             <h2 id="connection-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
               {isEdit ? 'Edit connection' : 'Add connection'}
@@ -428,7 +430,8 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
           </button>
         </div>
 
-        <form onSubmit={handleSave} className="p-6 space-y-4">
+        <form onSubmit={handleSave} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
               <label htmlFor="conn-name" className={LABEL_CLASS}>Name</label>
@@ -559,12 +562,13 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
                   spellCheck={false}
                 />
               </div>
-              <label className="flex items-start gap-2.5 text-sm text-zinc-600 dark:text-zinc-300 cursor-pointer">
+              <label htmlFor="conn-path-style" className="flex items-start gap-2.5 text-sm text-zinc-600 dark:text-zinc-300 cursor-pointer">
                 <input
+                  id="conn-path-style"
                   type="checkbox"
                   checked={form.pathStyle}
                   onChange={(e) => setField('pathStyle', e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-zinc-300 dark:border-zinc-600 text-teal-600 focus:ring-teal-500"
+                  className="mt-0.5 h-4 w-4 rounded border-zinc-300 dark:border-zinc-600 accent-teal-600 text-teal-600 focus:ring-teal-500"
                 />
                 <span>
                   Path-style addressing
@@ -583,7 +587,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
           </details>
 
           {error && (
-            <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-900/30">
+            <div role="alert" className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-900/30">
               {error}
             </div>
           )}
@@ -645,8 +649,9 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
               )}
             </div>
           )}
+          </div>
 
-          <div className="flex items-center justify-between pt-2">
+          <div className="flex-none flex items-center justify-between px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900">
             <button
               type="button"
               onClick={handleTest}
