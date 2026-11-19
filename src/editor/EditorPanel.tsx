@@ -36,6 +36,7 @@ import { vaultService } from '../vault/vaultService';
 import { detectLanguage, mediaKind } from './filetypes';
 import { languageSupport } from './languages';
 import { formatBytes } from '../lib/format';
+import { useFocusTrap } from '../lib/useFocusTrap';
 import { FilePreview } from './FilePreview';
 
 interface EditorPanelProps {
@@ -159,8 +160,19 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const viewRef = useRef<EditorView | null>(null);
   const mergeRef = useRef<MergeView | null>(null);
   const currentTextRef = useRef('');
+  const trapRef = useFocusTrap<HTMLDivElement>();
 
   const filename = useMemo(() => file.filename || file.key.split('/').pop() || file.key, [file]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented && !saving) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose, saving]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -295,7 +307,13 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   }, [db, profile, file.key, onSaved]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex flex-col">
+    <div
+      ref={trapRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={filename}
+      className="fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex flex-col"
+    >
       <header className="flex-none flex items-center gap-3 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
         <FileText size={16} className="text-teal-500 flex-none" />
         <div className="min-w-0">
@@ -303,7 +321,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
             {filename}
           </p>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-            {formatBytes(Number(file.size))} · {detectLanguage(filename)}
+            {formatBytes(Number(file.size))} · {media ?? detectLanguage(filename)}
             {dirty ? ' · unsaved changes' : ''}
           </p>
         </div>

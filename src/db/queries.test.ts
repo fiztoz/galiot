@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { Glob } from 'bun';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { live } from '@electric-sql/pglite/live';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
+import type { AppDB } from './client';
 import { runMigrations } from './migrations';
+import { replaceListing } from './objects';
 import {
   buildObjectQuery,
   buildSubtreeSizeQuery,
@@ -13,8 +16,8 @@ import {
 
 const PROFILE_ID = '22222222-2222-4222-8222-222222222222';
 
-async function seededDb(): Promise<PGlite> {
-  const db = await PGlite.create(undefined, { extensions: { pg_trgm } });
+async function seededDb() {
+  const db = await PGlite.create(undefined, { extensions: { live, pg_trgm } });
   await runMigrations(db);
 
   const now = new Date().toISOString();
@@ -164,6 +167,66 @@ describe('buildObjectQuery', () => {
     expect(isFilterActive(EMPTY_FILTERS)).toBe(false);
     expect(isFilterActive({ ...EMPTY_FILTERS, search: 'abc' })).toBe(false);
     expect(isFilterActive({ ...EMPTY_FILTERS, minSize: 0 })).toBe(true);
+  });
+
+  test('search works inside PGlite live.query without format() specifier errors', async () => {
+    const db = await seededDb();
+    const runLive = async (search: string): Promise<string[]> => {
+      const { query, params } = buildObjectQuery({
+        profileId: PROFILE_ID,
+        bucket: 'my-bucket',
+        prefix: '',
+        filters: { ...EMPTY_FILTERS, search },
+      });
+      return await new Promise<string[]>((resolve, reject) => {
+        void db.live
+          .query<{ filename: string }>(query, params, (res) => {
+            resolve(res.rows.map((r) => r.filename));
+          })
+          .then((sub) => sub.unsubscribe())
+          .catch(reject);
+      });
+    };
+
+    expect(await runLive('jpg')).toEqual(['a.jpg', 'deep.jpg']);
+    expect(await runLive('%')).toEqual([]);
+    await db.close();
+  });
+});
+
+describe('replaceListing S3 folder markers', () => {
+  test('skips 0-byte folder self-markers and upserts cleanly when entering a newly created folder', async () => {
+    const db = await seededDb();
+    const appDb = db as unknown as AppDB;
+
+    await replaceListing(appDb, PROFILE_ID, 'my-bucket', '', {
+      prefixes: ['e2e-temp/'],
+      objects: [],
+    });
+
+    await replaceListing(appDb, PROFILE_ID, 'my-bucket', 'e2e-temp/', {
+      prefixes: [],
+      objects: [
+        {
+          key: 'e2e-temp/',
+          size: 0,
+          eTag: '"d41d8cd98f00b204e9800998ecf8427e"',
+          lastModified: '2026-11-19T00:00:00.000Z',
+          storageClass: 'STANDARD',
+        },
+        {
+          key: 'e2e-temp/README-copy.md',
+          size: 68,
+          eTag: '"abc123"',
+          lastModified: '2026-11-19T00:00:01.000Z',
+          storageClass: 'STANDARD',
+        },
+      ],
+    });
+
+    expect(await runListQuery(db, EMPTY_FILTERS, '')).toEqual(['e2e-temp']);
+    expect(await runListQuery(db, EMPTY_FILTERS, 'e2e-temp/')).toEqual(['README-copy.md']);
+    await db.close();
   });
 });
 

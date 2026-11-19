@@ -53,7 +53,7 @@ export function buildObjectQuery(input: {
   const { search, minSize, modifiedAfter, modifiedBefore, storageClass } = input.filters;
 
   if (search.length > 0) {
-    where.push(`filename ILIKE '%' || ${add(escapeLike(search))} || '%' ESCAPE '\\'`);
+    where.push(`filename ILIKE ${add(`%${escapeLike(search)}%`)} ESCAPE '\\'`);
   } else {
     where.push(`prefix = ${add(input.prefix)}`);
   }

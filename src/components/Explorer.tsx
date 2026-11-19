@@ -972,153 +972,6 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
         </div>
       )}
 
-      {/* Selection action bar */}
-      {selected.size > 0 && (
-        <div className="flex-none px-3 py-2 bg-teal-50/70 dark:bg-teal-950/30 border-b border-teal-100 dark:border-teal-900/40 flex items-center gap-2 text-xs flex-wrap">
-          <span className="font-medium text-teal-800 dark:text-teal-300">
-            {selected.size} selected{selectedSize > 0 ? ` · ${formatBytes(selectedSize)}` : ''}
-          </span>
-
-          {singleDirKey && subtreeSize !== null && (
-            <span className="inline-flex items-center gap-1.5 text-teal-700 dark:text-teal-400">
-              <Sigma size={12} />
-              {formatBytes(subtreeSize)} cached
-              {subtreeFileCount !== null ? ` · ${subtreeFileCount} files` : ''}
-            </span>
-          )}
-
-          {singleDirKey && (
-            <button
-              type="button"
-              onClick={() => void handleComputeFolderSize()}
-              disabled={busyAction !== null}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors disabled:opacity-50"
-              title="Walk the remote subtree for an exact size"
-            >
-              {busyAction === 'stats' ? (
-                <Loader2 size={13} className="animate-spin" />
-              ) : (
-                <ArrowUp size={13} />
-              )}
-              Exact size
-            </button>
-          )}
-
-          <div className="flex-1" />
-
-          <button
-            type="button"
-            onClick={() => void handleDownload(selectedRows)}
-            disabled={busyAction !== null}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-colors disabled:opacity-50"
-          >
-            {busyAction === 'download' ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Download size={13} />
-            )}
-            Download
-          </button>
-
-          {selectedRows.length === 1 && !selectedRows[0]?.is_dir && (
-            <>
-            <button
-              type="button"
-              onClick={() => selectedRows[0] && setEditing(selectedRows[0])}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors"
-            >
-              <Pencil size={13} />
-              Open
-            </button>
-
-            <button
-              type="button"
-              onClick={() => selectedRows[0] && setSharing(selectedRows[0])}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors"
-            >
-              <Link2 size={13} />
-              Share
-            </button>
-
-            <button
-              type="button"
-              onClick={() => selectedRows[0] && setDetails(selectedRows[0])}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-colors"
-            >
-              <Info size={13} />
-              Details
-            </button>
-            </>
-          )}
-
-          {selectedRows.length === 1 && (
-            <>
-            <button
-              type="button"
-              onClick={() => selectedRows[0] && setAction({ kind: 'rename', row: selectedRows[0] })}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-colors"
-            >
-              <PencilLine size={13} />
-              Rename
-            </button>
-
-            <button
-              type="button"
-              onClick={() => selectedRows[0] && setAction({ kind: 'copy', row: selectedRows[0] })}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-colors"
-            >
-              <Files size={13} />
-              Copy to
-            </button>
-            </>
-          )}
-
-          <button
-            type="button"
-            onClick={() => void handleCopyUri()}
-            disabled={busyAction !== null}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors disabled:opacity-50"
-          >
-            <Copy size={13} />
-            Copy URI
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (confirmDelete) {
-                void handleDelete();
-              } else {
-                setConfirmDelete(true);
-              }
-            }}
-            disabled={busyAction !== null}
-            onBlur={() => setConfirmDelete(false)}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-medium transition-colors disabled:opacity-50 ${
-              confirmDelete
-                ? 'bg-red-600 hover:bg-red-700 text-white border border-red-600'
-                : 'bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40'
-            }`}
-          >
-            {busyAction === 'delete' ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Trash2 size={13} />
-            )}
-            {confirmDelete ? `Delete ${selected.size}?` : 'Delete'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setSelected(new Set())}
-            className="p-1.5 rounded-md text-teal-700 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/40 transition-colors"
-            aria-label="Clear selection"
-          >
-            <X size={13} />
-          </button>
-        </div>
-      )}
-
       {/* Notice */}
       {notice && (
         <div className="flex-none px-4 py-2 bg-teal-50/70 dark:bg-teal-950/30 border-b border-teal-100 dark:border-teal-900/40 text-xs text-teal-800 dark:text-teal-300 flex items-center justify-between gap-3">
@@ -1412,6 +1265,153 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
           </div>
         )}
       </div>
+
+      {/* Selection action bar */}
+      {selected.size > 0 && (
+        <div className="flex-none px-3 py-2 bg-teal-50/70 dark:bg-teal-950/30 border-t border-teal-100 dark:border-teal-900/40 flex items-center gap-2 text-xs flex-wrap sm:pr-48">
+          <span className="font-medium text-teal-800 dark:text-teal-300">
+            {selected.size} selected{selectedSize > 0 ? ` · ${formatBytes(selectedSize)}` : ''}
+          </span>
+
+          {singleDirKey && subtreeSize !== null && (
+            <span className="inline-flex items-center gap-1.5 text-teal-700 dark:text-teal-400">
+              <Sigma size={12} />
+              {formatBytes(subtreeSize)} cached
+              {subtreeFileCount !== null ? ` · ${subtreeFileCount} files` : ''}
+            </span>
+          )}
+
+          {singleDirKey && (
+            <button
+              type="button"
+              onClick={() => void handleComputeFolderSize()}
+              disabled={busyAction !== null}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors disabled:opacity-50"
+              title="Walk the remote subtree for an exact size"
+            >
+              {busyAction === 'stats' ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <ArrowUp size={13} />
+              )}
+              Exact size
+            </button>
+          )}
+
+          <div className="flex-1" />
+
+          <button
+            type="button"
+            onClick={() => void handleDownload(selectedRows)}
+            disabled={busyAction !== null}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-colors disabled:opacity-50"
+          >
+            {busyAction === 'download' ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Download size={13} />
+            )}
+            Download
+          </button>
+
+          {selectedRows.length === 1 && !selectedRows[0]?.is_dir && (
+            <>
+            <button
+              type="button"
+              onClick={() => selectedRows[0] && setEditing(selectedRows[0])}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors"
+            >
+              <Pencil size={13} />
+              Open
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectedRows[0] && setSharing(selectedRows[0])}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors"
+            >
+              <Link2 size={13} />
+              Share
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectedRows[0] && setDetails(selectedRows[0])}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-colors"
+            >
+              <Info size={13} />
+              Details
+            </button>
+            </>
+          )}
+
+          {selectedRows.length === 1 && (
+            <>
+            <button
+              type="button"
+              onClick={() => selectedRows[0] && setAction({ kind: 'rename', row: selectedRows[0] })}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-colors"
+            >
+              <PencilLine size={13} />
+              Rename
+            </button>
+
+            <button
+              type="button"
+              onClick={() => selectedRows[0] && setAction({ kind: 'copy', row: selectedRows[0] })}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 font-medium transition-colors"
+            >
+              <Files size={13} />
+              Copy to
+            </button>
+            </>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void handleCopyUri()}
+            disabled={busyAction !== null}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors disabled:opacity-50"
+          >
+            <Copy size={13} />
+            Copy URI
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (confirmDelete) {
+                void handleDelete();
+              } else {
+                setConfirmDelete(true);
+              }
+            }}
+            disabled={busyAction !== null}
+            onBlur={() => setConfirmDelete(false)}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-medium transition-colors disabled:opacity-50 ${
+              confirmDelete
+                ? 'bg-red-600 hover:bg-red-700 text-white border border-red-600'
+                : 'bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40'
+            }`}
+          >
+            {busyAction === 'delete' ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Trash2 size={13} />
+            )}
+            {confirmDelete ? `Delete ${selected.size}?` : 'Delete'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            className="p-1.5 rounded-md text-teal-700 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/40 transition-colors"
+            aria-label="Clear selection"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
 
       {/* Status bar */}
       <div className="flex-none border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 pt-1.5 pb-14 sm:pb-1.5 sm:pr-48 flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">

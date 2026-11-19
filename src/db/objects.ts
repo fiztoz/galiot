@@ -48,20 +48,40 @@ export async function replaceListing(
       [profileId, bucket, prefix],
     );
 
+    const dirSet = new Set(listing.prefixes);
     for (const dirPrefix of listing.prefixes) {
       await tx.query(
         `INSERT INTO objects_cache
-           (profile_id, bucket, key, prefix, filename, is_dir, size)
-         VALUES ($1, $2, $3, $4, $5, true, 0)`,
+           (profile_id, bucket, key, prefix, filename, is_dir, size, cached_at)
+         VALUES ($1, $2, $3, $4, $5, true, 0, NOW())
+         ON CONFLICT (profile_id, bucket, key) DO UPDATE
+           SET prefix = EXCLUDED.prefix,
+               filename = EXCLUDED.filename,
+               is_dir = true,
+               size = 0,
+               cached_at = NOW()`,
         [profileId, bucket, dirPrefix, prefix, lastSegment(dirPrefix)],
       );
     }
 
     for (const obj of listing.objects) {
+      if ((prefix.length > 0 && obj.key === prefix) || dirSet.has(obj.key)) {
+        continue;
+      }
       await tx.query(
         `INSERT INTO objects_cache
-           (profile_id, bucket, key, prefix, filename, is_dir, size, etag, last_modified, storage_class, content_type)
-         VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10)`,
+           (profile_id, bucket, key, prefix, filename, is_dir, size, etag, last_modified, storage_class, content_type, cached_at)
+         VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10, NOW())
+         ON CONFLICT (profile_id, bucket, key) DO UPDATE
+           SET prefix = EXCLUDED.prefix,
+               filename = EXCLUDED.filename,
+               is_dir = false,
+               size = EXCLUDED.size,
+               etag = EXCLUDED.etag,
+               last_modified = EXCLUDED.last_modified,
+               storage_class = EXCLUDED.storage_class,
+               content_type = EXCLUDED.content_type,
+               cached_at = NOW()`,
         [
           profileId,
           bucket,
@@ -199,7 +219,11 @@ export async function harvestFolderStats(
       );
     }
 
+    const dirSet = new Set(stats.directories);
     for (const file of stats.files) {
+      if (file.key === rootKey || dirSet.has(file.key)) {
+        continue;
+      }
       await tx.query(
         `INSERT INTO objects_cache
            (profile_id, bucket, key, prefix, filename, is_dir, size, etag, last_modified, storage_class, cached_at)
