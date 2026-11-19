@@ -53,6 +53,7 @@ describe('isTextualFilename', () => {
 describe('mediaKind', () => {
   test('classifies by extension when content type is missing', () => {
     expect(mediaKind('a/b.png', null)).toBe('image');
+    expect(mediaKind('images/sailboat.svg', null)).toBe('image');
     expect(mediaKind('doc.pdf', null)).toBe('pdf');
     expect(mediaKind('song.mp3', null)).toBe('audio');
     expect(mediaKind('clip.webm', null)).toBe('video');

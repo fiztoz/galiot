@@ -135,6 +135,7 @@ function baseExtensions(support: Extension | undefined): Extension[] {
 }
 
 export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanelProps) {
+  const filename = useMemo(() => file.filename || file.key.split('/').pop() || file.key, [file]);
   const [mode, setMode] = useState<Mode>('edit');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -142,7 +143,9 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const [notice, setNotice] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [original, setOriginal] = useState('');
-  const [media, setMedia] = useState<'image' | 'pdf' | 'audio' | 'video' | null>(null);
+  const [media, setMedia] = useState<'image' | 'pdf' | 'audio' | 'video' | null>(() =>
+    mediaKind(filename, file.content_type),
+  );
   const [langSupport, setLangSupport] = useState<Extension | undefined>(undefined);
   /**
    * Whether language resolution has finished.
@@ -162,8 +165,6 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const currentTextRef = useRef('');
   const trapRef = useFocusTrap<HTMLDivElement>();
 
-  const filename = useMemo(() => file.filename || file.key.split('/').pop() || file.key, [file]);
-
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented && !saving) {
@@ -178,6 +179,12 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     setLoading(true);
     setError(null);
     try {
+      const detectedMedia = mediaKind(filename, file.content_type);
+      if (detectedMedia !== null) {
+        setMedia(detectedMedia);
+        return;
+      }
+
       const sealed = await getSealedCredentials(db, profile.id);
       const result = await vaultService.call('s3.getText', {
         profile: profileConfig(profile),
@@ -194,7 +201,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
       setLangResolved(true);
       setLoading(false);
     }
-  }, [db, profile, file.key, filename]);
+  }, [db, profile, file.key, file.content_type, filename]);
 
   useEffect(() => {
     void load();
@@ -328,7 +335,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
 
         <div className="flex-1" />
 
-        {media === null && (
+        {media === null && !error && (
           <div className="flex items-center rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
             <button
               type="button"
@@ -359,7 +366,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
           </div>
         )}
 
-        {media === null && (
+        {media === null && !error && (
           <button
             type="button"
             onClick={() => void handleSave()}

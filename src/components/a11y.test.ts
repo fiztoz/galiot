@@ -42,6 +42,17 @@ describe('dialog accessibility wiring', () => {
     expect(read('ConnectionDialog.tsx')).toContain('useFocusTrap<HTMLDivElement>(open)');
   });
 
+  test('EditorPanel is a labelled modal with Escape support and media fast-path', () => {
+    const source = readFileSync(join(ROOT, 'editor', 'EditorPanel.tsx'), 'utf8');
+    expect(source).toContain('useFocusTrap');
+    expect(source).toContain('role="dialog"');
+    expect(source).toContain('aria-modal="true"');
+    expect(source).toContain("event.key === 'Escape'");
+    expect(source.indexOf('mediaKind(filename, file.content_type)')).toBeLessThan(
+      source.indexOf("vaultService.call('s3.getText'"),
+    );
+  });
+
   test('the object list exposes selection to assistive tech', () => {
     const source = read('Explorer.tsx');
     expect(source).toContain('role="listbox"');
