@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { Glob } from 'bun';
+import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { runMigrations } from './migrations';
@@ -204,5 +206,24 @@ describe('buildSubtreeSizeQuery (recursive CTE)', () => {
     // Only deep.jpg lives under photos/2025/ — big.bin at root must not leak in.
     expect((await subtreeTotal(db, 'photos/2025/')).total).toBe(2_000);
     await db.close();
+  });
+});
+
+describe('source hygiene', () => {
+  test('no .ts, .tsx, or .sql file under src/ contains a NUL byte', async () => {
+    const srcRoot = new URL('..', import.meta.url).pathname;
+    const offenders: string[] = [];
+    let checked = 0;
+
+    for await (const file of new Glob('**/*.{ts,tsx,sql}').scan(srcRoot)) {
+      checked += 1;
+      const bytes = await Bun.file(join(srcRoot, file)).bytes();
+      if (bytes.includes(0)) {
+        offenders.push(`src/${file}`);
+      }
+    }
+
+    expect(checked).toBeGreaterThan(0);
+    expect(offenders).toEqual([]);
   });
 });
