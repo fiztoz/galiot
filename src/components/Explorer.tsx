@@ -132,10 +132,16 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const lassoOriginRef = useRef<{ x: number; y: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const breadcrumbNavRef = useRef<HTMLElement>(null);
 
   // Primitive profile values — `profile` identity changes with every live
   // query refresh; depending on primitives avoids reload loops.
   const { id: profileId, bucket, endpoint, region, path_style: pathStyle } = profile;
+
+  useEffect(() => {
+    const nav = breadcrumbNavRef.current;
+    if (nav) nav.scrollLeft = nav.scrollWidth;
+  }, [prefix]);
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedSearch(search.trim()), 200);
@@ -756,189 +762,194 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
       <div className="flex-1 min-w-0 flex flex-col">
       {/* Toolbar */}
-      <div className="flex-none border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 py-2 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onBack}
-          className="p-2 rounded-lg text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-          aria-label="Back to connections"
-          title="Back to connections"
-        >
-          <ArrowLeft size={16} />
-        </button>
-
-        <nav
-          className="flex items-center gap-0.5 text-sm min-w-40 flex-1 overflow-x-auto whitespace-nowrap"
-          aria-label="Folder path"
-        >
+      <div className="flex-none border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+        <div className="px-3 py-1.5 flex items-center gap-2 border-b border-zinc-100 dark:border-zinc-800/70">
           <button
             type="button"
-            onClick={() => navigateTo('')}
-            className={`px-1.5 py-1 rounded font-medium transition-colors ${
-              prefix === ''
-                ? 'text-teal-700 dark:text-teal-400'
-                : 'text-zinc-600 dark:text-zinc-300 hover:text-teal-600 dark:hover:text-teal-400'
-            }`}
+            onClick={onBack}
+            className="flex-none p-2 rounded-lg text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            aria-label="Back to connections"
+            title="Back to connections"
           >
-            <span className="font-mono text-xs">{bucket}</span>
+            <ArrowLeft size={16} />
           </button>
-          {crumbs.map((crumb, i) => (
-            <span key={crumb.path} className="flex items-center">
-              <ChevronRight size={13} className="flex-none text-zinc-500 mx-0.5" />
-              <button
-                type="button"
-                onClick={() => navigateTo(crumb.path)}
-                className={`px-1.5 py-1 rounded text-xs transition-colors ${
-                  i === crumbs.length - 1
-                    ? 'font-semibold text-teal-700 dark:text-teal-400'
-                    : 'font-medium text-zinc-600 dark:text-zinc-300 hover:text-teal-700 dark:hover:text-teal-400'
-                }`}
-              >
-                {crumb.name}
-              </button>
-            </span>
-          ))}
-        </nav>
 
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className="inline-flex flex-none items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-teal-600 bg-teal-600 text-white hover:bg-teal-700"
-          title="Upload files to this folder"
-        >
-          <Upload size={13} />
-          Upload
-        </button>
+          <nav
+            ref={breadcrumbNavRef}
+            className="flex items-center gap-0.5 text-sm min-w-40 flex-1 overflow-x-auto whitespace-nowrap"
+            aria-label="Folder path"
+          >
+            <button
+              type="button"
+              onClick={() => navigateTo('')}
+              className={`px-1.5 py-1 rounded font-medium transition-colors ${
+                prefix === ''
+                  ? 'text-teal-700 dark:text-teal-400'
+                  : 'text-zinc-600 dark:text-zinc-300 hover:text-teal-600 dark:hover:text-teal-400'
+              }`}
+            >
+              <span className="font-mono text-xs">{bucket}</span>
+            </button>
+            {crumbs.map((crumb, i) => (
+              <span key={crumb.path} className="flex items-center">
+                <ChevronRight size={13} className="flex-none text-zinc-500 mx-0.5" />
+                <button
+                  type="button"
+                  onClick={() => navigateTo(crumb.path)}
+                  className={`px-1.5 py-1 rounded text-xs transition-colors ${
+                    i === crumbs.length - 1
+                      ? 'font-semibold text-teal-700 dark:text-teal-400'
+                      : 'font-medium text-zinc-600 dark:text-zinc-300 hover:text-teal-700 dark:hover:text-teal-400'
+                  }`}
+                >
+                  {crumb.name}
+                </button>
+              </span>
+            ))}
+          </nav>
 
-        <button
-          type="button"
-          onClick={() => setAction({ kind: 'folder', row: null })}
-          className="inline-flex flex-none items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-          title="Create a folder in this prefix"
-        >
-          <FolderPlus size={13} />
-          <span className="hidden md:inline">New folder</span>
-        </button>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={loading}
+            className="flex-none p-2 rounded-lg text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            aria-label="Refresh listing"
+            title="Refresh listing"
+          >
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
 
-        <button
-          type="button"
-          onClick={() => folderInputRef.current?.click()}
-          className="inline-flex flex-none items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-          title="Upload a whole folder, keeping its structure"
-        >
-          <FolderUp size={13} />
-          <span className="hidden md:inline">Upload folder</span>
-        </button>
+        <div className="px-3 py-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex flex-none items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-teal-600 bg-teal-600 text-white hover:bg-teal-700"
+            title="Upload files to this folder"
+          >
+            <Upload size={13} />
+            Upload
+          </button>
 
-        <input
-          ref={folderInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          // @ts-expect-error non-standard but widely supported attribute
-          webkitdirectory=""
-          onChange={handleFileInput}
-          aria-label="Select a folder to upload"
-        />
+          <button
+            type="button"
+            onClick={() => setAction({ kind: 'folder', row: null })}
+            className="inline-flex flex-none items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+            title="Create a folder in this prefix"
+          >
+            <FolderPlus size={13} />
+            <span className="hidden md:inline">New folder</span>
+          </button>
 
-        <div className="flex items-center gap-1 order-last w-full sm:order-none sm:w-auto sm:flex-none">
-          <div className="relative flex-1 sm:w-56">
-            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={isSearching ? 'Searching cache…' : 'Search objects…'}
-              className="w-full pl-8 pr-7 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 dark:text-zinc-100"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
-                aria-label="Clear search"
-              >
-                <X size={13} />
-              </button>
-            )}
+          <button
+            type="button"
+            onClick={() => folderInputRef.current?.click()}
+            className="inline-flex flex-none items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+            title="Upload a whole folder, keeping its structure"
+          >
+            <FolderUp size={13} />
+            <span className="hidden md:inline">Upload folder</span>
+          </button>
+
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            // @ts-expect-error non-standard but widely supported attribute
+            webkitdirectory=""
+            onChange={handleFileInput}
+            aria-label="Select a folder to upload"
+          />
+
+          <div className="flex items-center gap-1 order-last w-full sm:order-none sm:w-auto sm:flex-none">
+            <div className="relative flex-1 sm:w-56">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={isSearching ? 'Searching cache…' : 'Search objects…'}
+                className="w-full pl-8 pr-7 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 dark:text-zinc-100"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
+                  aria-label="Clear search"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setBucketSearch(search)}
+              className="flex-none p-2 rounded-lg text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              title="Search the whole bucket on the server"
+              aria-label="Search the whole bucket"
+            >
+              <Search size={15} />
+            </button>
           </div>
 
+          <ExplorerFilterBar value={filters} onChange={setFilters} />
+
           <button
             type="button"
-            onClick={() => setBucketSearch(search)}
-            className="flex-none p-2 rounded-lg text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-            title="Search the whole bucket on the server"
-            aria-label="Search the whole bucket"
-          >
-            <Search size={15} />
-          </button>
-        </div>
-
-        <ExplorerFilterBar value={filters} onChange={setFilters} />
-
-        <button
-          type="button"
-          onClick={() => setShowLocal((v) => !v)}
-          aria-pressed={showLocal}
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
-            showLocal
-              ? 'border-zinc-300 bg-zinc-100 text-zinc-800 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100'
-              : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800'
-          }`}
-          title="Choose a folder on this computer for downloads"
-        >
-          {showLocal ? <PanelLeftClose size={13} /> : <FolderOpen size={13} />}
-          <span className="hidden md:inline">Download folder</span>
-        </button>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={handleFileInput}
-          aria-label="Select files to upload"
-        />
-
-        <div className="hidden sm:flex items-center rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setViewMode('list')}
-            aria-pressed={viewMode === 'list'}
-            className={`p-1.5 transition-colors ${
-              viewMode === 'list'
-                ? 'bg-teal-600 text-white'
-                : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+            onClick={() => setShowLocal((v) => !v)}
+            aria-pressed={showLocal}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
+              showLocal
+                ? 'border-zinc-300 bg-zinc-100 text-zinc-800 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100'
+                : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800'
             }`}
-            title="List view"
+            title="Choose a folder on this computer for downloads"
           >
-            <List size={14} />
+            {showLocal ? <PanelLeftClose size={13} /> : <FolderOpen size={13} />}
+            <span className="hidden md:inline">Download folder</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('grid')}
-            aria-pressed={viewMode === 'grid'}
-            className={`p-1.5 transition-colors ${
-              viewMode === 'grid'
-                ? 'bg-teal-600 text-white'
-                : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
-            }`}
-            title="Grid view"
-          >
-            <LayoutGrid size={14} />
-          </button>
-        </div>
 
-        <button
-          type="button"
-          onClick={handleRefresh}
-          disabled={loading}
-          className="p-2 rounded-lg text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
-          aria-label="Refresh listing"
-          title="Refresh listing"
-        >
-          <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-        </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleFileInput}
+            aria-label="Select files to upload"
+          />
+
+          <div className="hidden sm:flex items-center rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              aria-pressed={viewMode === 'list'}
+              className={`p-1.5 transition-colors ${
+                viewMode === 'list'
+                  ? 'bg-teal-600 text-white'
+                  : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+              }`}
+              title="List view"
+            >
+              <List size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('grid')}
+              aria-pressed={viewMode === 'grid'}
+              className={`p-1.5 transition-colors ${
+                viewMode === 'grid'
+                  ? 'bg-teal-600 text-white'
+                  : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+              }`}
+              title="Grid view"
+            >
+              <LayoutGrid size={14} />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Error banner */}
@@ -1254,6 +1265,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                     key={row.key}
                     role="option"
                     aria-selected={isSelected}
+                    aria-label={row.is_dir ? `${isSearching ? row.key : row.filename} (folder)` : (isSearching ? row.key : row.filename)}
                     draggable
                     onDragStart={(e) => {
                       e.dataTransfer.effectAllowed = 'copy';
@@ -1321,6 +1333,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                     type="button"
                     role="option"
                     aria-selected={isSelected}
+                    aria-label={row.is_dir ? `${isSearching ? row.key : row.filename} (folder)` : (isSearching ? row.key : row.filename)}
                     draggable
                     onDragStart={(e) => {
                       e.dataTransfer.effectAllowed = 'copy';
