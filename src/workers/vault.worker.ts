@@ -13,6 +13,8 @@ import {
   type Credentials,
   type CredentialPlaintext,
   type S3ProfileConfig,
+  type VaultEvent,
+  type VaultLockReason,
   type VaultRequest,
   type VaultResponse,
   type VaultMethod,
@@ -39,9 +41,10 @@ let transferPort: MessagePort | null = null;
 /** Server sessions opened by this worker, closed when the vault locks. */
 const openSessions = new Map<string, string | undefined>();
 
-function emitLocked(): void {
+function emitLocked(reason: VaultLockReason): void {
   void closeSessions();
-  postMessage({ channel: VAULT_EVENT_CHANNEL, event: 'locked' });
+  const event: VaultEvent = { channel: VAULT_EVENT_CHANNEL, event: 'locked', reason };
+  postMessage(event);
 }
 
 async function closeSessions(): Promise<void> {
@@ -170,7 +173,7 @@ async function dispatch<M extends VaultMethod>(
   switch (method) {
     case 'vault.create': {
       const p = params as { passphrase: string };
-      vault?.lock();
+      vault?.lock('manual');
       const { vault: created, sealed } = await VaultManager.create(p.passphrase, emitLocked);
       vault = created;
       return sealed;
@@ -178,14 +181,14 @@ async function dispatch<M extends VaultMethod>(
 
     case 'vault.unlock': {
       const p = params as { passphrase: string; salt: string; wrappedDek: string };
-      vault?.lock();
+      vault?.lock('manual');
       vault = await VaultManager.unlock(p.passphrase, { salt: p.salt, wrappedDek: p.wrappedDek }, emitLocked);
       return { unlocked: true as const };
     }
 
     case 'vault.lock': {
       await closeSessions();
-      vault?.lock();
+      vault?.lock('manual');
       vault = null;
       return { locked: true as const };
     }

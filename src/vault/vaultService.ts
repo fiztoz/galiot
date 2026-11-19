@@ -3,11 +3,12 @@ import {
   VAULT_EVENT_CHANNEL,
   isVaultEvent,
   isVaultResponse,
+  type VaultLockReason,
   type VaultMethod,
   type VaultParams,
   type VaultResults,
 } from './protocol';
-type EventListener = () => void;
+type EventListener = (reason: VaultLockReason) => void;
 
 /**
  * Main-thread facade over the vault worker. All key derivation, encryption
@@ -43,8 +44,9 @@ class VaultService {
       }
 
       if (isVaultEvent(data) && data.event === 'locked') {
+        const reason = data.reason ?? 'inactivity';
         for (const listener of this.lockedListeners) {
-          listener();
+          listener(reason);
         }
       } else if (data && (data as { channel?: unknown }).channel === VAULT_EVENT_CHANNEL) {
         // Future events are routed here.
@@ -84,7 +86,7 @@ class VaultService {
     });
   }
 
-  /** Subscribes to automatic lock events (idle timeout). Returns unsubscribe. */
+  /** Subscribes to vault lock events (manual or idle timeout). Returns unsubscribe. */
   public onLocked(listener: EventListener): () => void {
     this.lockedListeners.add(listener);
     return () => this.lockedListeners.delete(listener);

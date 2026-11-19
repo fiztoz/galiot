@@ -307,9 +307,12 @@ export type VaultResponse<M extends VaultMethod = VaultMethod> =
   | { channel: typeof VAULT_RESPONSE_CHANNEL; id: number; ok: true; result: VaultResults[M] }
   | { channel: typeof VAULT_RESPONSE_CHANNEL; id: number; ok: false; error: string };
 
+export type VaultLockReason = 'manual' | 'inactivity';
+
 export type VaultEvent = {
   channel: typeof VAULT_EVENT_CHANNEL;
   event: 'locked';
+  reason: VaultLockReason;
 };
 
 export type VaultWorkerMessage = VaultRequest | VaultResponse | VaultEvent;

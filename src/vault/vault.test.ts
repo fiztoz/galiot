@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { VaultLockReason } from './protocol';
 import { VaultManager } from './vault';
 
 describe('VaultManager', () => {
@@ -59,5 +60,23 @@ describe('VaultManager', () => {
     vault.lock();
     vault.lock();
     expect(lockEvents).toBe(1);
+  });
+
+  test('lock reports manual by default and inactivity when passed', async () => {
+    const createReasons: VaultLockReason[] = [];
+    const { vault, sealed } = await VaultManager.create('passphrase-seven', (reason) => {
+      createReasons.push(reason);
+    });
+    vault.lock();
+    vault.lock('inactivity');
+    expect(createReasons).toEqual(['manual']);
+
+    const unlockReasons: VaultLockReason[] = [];
+    const reopened = await VaultManager.unlock('passphrase-seven', sealed, (reason) => {
+      unlockReasons.push(reason);
+    });
+    reopened.lock('inactivity');
+    reopened.lock();
+    expect(unlockReasons).toEqual(['inactivity']);
   });
 });

@@ -9,7 +9,7 @@ import {
   zeroBuffer,
   type EncryptedPayload,
 } from './crypto.js';
-import type { CredentialPlaintext } from './protocol.js';
+import type { CredentialPlaintext, VaultLockReason } from './protocol.js';
 
 /** Idle time after which the vault self-locks and wipes the DEK reference. */
 const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
@@ -45,9 +45,9 @@ function fromBase64(base64: string): Uint8Array {
 export class VaultManager {
   private dek: CryptoKey | null = null;
   private lockTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly onLock: (() => void) | undefined;
+  private readonly onLock: ((reason: VaultLockReason) => void) | undefined;
 
-  private constructor(onLock?: (() => void) | undefined) {
+  private constructor(onLock?: ((reason: VaultLockReason) => void) | undefined) {
     this.onLock = onLock;
     this.resetTimer();
   }
@@ -56,7 +56,7 @@ export class VaultManager {
     if (this.lockTimer !== null) {
       clearTimeout(this.lockTimer);
     }
-    this.lockTimer = setTimeout(() => this.lock(), INACTIVITY_TIMEOUT_MS);
+    this.lockTimer = setTimeout(() => this.lock('inactivity'), INACTIVITY_TIMEOUT_MS);
   }
 
   private ensureUnlocked(): CryptoKey {
@@ -72,7 +72,7 @@ export class VaultManager {
    * WebCrypto keys cannot be zeroed in place; dropping the last reference
    * allows the JS engine to reclaim the key material.
    */
-  public lock(): void {
+  public lock(reason: VaultLockReason = 'manual'): void {
     const wasUnlocked = this.dek !== null;
     if (this.lockTimer !== null) {
       clearTimeout(this.lockTimer);
@@ -80,7 +80,7 @@ export class VaultManager {
     }
     this.dek = null;
     if (wasUnlocked) {
-      this.onLock?.();
+      this.onLock?.(reason);
     }
   }
 
@@ -94,7 +94,7 @@ export class VaultManager {
    */
   static async create(
     passphrase: string,
-    onLock?: () => void,
+    onLock?: (reason: VaultLockReason) => void,
   ): Promise<{ vault: VaultManager; sealed: SealedVault }> {
     const salt = generateSalt();
     const kek = await deriveKEK(passphrase, salt);
@@ -121,7 +121,7 @@ export class VaultManager {
   static async unlock(
     passphrase: string,
     sealed: SealedVault,
-    onLock?: () => void,
+    onLock?: (reason: VaultLockReason) => void,
   ): Promise<VaultManager> {
     const salt = fromBase64(sealed.salt);
     const wrappedDek = fromBase64(sealed.wrappedDek);

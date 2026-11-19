@@ -17,6 +17,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -43,15 +44,18 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       }
     })();
 
-    // Covers both idle auto-lock and an explicit vault deletion: if the vault
-    // no longer exists, fall back to the create screen instead of unlock.
-    const unsubscribe = vaultService.onLocked(() => {
+    // Covers manual lock, idle auto-lock, and an explicit vault deletion: if the
+    // vault no longer exists, fall back to the create screen instead of unlock.
+    const unsubscribe = vaultService.onLocked((reason) => {
       if (cancelled) return;
       setPassword('');
       setConfirmPassword('');
+      setShowConfirmPassword(false);
       onUnlockChange?.(false);
       setState('unlock');
-      setNotice('Locked after inactivity. Enter your password to continue.');
+      setNotice(
+        reason === 'inactivity' ? 'Locked after inactivity. Enter your password to continue.' : null,
+      );
 
       void (async () => {
         try {
@@ -91,6 +95,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
         await createVault(db, password);
         setPassword('');
         setConfirmPassword('');
+        setShowConfirmPassword(false);
         setState('unlocked');
         onUnlockChange?.(true);
       } catch (err) {
@@ -192,15 +197,25 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
               <label htmlFor="confirm-passphrase" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
                 Confirm password
               </label>
-              <input
-                id="confirm-passphrase"
-                type={showPassword ? 'text' : 'password'}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                disabled={busy}
-                className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent dark:text-zinc-100 transition-shadow disabled:opacity-60"
-                placeholder="Confirm your password"
-              />
+              <div className="relative">
+                <input
+                  id="confirm-passphrase"
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  disabled={busy}
+                  className="w-full pl-4 pr-10 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent dark:text-zinc-100 transition-shadow disabled:opacity-60"
+                  placeholder="Confirm your password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 focus:outline-none"
+                  aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                >
+                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
           )}
 
