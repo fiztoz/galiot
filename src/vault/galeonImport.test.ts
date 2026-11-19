@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   GALEON_EXPORT_FORMAT,
   MAX_IMPORT_PROFILES,
+  buildGaleonPreview,
   galeonExportIncludesSecrets,
   mapGaleonProfile,
   parseGaleonExportFile,
   partitionGaleonProfiles,
+  prepareGaleonImport,
   type GaleonProfile,
 } from './galeonImport';
 
@@ -257,6 +259,25 @@ describe('mapGaleonProfile', () => {
   test('falls back to a name for an unnamed profile', () => {
     const mapped = mapGaleonProfile(s3Profile({ name: '  ' }));
     expect(mapped.status === 'ready' && mapped.entry.name).toBe('Unnamed profile');
+  });
+
+  test('carries optional sessionToken through prepare without exposing it in preview', async () => {
+    const raw = envelope([s3Profile({ sessionToken: 'sts-session-token-value' })]);
+    const preview = await buildGaleonPreview(raw);
+    expect(preview.importable).toHaveLength(1);
+    expect(JSON.stringify(preview)).not.toContain('sts-session-token-value');
+
+    let capturedCreds: unknown = null;
+    const prepared = await prepareGaleonImport(raw, preview.contentHash, async (creds) => {
+      capturedCreds = creds;
+      return { iv: 'iv', ct: 'ct' } as never;
+    });
+    expect(prepared.rows).toHaveLength(1);
+    expect(capturedCreds).toEqual({
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'super-secret',
+      sessionToken: 'sts-session-token-value',
+    });
   });
 });
 

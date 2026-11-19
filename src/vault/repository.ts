@@ -187,7 +187,7 @@ export interface ConnectionUpdate {
    * is what lets a user rename or re-point a connection without retyping keys
    * — and without the secret ever being decrypted on the main thread.
    */
-  credentials?: { accessKeyId: string; secretAccessKey: string };
+  credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
   /**
    * Replacement custom headers. Omit to keep the stored ones; pass `{}` to clear
    * them. Validated the same way as on create.
@@ -251,6 +251,7 @@ export async function updateConnection(
           credentials: {
             accessKeyId: input.credentials.accessKeyId,
             secretAccessKey: input.credentials.secretAccessKey,
+            sessionToken: input.credentials.sessionToken || undefined,
           },
         })
       ).payload

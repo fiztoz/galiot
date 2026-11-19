@@ -41,6 +41,7 @@ export interface GaleonProfile {
   region?: string | null;
   accessKey?: string | null;
   secretKey?: string | null;
+  sessionToken?: string | null;
   bucket?: string | null;
   storageClass?: string | null;
   dangerDisableSslVerification?: boolean | null;
@@ -88,6 +89,7 @@ export type GaleonMapped =
       entry: GaleonPreviewEntry;
       accessKeyId: string;
       secretAccessKey: string;
+      sessionToken?: string;
     }
   | { status: 'skipped'; skipped: GaleonSkippedEntry };
 
@@ -270,6 +272,7 @@ export function mapGaleonProfile(raw: GaleonProfile): GaleonMapped {
 
   const accessKeyId = trimmedOrNull(raw.accessKey);
   const secretAccessKey = trimmedOrNull(raw.secretKey);
+  const sessionToken = trimmedOrNull(raw.sessionToken) ?? undefined;
   if (!accessKeyId || !secretAccessKey) {
     return skip(
       'No credentials in this export. In Galeon, re-export with "include credentials" checked, then import again.',
@@ -282,6 +285,7 @@ export function mapGaleonProfile(raw: GaleonProfile): GaleonMapped {
     status: 'ready',
     accessKeyId,
     secretAccessKey,
+    ...(sessionToken ? { sessionToken } : {}),
     entry: { name, endpoint, region, bucket, pathStyle, storageClass, notes },
   };
 }
@@ -373,6 +377,7 @@ export async function prepareGaleonImport(
     const encryptedCredentials = await encrypt({
       accessKeyId: mapped.accessKeyId,
       secretAccessKey: mapped.secretAccessKey,
+      ...(mapped.sessionToken ? { sessionToken: mapped.sessionToken } : {}),
     });
 
     rows.push({

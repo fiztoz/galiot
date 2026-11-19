@@ -51,6 +51,7 @@ interface FormState {
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
+  sessionToken: string;
   pathStyle: boolean;
   /** Extra request headers, as editable rows. Validated on save and on test. */
   headers: HeaderDraft[];
@@ -63,6 +64,7 @@ const EMPTY_FORM: FormState = {
   bucket: '',
   accessKeyId: '',
   secretAccessKey: '',
+  sessionToken: '',
   pathStyle: false,
   headers: [],
 };
@@ -98,6 +100,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
             bucket: editing.bucket,
             accessKeyId: '',
             secretAccessKey: '',
+            sessionToken: '',
             pathStyle: editing.path_style,
             // Read through the same screening the request path uses, so a row
             // written before a rule existed is not shown back as editable.
@@ -170,10 +173,17 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
 
     const accessKey = form.accessKeyId.trim();
     const secretKey = form.secretAccessKey.trim();
+    const sessionToken = form.sessionToken.trim();
 
     if (isEdit) {
       // Blank means "keep the stored keys". Half-typed is always a mistake:
       // saving it would replace a working pair with a broken one.
+      if (sessionToken && (!accessKey || !secretKey)) {
+        return {
+          ok: false,
+          error: 'Enter access key ID and secret access key too when setting a session token, or clear all three to keep the stored keys.',
+        };
+      }
       if (accessKey && !secretKey) {
         return { ok: false, error: 'Enter a secret access key too, or clear both to keep the stored keys.' };
       }
@@ -199,6 +209,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
       const typed = {
         accessKeyId: form.accessKeyId.trim(),
         secretAccessKey: form.secretAccessKey.trim(),
+        sessionToken: form.sessionToken.trim() || undefined,
       };
       let credentials: Credentials;
       if (typed.accessKeyId && typed.secretAccessKey) {
@@ -262,6 +273,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
     const typedKeys = {
       accessKeyId: form.accessKeyId.trim(),
       secretAccessKey: form.secretAccessKey.trim(),
+      sessionToken: form.sessionToken.trim() || undefined,
     };
 
     // Editing without retyping: use the sealed credentials already in the vault,
@@ -366,10 +378,11 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
           // re-pointing a connection never requires retyping a secret.
           const accessKeyId = form.accessKeyId.trim();
           const secretAccessKey = form.secretAccessKey.trim();
+          const sessionToken = form.sessionToken.trim() || undefined;
           await updateConnection(db, editing.id, {
             ...shared,
             ...(accessKeyId && secretAccessKey
-              ? { credentials: { accessKeyId, secretAccessKey } }
+              ? { credentials: { accessKeyId, secretAccessKey, sessionToken } }
               : {}),
           });
           onSaved?.();
@@ -378,6 +391,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
             ...shared,
             accessKeyId: form.accessKeyId.trim(),
             secretAccessKey: form.secretAccessKey.trim(),
+            sessionToken: form.sessionToken.trim() || undefined,
           });
         }
 
@@ -560,6 +574,22 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
                   value={form.region}
                   onChange={(e) => setField('region', e.target.value)}
                   placeholder="us-east-1"
+                  spellCheck={false}
+                />
+              </div>
+              <div>
+                <label htmlFor="conn-session-token" className={LABEL_CLASS}>
+                  Session Token
+                  <span className="ml-1.5 font-normal text-zinc-500 dark:text-zinc-400">optional</span>
+                </label>
+                <input
+                  id="conn-session-token"
+                  type="password"
+                  className={`${INPUT_CLASS} font-mono text-xs`}
+                  value={form.sessionToken}
+                  onChange={(e) => setField('sessionToken', e.target.value)}
+                  placeholder="AWS STS / SSO session token"
+                  autoComplete="off"
                   spellCheck={false}
                 />
               </div>

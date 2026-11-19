@@ -209,6 +209,12 @@ describe('rendered dialog accessibility', () => {
     const pathStyle = el.querySelector<HTMLInputElement>('#conn-path-style');
     expect(pathStyle?.className).toContain('accent-teal-600');
 
+    const sessionTokenLabel = el.querySelector('label[for="conn-session-token"]');
+    const sessionTokenInput = el.querySelector<HTMLInputElement>('#conn-session-token');
+    expect(sessionTokenLabel?.textContent).toContain('Session Token');
+    expect(sessionTokenInput).not.toBeNull();
+    expect(sessionTokenInput?.type).toBe('password');
+
     const form = el.querySelector('form');
     const submitForm = () => {
       form?.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event);
