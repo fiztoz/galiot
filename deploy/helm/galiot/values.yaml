@@ -1,0 +1,158 @@
+# Galiot — self-hosted S3 file browser (SPA + Bun signing server).
+#
+# The server signs every S3 request and opens the connection, so the NODES
+# running these pods must be able to reach your S3 endpoint (DNS, port, TLS).
+# There is no server-side state and no volume: credentials live in each user's
+# browser vault; server sessions and share grants are memory-only.
+#
+# Quick start (gate required for a non-loopback bind — the server refuses to
+# start without one):
+#   helm install galiot deploy/helm/galiot \
+#     --set gate.value="$(openssl rand -hex 24)"
+#
+# Prefer an existing Secret in production:
+#   kubectl create secret generic galiot-gate --from-literal=gate="$(openssl rand -hex 24)"
+#   helm install galiot deploy/helm/galiot --set gate.existingSecret=galiot-gate
+
+# -- Number of replicas. KEEP AT 1 unless you understand the consequences:
+# sessions and share-link grants live in ONE pod's memory. With >1 replica,
+# a share link minted on pod A returns 404 on pod B, and operator sessions
+# bounce between pods (the client retries, but transfers degrade). There is
+# no shared session store and no HPA in this chart on purpose.
+replicaCount: 1
+
+image:
+  # -- Published by .github/workflows/release.yml on version tags.
+  repository: ghcr.io/fiztoz/galiot
+  # -- Overrides the image tag. Defaults to the chart's appVersion.
+  tag: ""
+  # -- Optional digest pin (e.g. sha256:abc...). Takes precedence over tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# -- Pull secrets for a private registry mirror.
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The access gate protects the Galiot API (/api/s3). It is NOT an S3 key.
+# Exactly one of: gate.value, gate.existingSecret, or gate.open.
+gate:
+  # -- Gate token rendered into a chart-managed Secret. Stored in the Helm
+  # release record; fine for trials, prefer existingSecret for production.
+  value: ""
+  # -- Name of a pre-existing Secret holding the gate token.
+  existingSecret: ""
+  # -- Key inside gate.existingSecret.
+  existingSecretKey: "gate"
+  # -- DANGER: set GALIOT_GATE_OPEN=1 and accept an UNAUTHENTICATED public
+  # signing proxy. Anyone who can reach the pod can use your server to sign
+  # requests with credentials they supply. Only for isolated test networks.
+  open: false
+
+serviceAccount:
+  create: true
+  # -- Name override. Defaults to the release fullname.
+  name: ""
+  annotations: {}
+  # The app never talks to the Kubernetes API.
+  automountServiceAccountToken: false
+
+service:
+  type: ClusterIP
+  # -- Also the container's listen port (GALIOT_PORT). Must be >=1024: the
+  # container runs as non-root uid 1000 and cannot bind privileged ports.
+  port: 8788
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # nginx: uploads stream through the server (up to 1 GiB per object).
+    # The default 1m body limit WILL break uploads — disable or raise it:
+    # nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    # RFC 2606 placeholder — replace with your own hostname.
+    - host: galiot.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: galiot-tls
+    #   hosts:
+    #     - galiot.example.com
+
+# -- Pod-level security context. uid/gid 1000 is the `bun` user in oven/bun.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container-level security context. The server writes nothing to disk;
+# /tmp is an emptyDir and HOME points at it.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    # No CPU limit: avoid throttling long transfers. Raise memory if you
+    # proxy many concurrent large objects.
+    memory: 512Mi
+
+# -- Extra environment variables, e.g. future GALIOT_* server settings.
+# List of {name, value} or {name, valueFrom}.
+extraEnv: []
+
+# -- Extra volumes/mounts, e.g. a private CA bundle for a derived image.
+extraVolumes: []
+extraVolumeMounts: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podLabels: {}
+
+priorityClassName: ""
+terminationGracePeriodSeconds: 30
+revisionHistoryLimit: 3
+
+pdb:
+  # -- With replicaCount 1, minAvailable 1 BLOCKS node drains. For a
+  # single replica use maxUnavailable: 1 instead, or leave this disabled.
+  create: false
+  minAvailable: 1
+  # -- Overrides minAvailable when set (e.g. 1).
+  maxUnavailable: ""
+
+networkPolicy:
+  enabled: false
+  # -- Sources allowed to reach the HTTP port. Default [{}] allows all
+  # sources; restrict to your ingress controller, e.g.:
+  # ingressFrom:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: ingress-nginx
+  #     podSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/name: ingress-nginx
+  ingressFrom:
+    - {}
+  # Egress is intentionally unrestricted: the server must reach arbitrary
+  # S3 endpoints plus cluster DNS. Restrict it yourself if your endpoints
+  # are fixed and you know their address ranges.

@@ -1,0 +1,24 @@
+apiVersion: v2
+name: galiot
+description: >-
+  Galiot — the agile cloud explorer. A self-hosted S3 file browser: one Bun
+  process serves the SPA and signs S3 requests. The cluster nodes must be able
+  to reach the S3 endpoint. No server-side state; credentials live in each
+  user's browser vault and in memory-only server sessions.
+type: application
+# Chart version. Bump on every chart change; appVersion tracks the released
+# container image (see .github/workflows/release.yml).
+version: 0.1.1
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+keywords:
+  - s3
+  - object-storage
+  - file-browser
+  - self-hosted
+home: https://github.com/fiztoz/galiot
+sources:
+  - https://github.com/fiztoz/galiot
+maintainers:
+  - name: Galiot Contributors
+    url: https://github.com/fiztoz/galiot

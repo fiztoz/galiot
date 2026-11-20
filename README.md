@@ -99,7 +99,7 @@ The complete research and technical specification suite for Galiot:
 
 | Document | Description |
 |---|---|
-| [**docs/OPERATIONS.md**](docs/OPERATIONS.md) | Operator guide: running the server, host reachability, the access gate, where credentials live, and which network each feature uses. |
+| [**docs/OPERATIONS.md**](docs/OPERATIONS.md) | Operator guide: running the server (Bun, container, Kubernetes via `deploy/helm/galiot`), host reachability, the access gate, where credentials live, and which network each feature uses. |
 | [**docs/STACK_DECISION.md**](docs/STACK_DECISION.md) | Verified stack comparison with sources, provisional decisions, and corrections to earlier specs (2026-09-17; pass 3 2026-09-18). |
 | [**docs/FEASIBILITY_AND_RISKS.md**](docs/FEASIBILITY_AND_RISKS.md) | Browser feasibility pass: Postgres 18.3, memory-resident IDB VFS, Safari 7-day storage deletion, part-buffered S3 uploads, and the revised Phase 1 spike list (2026-09-18). |
 | [**SECURITY_DEEP_DIVE.md**](SECURITY_DEEP_DIVE.md) | Comprehensive security threat model: WebCrypto vault, memory zeroing, CSP, browser extension defense, and untrusted file sandboxing. Historical spec — its "Current security model (2026-11)" correction covers the self-hosted server that now signs and calls S3. |

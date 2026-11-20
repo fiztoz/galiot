@@ -42,6 +42,60 @@ browser vault; server sessions are memory-only.
 A non-loopback bind refuses to start without a gate. On loopback no gate is
 needed, because only this machine can reach the listener.
 
+### Kubernetes (Helm)
+
+A chart lives at `deploy/helm/galiot`: one Deployment + Service, optional
+Ingress, NetworkPolicy and PodDisruptionBudget. Install with a gate — the
+server refuses a non-loopback bind without one, and the chart fails the render
+the same way:
+
+```bash
+helm install galiot deploy/helm/galiot \
+  --set gate.value="$(openssl rand -hex 24)"
+
+# or bring your own Secret (preferred in production):
+kubectl create secret generic galiot-gate \
+  --from-literal=gate="$(openssl rand -hex 24)"
+helm install galiot deploy/helm/galiot --set gate.existingSecret=galiot-gate
+
+kubectl port-forward svc/galiot 8788:8788   # then open http://127.0.0.1:8788
+```
+
+Released charts are published to GHCR as OCI artifacts (`chart-v*` tags), so
+you can also install without cloning the repo:
+
+```bash
+helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version 0.1.1 \
+  --set gate.value="$(openssl rand -hex 24)"
+```
+
+Enter the gate in the app's **Server access** panel. It is not an S3 key.
+
+- **Keep one replica.** Sessions and share-link grants live in one pod's
+  memory. With more replicas, a share link minted on one pod returns 404 on
+  the others. The chart ships no HPA for this reason; scale with `resources`.
+- **Nodes must reach the bucket** (§2). Pod egress — and any NetworkPolicy you
+  enable — must allow the S3 endpoint's address and port, plus cluster DNS.
+- **Ingress:** terminate TLS there. The server emits HSTS only when the request
+  is HTTPS or carries `X-Forwarded-Proto: https`. Uploads stream through the
+  server (up to 1 GiB per object), so raise the proxy body limit — for nginx:
+  `nginx.ingress.kubernetes.io/proxy-body-size: "0"`.
+- **Private CAs:** a container does not inherit the node's trust store. Build
+  a derived image that installs your CA into its trust store and point
+  `image.repository` at it.
+- **Probes** use `/api/health`, which needs no gate and never calls S3.
+- Pods run as non-root uid 1000 with a read-only root filesystem; the listen
+  port must be ≥1024.
+
+Verify the chart offline (lint, render matrix, strict schema checks), or end
+to end against the current kubectl context — `--live` installs into a scratch
+namespace, proves health + gate over HTTP, runs `helm test`, and tears down:
+
+```bash
+bash scripts/helm-check.sh
+bash scripts/helm-check.sh --live
+```
+
 ## 2. The host must reach the bucket
 
 This is the whole point of the architecture, and the most common failure.

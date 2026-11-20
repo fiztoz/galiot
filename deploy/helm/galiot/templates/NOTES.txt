@@ -1,0 +1,46 @@
+Galiot {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}" in namespace {{ .Release.Namespace }}.
+{{ if .Values.gate.open }}
+############################################################################
+# WARNING: gate.open=true — this is an UNAUTHENTICATED signing proxy.      #
+# Anyone who can reach the pod can drive S3 requests through it.           #
+# Use only on an isolated test network.                                    #
+############################################################################
+{{ end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+
+WARNING: replicaCount={{ .Values.replicaCount }}. Sessions and share-link grants live in
+ONE pod's memory. Share links minted on one pod return 404 on the others,
+and operator sessions bounce between pods. Keep replicaCount=1 unless you
+have deliberately accepted this.
+{{- end }}
+
+1. Reach the app:
+
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "galiot.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+   then open http://127.0.0.1:{{ .Values.service.port }}
+{{- if .Values.ingress.enabled }}
+
+   Ingress hosts:
+   {{- range .Values.ingress.hosts }}
+     http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+   {{- end }}
+{{- end }}
+
+2. The access gate{{ if not .Values.gate.open }} (required){{ end }}:
+{{- if .Values.gate.open }}
+   Disabled — open bind. See the warning above.
+{{- else if .Values.gate.existingSecret }}
+   Token comes from your Secret "{{ .Values.gate.existingSecret }}" (key "{{ include "galiot.gateSecretKey" . }}").
+{{- else }}
+   Token is stored in Secret "{{ include "galiot.gateSecretName" . }}" (key "gate").
+{{- end }}
+   Enter it in the app's "Server access" panel. It is NOT an S3 key; S3
+   credentials stay sealed in each user's browser vault.
+
+3. The nodes running these pods must be able to reach your S3 endpoint
+   (DNS, port, TLS). The browser never calls S3 — this server does.
+
+4. Verify the release end to end:
+
+   helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}

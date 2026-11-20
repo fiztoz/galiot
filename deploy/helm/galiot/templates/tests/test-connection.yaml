@@ -1,0 +1,81 @@
+{{- include "galiot.validateConfig" . -}}
+{{/* helm test: proves the Service routes to a ready server AND that the gate
+Secret is wired correctly — anonymous health must report tokenRequired, a
+random wrong probe must be rejected, the configured gate must be accepted,
+and /api/s3 must 403 without it. In open mode it proves the bind is
+unauthenticated. The pod deliberately does NOT carry the workload selector
+labels, so a restrictive NetworkPolicy does not select it (its ingress may
+still need to allow this pod — see the chart README). */}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "galiot.fullname" . }}-test
+  labels:
+    app.kubernetes.io/name: {{ include "galiot.name" . }}-test
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 120
+  serviceAccountName: {{ include "galiot.serviceAccountName" . }}
+  automountServiceAccountToken: false
+  {{- with .Values.podSecurityContext }}
+  securityContext:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: health-gate-check
+      image: {{ include "galiot.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+      {{- with .Values.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      env:
+        - name: HOME
+          value: /tmp
+        - name: GALIOT_TEST_URL
+          value: "http://{{ include "galiot.fullname" . }}:{{ .Values.service.port }}"
+        - name: EXPECT_TOKEN_REQUIRED
+          value: {{ if .Values.gate.open }}"0"{{ else }}"1"{{ end }}
+        {{- include "galiot.gateEnv" . | nindent 8 }}
+      command:
+        - bun
+        - -e
+        - |
+          const base = process.env.GALIOT_TEST_URL;
+          const gate = process.env.GALIOT_GATE || null;
+          const expectRequired = process.env.EXPECT_TOKEN_REQUIRED === '1';
+          const headerName = 'x-galiot-access-token';
+          const health = async (headers) => {
+            const r = await fetch(base + '/api/health', { headers });
+            if (!r.ok) throw new Error('health HTTP ' + r.status);
+            return r.json();
+          };
+          const anon = await health({});
+          if (anon.ok !== true || anon.tokenRequired !== expectRequired) {
+            throw new Error('unexpected health report: ' + JSON.stringify(anon));
+          }
+          if (expectRequired) {
+            if (anon.tokenAccepted !== false) throw new Error('anonymous probe was accepted');
+            const probe = 'probe-' + Math.random().toString(36).slice(2) + Date.now();
+            const wrong = await health({ [headerName]: probe });
+            if (wrong.tokenAccepted !== false) throw new Error('gate accepted a wrong probe');
+            if (!gate) throw new Error('gate env missing from test pod — Secret wiring is wrong');
+            const right = await health({ [headerName]: gate });
+            if (right.tokenAccepted !== true) {
+              throw new Error('gate rejected the configured value — Secret name/key wiring is wrong');
+            }
+            const api = await fetch(base + '/api/s3', { method: 'POST' });
+            if (api.status !== 403) throw new Error('/api/s3 without gate returned ' + api.status + ', expected 403');
+          }
+          console.log('galiot health + gate checks passed');
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tmp
+      emptyDir: {}
