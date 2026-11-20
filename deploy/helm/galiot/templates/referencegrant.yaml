@@ -1,0 +1,20 @@
+{{- if and .Values.gateway.enabled .Values.gateway.referenceGrant.create }}
+{{/* ReferenceGrant lives in the GATEWAY's namespace, not the release
+namespace: it permits HTTPRoutes from the release namespace to attach to
+Gateways there. ReferenceGrant is v1beta1 in the standard channel. */}}
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: {{ include "galiot.fullname" . }}
+  namespace: {{ .Values.gateway.referenceGrant.namespace }}
+  labels:
+    {{- include "galiot.labels" . | nindent 4 }}
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: {{ .Release.Namespace }}
+  to:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+{{- end }}

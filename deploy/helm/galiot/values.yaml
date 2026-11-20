@@ -122,6 +122,32 @@ ingress:
     #   hosts:
     #     - galiot.example.com
 
+# Gateway API (the Ingress successor). Requires the Gateway API CRDs
+# (standard channel) installed in the cluster: https://gateway-api.sigs.k8s.io
+# Renders an HTTPRoute attaching to your existing Gateway(s). TLS is the
+# Gateway listener's job. Can be used instead of or alongside ingress above.
+gateway:
+  enabled: false
+  # -- Gateways this route attaches to; at least one when enabled.
+  parentRefs:
+    - name: my-gateway
+      # namespace: gateway-system  # cross-namespace needs referenceGrant below
+      # sectionName: https         # attach to one specific listener
+      # port: 443
+  # -- Hostnames to match. Empty list matches all hosts on the listener.
+  hostnames:
+    - galiot.example.com
+  # -- Extra HTTPRoute rules (filters, timeouts, matches) appended after the
+  # default catch-all rule. Passthrough — rendered as-is.
+  extraRules: []
+  # -- ReferenceGrant for cross-namespace attachment. It is created in the
+  # GATEWAY's namespace (not the release namespace), so the installer needs
+  # permission there. Only needed when a parentRef.namespace is set.
+  referenceGrant:
+    create: false
+    # -- Namespace of the Gateway; required when create is true.
+    namespace: ""
+
 # -- Pod-level security context. uid/gid 1000 is the `bun` user in oven/bun.
 podSecurityContext:
   runAsNonRoot: true

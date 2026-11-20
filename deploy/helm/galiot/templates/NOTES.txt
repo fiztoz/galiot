@@ -26,6 +26,19 @@ have deliberately accepted this.
      http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
    {{- end }}
 {{- end }}
+{{- if .Values.gateway.enabled }}
+
+   Gateway API: HTTPRoute "{{ include "galiot.fullname" . }}" attaches to:
+   {{- range .Values.gateway.parentRefs }}
+     - {{ .name }}{{ with .namespace }} (namespace {{ . }}){{ end }}{{ with .sectionName }} (listener {{ . }}){{ end }}
+   {{- end }}
+   {{- with .Values.gateway.hostnames }}
+   Hostnames: {{ range . }}{{ . }} {{ end }}
+   {{- end }}
+   Requires the Gateway API CRDs in the cluster; TLS terminates on the
+   Gateway listener. Cross-namespace attachment needs a ReferenceGrant in
+   the Gateway's namespace (gateway.referenceGrant).
+{{- end }}
 
 2. The access gate{{ if not .Values.gate.open }} (required){{ end }}:
 {{- if .Values.gate.open }}

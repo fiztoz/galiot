@@ -115,6 +115,36 @@ Two server behaviours matter behind a proxy:
   `X-Forwarded-Proto: https`. Terminate TLS at the ingress and make sure it
   forwards that header (ingress-nginx does by default).
 
+## Gateway API
+
+If your cluster uses Gateway API instead of (or alongside) Ingress, the chart
+renders an `HTTPRoute` attaching to your existing Gateway:
+
+```yaml
+gateway:
+  enabled: true
+  parentRefs:
+    - name: corp-gateway
+      namespace: gateway-system   # optional; cross-namespace needs the grant below
+      sectionName: https          # optional listener selection
+  hostnames:
+    - galiot.example.com
+  referenceGrant:                 # only for cross-namespace attachment
+    create: true
+    namespace: gateway-system
+```
+
+- Requires the Gateway API CRDs (standard channel) in the cluster. Kinds:
+  `HTTPRoute` (`gateway.networking.k8s.io/v1`, GA) and optionally
+  `ReferenceGrant` (`v1beta1`). Galiot is HTTP-only, so no TCP/TLS routes.
+- TLS terminates on the Gateway listener, not in this chart.
+- The ReferenceGrant is created in the **Gateway's namespace** (not the
+  release namespace): it permits HTTPRoutes from the release namespace to
+  attach to Gateways there. The installer needs permission in that namespace.
+- `gateway.extraRules` passes extra rules (filters, timeouts) through as-is.
+  Uploads stream through the server — give the route/Gateway generous request
+  timeouts if your implementation's defaults are short.
+
 ## Private CAs
 
 TLS to S3 is always verified; there is no skip-verify switch. A container does
@@ -161,6 +191,7 @@ restrict `networkPolicy.ingressFrom`, allow that pod too or the test is blocked.
 | `preset.endpoint` / `preset.region` / `preset.pathStyle` | `""` / `""` / `false` | Pre-fill new connection forms |
 | `service.port` | `8788` | Service + container listen port (≥1024) |
 | `ingress.enabled` | `false` | Ingress with hosts/TLS |
+| `gateway.enabled` | `false` | Gateway API HTTPRoute (+ optional ReferenceGrant) |
 | `networkPolicy.enabled` | `false` | Ingress restriction; egress open |
 | `pdb.create` | `false` | PDB; with 1 replica prefer `maxUnavailable: 1` |
 | `resources` | 100m/128Mi req, 512Mi limit | No CPU limit by design |

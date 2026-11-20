@@ -112,6 +112,23 @@ server's own refusal to start. Called from deployment.yaml and the test pod. */}
 {{- if and (not (kindIs "invalid" $p.pathStyle)) (ne (kindOf $p.pathStyle) "bool") -}}
 {{- fail "preset.pathStyle must be a boolean: use --set preset.pathStyle=true, not a quoted string." -}}
 {{- end -}}
+{{- $gw := .Values.gateway -}}
+{{- if $gw.enabled -}}
+{{- if ne (kindOf $gw.parentRefs) "slice" -}}
+{{- fail "gateway.parentRefs must be a list (supply it via a values file, not --set)." -}}
+{{- end -}}
+{{- if not $gw.parentRefs -}}
+{{- fail "gateway.enabled requires at least one gateway.parentRefs entry — the Gateway to attach to." -}}
+{{- end -}}
+{{- range $gw.parentRefs -}}
+{{- if not .name -}}
+{{- fail "every gateway.parentRefs entry needs a name." -}}
+{{- end -}}
+{{- end -}}
+{{- if and $gw.referenceGrant.create (not ($gw.referenceGrant.namespace | toString | trim)) -}}
+{{- fail "gateway.referenceGrant.namespace is required when create is true — it must be the Gateway's namespace." -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Gate environment for the server container AND the helm-test pod — one

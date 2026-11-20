@@ -142,6 +142,12 @@ Enter the gate in the app's **Server access** panel. It is not an S3 key.
   is HTTPS or carries `X-Forwarded-Proto: https`. Uploads stream through the
   server (up to 1 GiB per object), so raise the proxy body limit — for nginx:
   `nginx.ingress.kubernetes.io/proxy-body-size: "0"`.
+- **Gateway API:** instead of (or alongside) Ingress, set `gateway.enabled=true`
+  with `gateway.parentRefs` naming your Gateway; the chart renders an
+  `HTTPRoute` (standard-channel CRDs must be installed). Cross-namespace
+  attachment needs `gateway.referenceGrant` — the grant is created in the
+  Gateway's namespace. TLS lives on the Gateway listener. Details and an
+  example: `deploy/helm/galiot/README.md`.
 - **Private CAs:** a container does not inherit the node's trust store. Build
   a derived image that installs your CA into its trust store and point
   `image.repository` at it.

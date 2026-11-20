@@ -181,6 +181,47 @@ assert_contains "$WORK/preset.yaml" 'value: "eu-central-1"' "preset region value
 assert_contains "$WORK/preset.yaml" 'name: GALIOT_PRESET_PATH_STYLE' "preset path-style env renders"
 assert_contains "$WORK/preset.yaml" 'value: "1"' "path-style uses the 1 convention"
 
+echo "== case 12: Gateway API (cross-namespace + ReferenceGrant) =="
+cat > "$WORK/gateway-values.yaml" <<EOF
+gate:
+  value: "$GATE"
+gateway:
+  enabled: true
+  parentRefs:
+    - name: corp-gateway
+      namespace: gateway-system
+      sectionName: https
+  hostnames:
+    - galiot.example.com
+  referenceGrant:
+    create: true
+    namespace: gateway-system
+EOF
+tpl -f "$WORK/gateway-values.yaml" > "$WORK/gateway.yaml"
+assert_contains "$WORK/gateway.yaml" '^kind: HTTPRoute' "HTTPRoute renders when enabled"
+assert_contains "$WORK/gateway.yaml" 'apiVersion: gateway.networking.k8s.io/v1$' "HTTPRoute uses the GA v1 API"
+assert_contains "$WORK/gateway.yaml" 'name: corp-gateway' "parentRef names the Gateway"
+assert_contains "$WORK/gateway.yaml" 'namespace: gateway-system' "cross-namespace parentRef renders"
+assert_contains "$WORK/gateway.yaml" 'sectionName: https' "listener sectionName renders"
+assert_contains "$WORK/gateway.yaml" '- galiot.example.com' "hostname renders"
+assert_contains "$WORK/gateway.yaml" '^kind: ReferenceGrant' "ReferenceGrant renders for cross-namespace"
+assert_contains "$WORK/gateway.yaml" 'apiVersion: gateway.networking.k8s.io/v1beta1' "ReferenceGrant uses v1beta1"
+
+echo "== case 12b: Gateway API (same namespace, empty hostnames) =="
+cat > "$WORK/gateway-local-values.yaml" <<EOF
+gate:
+  value: "$GATE"
+gateway:
+  enabled: true
+  parentRefs:
+    - name: corp-gateway
+  hostnames: []
+EOF
+tpl -f "$WORK/gateway-local-values.yaml" > "$WORK/gateway-local.yaml"
+assert_absent  "$WORK/gateway-local.yaml" '^kind: ReferenceGrant' "no grant for same-namespace attachment"
+assert_absent  "$WORK/gateway-local.yaml" 'hostnames:' "empty hostnames list is omitted"
+assert_contains "$WORK/gateway-local.yaml" 'name: corp-gateway' "parentRef still renders"
+
 echo "== negative renders (must fail) =="
 assert_render_fails "no gate configured"
 assert_render_fails "gate.value + gate.existingSecret" --set gate.value="$GATE" --set gate.existingSecret=my-gate
@@ -198,12 +239,38 @@ EOF
 assert_render_fails "branding.logo.svg + existingConfigMap" -f "$WORK/branding-both-values.yaml"
 assert_render_fails "overlong branding.name" --set gate.value="$GATE" --set branding.name="$(printf 'x%.0s' $(seq 1 65))"
 assert_render_fails "string preset.pathStyle" --set gate.value="$GATE" --set-string preset.pathStyle=false
+cat > "$WORK/gateway-noparents-values.yaml" <<EOF
+gate:
+  value: "$GATE"
+gateway:
+  enabled: true
+  parentRefs: []
+EOF
+assert_render_fails "gateway.enabled without parentRefs" -f "$WORK/gateway-noparents-values.yaml"
+cat > "$WORK/gateway-nograntns-values.yaml" <<EOF
+gate:
+  value: "$GATE"
+gateway:
+  enabled: true
+  parentRefs:
+    - name: corp-gateway
+  referenceGrant:
+    create: true
+EOF
+assert_render_fails "referenceGrant.create without namespace" -f "$WORK/gateway-nograntns-values.yaml"
 
 KUBECONFORM="${KUBECONFORM:-$(command -v kubeconform || true)}"
 if [[ -n "$KUBECONFORM" ]]; then
   echo "== kubeconform schema validation =="
   for f in default existing ingress netpol pdb pdb2 open r3 r0 port digest branded branded-existing preset; do
     "$KUBECONFORM" -strict -summary -kubernetes-version 1.31.0 "$WORK/$f.yaml"
+  done
+  # Gateway API kinds are CRDs: validate against the community CRD schema catalog.
+  for f in gateway gateway-local; do
+    "$KUBECONFORM" -strict -summary -kubernetes-version 1.31.0 \
+      -schema-location default \
+      -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+      "$WORK/$f.yaml"
   done
   ok "schema validation"
 else
