@@ -72,6 +72,20 @@ branding:
     # -- Key inside existingConfigMap. The extension sets the content type.
     key: "logo.svg"
 
+# Preset connection defaults for company deployments: the "Add connection"
+# form starts pre-filled with these values. Fields stay editable; presets
+# never contain credentials. Applied at runtime — no image rebuild.
+preset:
+  # -- Company S3 endpoint (GALIOT_PRESET_ENDPOINT), e.g. https://s3.example.com.
+  # Must be an absolute http(s) URL without embedded credentials; the server
+  # screens it at startup and refuses to start on a bad value.
+  endpoint: ""
+  # -- Default region (GALIOT_PRESET_REGION). Empty keeps us-east-1.
+  region: ""
+  # -- Start new connections with path-style addressing
+  # (GALIOT_PRESET_PATH_STYLE=1). Most on-premises gateways need this.
+  pathStyle: false
+
 serviceAccount:
   create: true
   # -- Name override. Defaults to the release fullname.

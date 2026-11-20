@@ -20,6 +20,7 @@ import {
   logoResponseHeaders,
 } from '../src/server/branding';
 import { BRANDING_LOGO_PATH, isAppApiPath } from '../src/server/protocol';
+import { injectPresets, presetsFromEnv } from '../src/server/presets';
 import { proxyListenConfig } from '../src/server/proxy';
 import { headersForPath } from '../src/server/securityHeaders';
 import { contentTypeFor, resolveStaticPath } from '../src/server/static';
@@ -30,8 +31,11 @@ const root = resolve(import.meta.dir, '../dist');
 // Branding is read once at startup; a bad logo path fails fast, like a missing
 // gate. The shell and manifest are pre-rendered so requests stay cheap.
 const branding = brandingFromEnv();
+const presets = presetsFromEnv();
 const indexFile = Bun.file(resolve(root, 'index.html'));
-const shellHtml = (await indexFile.exists()) ? injectBranding(await indexFile.text(), branding) : null;
+const shellHtml = (await indexFile.exists())
+  ? injectPresets(injectBranding(await indexFile.text(), branding), presets)
+  : null;
 const manifestFile = Bun.file(resolve(root, 'manifest.webmanifest'));
 const manifestJson = (await manifestFile.exists())
   ? brandedManifest(await manifestFile.text(), branding)
@@ -101,6 +105,7 @@ Galiot server listening on http://${server.hostname}:${server.port}
   S3 API:       /api/s3
   Access gate:  ${gateLabel}
   Branding:     ${brandLabel}
+  Preset endpoint: ${presets.endpoint || 'none'}
 
 This process signs S3 requests and opens the connection. The machine running
 it must be able to reach the bucket. Credentials stay in memory for the session.

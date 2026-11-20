@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { PRESETS } from '../presets';
 import { X, Loader2, Plug, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import type { AppDB, ConnectionRow } from '../db/client';
 import type { Credentials } from '../vault/protocol';
@@ -59,13 +60,14 @@ interface FormState {
 
 const EMPTY_FORM: FormState = {
   name: '',
-  endpoint: '',
-  region: 'us-east-1',
+  // Deployment presets (company S3) pre-fill new connections; still editable.
+  endpoint: PRESETS.endpoint,
+  region: PRESETS.region || 'us-east-1',
   bucket: '',
   accessKeyId: '',
   secretAccessKey: '',
   sessionToken: '',
-  pathStyle: false,
+  pathStyle: PRESETS.pathStyle,
   headers: [],
 };
 
@@ -130,7 +132,8 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
       Boolean(editing?.path_style) ||
         Object.keys(parseStoredHeaders(editing?.custom_headers)).length > 0 ||
         Boolean(draft?.pathStyle) ||
-        Object.keys(draft?.headers ?? {}).length > 0,
+        Object.keys(draft?.headers ?? {}).length > 0 ||
+        (!editing && PRESETS.pathStyle),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editingId]);

@@ -41,6 +41,9 @@ browser vault; server sessions are memory-only.
 | `GALIOT_BRAND_NAME` | White-label display name, max 64 characters. Default `Galiot`. |
 | `GALIOT_BRAND_TAGLINE` | Browser-title tagline, max 96 characters. Unset keeps `The Agile Cloud Explorer`; an empty string removes it. |
 | `GALIOT_BRAND_LOGO` | Path to a logo image file (svg, png, jpg, jpeg, webp, gif, ico; ≤1 MiB), served same-origin at `/branding/logo`. |
+| `GALIOT_PRESET_ENDPOINT` | Pre-fills the endpoint field for new connections, e.g. `https://s3.example.com`. Screened at startup like a live target. |
+| `GALIOT_PRESET_REGION` | Pre-fills the region field. Empty keeps `us-east-1`. |
+| `GALIOT_PRESET_PATH_STYLE` | `1` starts new connections with path-style addressing (most on-premises gateways). |
 
 A non-loopback bind refuses to start without a gate. On loopback no gate is
 needed, because only this machine can reach the listener.
@@ -77,6 +80,29 @@ helm install galiot deploy/helm/galiot \
   directly as a page cannot run scripts.
 - The dev server (`bun run dev`) always shows the default brand; branding is
   applied by the self-hosted server.
+
+### Preset connection defaults
+
+A company deployment can pre-fill the **Add connection** form with its own S3
+endpoint, so users start from the corporate gateway instead of an empty field:
+
+```bash
+GALIOT_PRESET_ENDPOINT="https://s3.example.com" \
+GALIOT_PRESET_REGION="eu-central-1" \
+GALIOT_PRESET_PATH_STYLE=1 \
+bun run server
+```
+
+With Helm: `--set preset.endpoint=https://s3.example.com`
+`--set preset.region=eu-central-1` `--set preset.pathStyle=true`.
+
+- Presets are a convenience, not a policy: every field stays editable, and
+  presets never contain credentials. Users still bring their own keys.
+- The endpoint is screened at startup with the same rules as a live
+  connection target (absolute http/https URL, no embedded credentials, no
+  link-local/metadata addresses). A bad value refuses startup.
+- Existing connections and user drafts are never overwritten; presets apply
+  to new connection forms only.
 
 ### Kubernetes (Helm)
 

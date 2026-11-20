@@ -20,6 +20,10 @@ services:
       # GALIOT_BRAND_NAME: "Acme Explorer"
       # GALIOT_BRAND_TAGLINE: "Company object storage"
       # GALIOT_BRAND_LOGO: /etc/galiot/logo.svg
+      # Preset the company S3 endpoint for new connections:
+      # GALIOT_PRESET_ENDPOINT: "https://s3.example.com"
+      # GALIOT_PRESET_REGION: "eu-central-1"
+      # GALIOT_PRESET_PATH_STYLE: "1"
     # volumes:
     #   - ./logo.svg:/etc/galiot/logo.svg:ro
     restart: unless-stopped

@@ -72,6 +72,20 @@ bad files refuse startup. A pod restart applies changes (`helm upgrade` rolls
 them; chart-managed logos roll automatically via checksum). See
 `docs/OPERATIONS.md` for the plain-env form.
 
+## Preset connection defaults
+
+```yaml
+preset:
+  endpoint: https://s3.example.com   # your company S3 gateway
+  region: eu-central-1
+  pathStyle: true                    # most on-premises gateways need this
+```
+
+New "Add connection" forms start pre-filled; fields stay editable and no
+credentials are preset. The endpoint is screened at startup (http/https, no
+embedded credentials, no metadata addresses) — a bad value refuses the pod.
+Existing connections and drafts are untouched.
+
 ## Ingress
 
 ```yaml
@@ -144,6 +158,7 @@ restrict `networkPolicy.ingressFrom`, allow that pod too or the test is blocked.
 | `gate.open` | `false` | DANGER: unauthenticated bind |
 | `branding.name` / `branding.tagline` | `""` | White-label name and title tagline |
 | `branding.logo.svg` / `branding.logo.existingConfigMap` / `branding.logo.key` | `""` / `""` / `logo.svg` | Custom logo: inline SVG or mounted ConfigMap |
+| `preset.endpoint` / `preset.region` / `preset.pathStyle` | `""` / `""` / `false` | Pre-fill new connection forms |
 | `service.port` | `8788` | Service + container listen port (≥1024) |
 | `ingress.enabled` | `false` | Ingress with hosts/TLS |
 | `networkPolicy.enabled` | `false` | Ingress restriction; egress open |

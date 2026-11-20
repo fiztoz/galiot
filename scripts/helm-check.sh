@@ -78,6 +78,7 @@ assert_contains "$WORK/default.yaml" 'readOnlyRootFilesystem: true' "root filesy
 assert_contains "$WORK/default.yaml" 'automountServiceAccountToken: false' "no API token automount"
 assert_contains "$WORK/default.yaml" 'replicas: 1' "single replica by default"
 assert_absent  "$WORK/default.yaml" 'name: GALIOT_BRAND_NAME' "no branding env by default"
+assert_absent  "$WORK/default.yaml" 'name: GALIOT_PRESET_ENDPOINT' "no preset env by default"
 
 echo "== case 2: existingSecret =="
 tpl --set gate.existingSecret=my-gate --set gate.existingSecretKey=token > "$WORK/existing.yaml"
@@ -171,6 +172,15 @@ assert_contains "$WORK/branded-existing.yaml" 'value: "/etc/galiot/branding/logo
 assert_contains "$WORK/branded-existing.yaml" 'name: acme-logo' "volume names the existing ConfigMap"
 assert_contains "$WORK/branded-existing.yaml" 'key: logo.png' "volume items select the custom key"
 
+echo "== case 11: preset connection defaults =="
+tpl --set gate.value="$GATE" --set preset.endpoint=https://s3.example.com --set preset.region=eu-central-1 --set preset.pathStyle=true > "$WORK/preset.yaml"
+assert_contains "$WORK/preset.yaml" 'name: GALIOT_PRESET_ENDPOINT' "preset endpoint env renders"
+assert_contains "$WORK/preset.yaml" 'value: "https://s3.example.com"' "preset endpoint value renders"
+assert_contains "$WORK/preset.yaml" 'name: GALIOT_PRESET_REGION' "preset region env renders"
+assert_contains "$WORK/preset.yaml" 'value: "eu-central-1"' "preset region value renders"
+assert_contains "$WORK/preset.yaml" 'name: GALIOT_PRESET_PATH_STYLE' "preset path-style env renders"
+assert_contains "$WORK/preset.yaml" 'value: "1"' "path-style uses the 1 convention"
+
 echo "== negative renders (must fail) =="
 assert_render_fails "no gate configured"
 assert_render_fails "gate.value + gate.existingSecret" --set gate.value="$GATE" --set gate.existingSecret=my-gate
@@ -187,11 +197,12 @@ branding:
 EOF
 assert_render_fails "branding.logo.svg + existingConfigMap" -f "$WORK/branding-both-values.yaml"
 assert_render_fails "overlong branding.name" --set gate.value="$GATE" --set branding.name="$(printf 'x%.0s' $(seq 1 65))"
+assert_render_fails "string preset.pathStyle" --set gate.value="$GATE" --set-string preset.pathStyle=false
 
 KUBECONFORM="${KUBECONFORM:-$(command -v kubeconform || true)}"
 if [[ -n "$KUBECONFORM" ]]; then
   echo "== kubeconform schema validation =="
-  for f in default existing ingress netpol pdb pdb2 open r3 r0 port digest branded branded-existing; do
+  for f in default existing ingress netpol pdb pdb2 open r3 r0 port digest branded branded-existing preset; do
     "$KUBECONFORM" -strict -summary -kubernetes-version 1.31.0 "$WORK/$f.yaml"
   done
   ok "schema validation"

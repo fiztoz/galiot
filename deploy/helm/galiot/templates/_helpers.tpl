@@ -105,6 +105,13 @@ server's own refusal to start. Called from deployment.yaml and the test pod. */}
 {{- if gt (len ($b.name | toString)) 64 -}}
 {{- fail "branding.name is too long (max 64 characters)." -}}
 {{- end -}}
+{{- $p := .Values.preset -}}
+{{- if gt (len ($p.endpoint | toString)) 2048 -}}
+{{- fail "preset.endpoint is too long (max 2048 characters)." -}}
+{{- end -}}
+{{- if and (not (kindIs "invalid" $p.pathStyle)) (ne (kindOf $p.pathStyle) "bool") -}}
+{{- fail "preset.pathStyle must be a boolean: use --set preset.pathStyle=true, not a quoted string." -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Gate environment for the server container AND the helm-test pod — one
@@ -155,5 +162,22 @@ logo.svg
 {{- if or .Values.branding.logo.svg .Values.branding.logo.existingConfigMap }}
 - name: GALIOT_BRAND_LOGO
   value: "{{ include "galiot.brandingMountPath" . }}/{{ include "galiot.brandingLogoKey" . }}"
+{{- end }}
+{{- end }}
+
+{{/* Preset connection defaults. Same fragment rules as brandingEnv: each
+branch supplies its own leading newline. */}}
+{{- define "galiot.presetEnv" -}}
+{{- if .Values.preset.endpoint }}
+- name: GALIOT_PRESET_ENDPOINT
+  value: {{ .Values.preset.endpoint | quote }}
+{{- end }}
+{{- if .Values.preset.region }}
+- name: GALIOT_PRESET_REGION
+  value: {{ .Values.preset.region | quote }}
+{{- end }}
+{{- if .Values.preset.pathStyle }}
+- name: GALIOT_PRESET_PATH_STYLE
+  value: "1"
 {{- end }}
 {{- end }}

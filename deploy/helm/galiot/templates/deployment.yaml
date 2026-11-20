@@ -70,6 +70,7 @@ spec:
               value: /tmp
             {{- include "galiot.gateEnv" . | nindent 12 }}
             {{- include "galiot.brandingEnv" . | nindent 12 }}
+            {{- include "galiot.presetEnv" . | nindent 12 }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
