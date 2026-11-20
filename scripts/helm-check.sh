@@ -61,7 +61,7 @@ helm lint "$CHART" --set gate.value="$GATE" --quiet
 ok "lint"
 
 echo "== case 1: defaults (chart-managed gate) =="
-tpl --set gate.value="$GATE" > "$WORK/default.yaml"
+tpl --set gate.open=false --set gate.value="$GATE" > "$WORK/default.yaml"
 assert_contains "$WORK/default.yaml" '^kind: Deployment' "Deployment renders"
 assert_contains "$WORK/default.yaml" '^kind: Service$' "Service renders"
 assert_contains "$WORK/default.yaml" '^kind: Secret' "gate Secret renders"
@@ -71,12 +71,15 @@ assert_absent  "$WORK/default.yaml" '^kind: NetworkPolicy' "no NetworkPolicy by 
 assert_absent  "$WORK/default.yaml" '^kind: PodDisruptionBudget' "no PDB by default"
 assert_contains "$WORK/default.yaml" 'name: galiot-gate' "secretKeyRef names the rendered Secret"
 assert_contains "$WORK/default.yaml" 'key: gate' "secretKeyRef key matches the Secret"
+assert_absent  "$WORK/default.yaml" 'name: GALIOT_GATE_OPEN' "boolean false keeps the token gate"
 assert_contains "$WORK/default.yaml" 'value: "http://galiot:8788"' "test pod targets the rendered Service"
 assert_contains "$WORK/default.yaml" 'path: /api/health' "probes use /api/health"
 assert_contains "$WORK/default.yaml" 'runAsNonRoot: true' "pod runs non-root"
 assert_contains "$WORK/default.yaml" 'readOnlyRootFilesystem: true' "root filesystem read-only"
 assert_contains "$WORK/default.yaml" 'automountServiceAccountToken: false' "no API token automount"
 assert_contains "$WORK/default.yaml" 'replicas: 1' "single replica by default"
+assert_contains "$WORK/default.yaml" '^    type: Recreate$' "upgrade stops the previous issuer first"
+assert_absent  "$WORK/default.yaml" 'rollingUpdate:' "no surge settings on a Recreate Deployment"
 assert_absent  "$WORK/default.yaml" 'name: GALIOT_BRAND_NAME' "no branding env by default"
 assert_absent  "$WORK/default.yaml" 'name: GALIOT_PRESET_ENDPOINT' "no preset env by default"
 
@@ -111,12 +114,31 @@ assert_contains "$WORK/ingress.yaml" 'host: "galiot.example.com"' "ingress host 
 assert_contains "$WORK/ingress.yaml" 'secretName: galiot-tls' "ingress TLS renders"
 assert_contains "$WORK/ingress.yaml" 'ingressClassName: nginx' "ingress class renders"
 assert_contains "$WORK/ingress.yaml" 'proxy-body-size' "ingress annotations render"
+assert_absent "$WORK/ingress.yaml" 'name: GALIOT_PUBLIC_ORIGINS' "token gate skips ingress origin generation"
 
 echo "== case 4: networkPolicy =="
 tpl --set gate.value="$GATE" --set networkPolicy.enabled=true > "$WORK/netpol.yaml"
 assert_contains "$WORK/netpol.yaml" '^kind: NetworkPolicy' "NetworkPolicy renders when enabled"
 assert_contains "$WORK/netpol.yaml" '- Ingress' "policy types include Ingress"
-assert_contains "$WORK/netpol.yaml" '- Egress' "policy types include Egress"
+assert_absent  "$WORK/netpol.yaml" '- Egress' "default policy manages ingress only"
+assert_absent  "$WORK/netpol.yaml" '^  egress:' "default policy grants no egress rules"
+assert_absent  "$WORK/netpol.yaml" '^      from:' "default ingress accepts all sources on the HTTP port"
+tpl --show-only templates/networkpolicy.yaml --set gate.existingSecret=my-gate \
+  --set networkPolicy.enabled=true --set-json 'networkPolicy.ingressFrom=[{}]' > "$WORK/netpol-legacy.yaml"
+assert_absent "$WORK/netpol-legacy.yaml" '^      from:' "legacy default renders valid unrestricted sources"
+tpl --show-only templates/networkpolicy.yaml --set gate.existingSecret=my-gate \
+  --set networkPolicy.enabled=true --set-json 'networkPolicy.egress=[]' > "$WORK/netpol-empty.yaml"
+assert_contains "$WORK/netpol-empty.yaml" '- Egress' "explicit empty rules isolate egress"
+assert_contains "$WORK/netpol-empty.yaml" '^    \[\]$' "empty rules grant no outbound connections"
+tpl --show-only templates/networkpolicy.yaml --set gate.existingSecret=my-gate \
+  --set networkPolicy.enabled=true \
+  --set-json 'networkPolicy.ingressFrom=[{"podSelector":{"matchLabels":{"role":"gateway"}}}]' \
+  --set-json 'networkPolicy.egress=[{"to":[{"ipBlock":{"cidr":"10.0.0.5/32"}}],"ports":[{"protocol":"TCP","port":443}]}]' > "$WORK/netpol-scoped.yaml"
+assert_contains "$WORK/netpol-scoped.yaml" 'role: gateway' "custom ingress peer preserved"
+assert_contains "$WORK/netpol-scoped.yaml" '- Egress' "explicit rules manage egress"
+assert_contains "$WORK/netpol-scoped.yaml" 'cidr: 10.0.0.5/32' "outbound destination preserved"
+assert_contains "$WORK/netpol-scoped.yaml" 'port: 443' "outbound port preserved"
+assert_absent "$WORK/netpol-scoped.yaml" '- {}' "no unrestricted rule added to scoped policy"
 
 echo "== case 5: PDB =="
 tpl --set gate.value="$GATE" --set pdb.create=true > "$WORK/pdb.yaml"
@@ -131,12 +153,49 @@ tpl --set gate.open=true > "$WORK/open.yaml"
 assert_absent  "$WORK/open.yaml" '^kind: Secret' "no Secret in open mode"
 assert_contains "$WORK/open.yaml" 'name: GALIOT_GATE_OPEN' "open mode sets GALIOT_GATE_OPEN"
 assert_absent  "$WORK/open.yaml" 'name: GALIOT_GATE$' "no gate env in open mode"
+assert_absent  "$WORK/open.yaml" 'name: GALIOT_PUBLIC_ORIGINS' "disabled ingress contributes no origins"
+
+echo "== case 6b: open ingress browser origins =="
+cat > "$WORK/origins-values.yaml" <<'EOF'
+gate:
+  open: true
+ingress:
+  enabled: true
+  hosts:
+    - host: secure.example.com
+      paths: &paths [{path: /, pathType: Prefix}]
+    - {host: files.dev.example.com, paths: *paths}
+    - {host: deep.files.dev.example.com, paths: *paths}
+    - {host: "*.example.com", paths: *paths}
+    - {paths: *paths}
+    - host: secure.example.com
+      paths: [{path: /files, pathType: Prefix}]
+  tls:
+    - hosts: [secure.example.com, tls-only.example.com]
+    - hosts: ["*.dev.example.com"]
+EOF
+origins_deploy() {
+  tpl -f "$WORK/origins-values.yaml" --show-only templates/deployment.yaml "$@"
+}
+origins_deploy --set-json 'extraEnv=[{"name":"TZ","value":"UTC"}]' > "$WORK/origins.yaml"
+assert_contains "$WORK/origins.yaml" 'name: GALIOT_PUBLIC_ORIGINS$' "open ingress sets server origins"
+assert_contains "$WORK/origins.yaml" 'value: "https://secure\.example\.com,https://files\.dev\.example\.com,http://deep\.files\.dev\.example\.com"$' "only concrete route hosts appear once with their public schemes"
+origins_deploy --set-json 'ingress.hosts=[{"host":"*.example.com","paths":[{"path":"/","pathType":"Prefix"}]},{"host":"","paths":[{"path":"/","pathType":"Prefix"}]}]' > "$WORK/origins-wildcard.yaml"
+assert_absent "$WORK/origins-wildcard.yaml" 'name: GALIOT_PUBLIC_ORIGINS' "wildcard and hostless routes grant no origins"
+
+origins_deploy --set-json 'extraEnv=[{"name":"GALIOT_PUBLIC_ORIGINS","value":"https://proxy.example.com:8443"}]' > "$WORK/origins-override.yaml"
+assert_contains "$WORK/origins-override.yaml" 'https://proxy\.example\.com:8443' "explicit origin preserves public scheme and port"
+origins_deploy --set-json 'extraEnv=[{"name":"GALIOT_PUBLIC_ORIGINS","valueFrom":{"configMapKeyRef":{"name":"public-origins","key":"origins"}}}]' > "$WORK/origins-from.yaml"
+assert_contains "$WORK/origins-from.yaml" 'name: public-origins' "explicit origins can come from a ConfigMap"
+for f in origins-override origins-from; do
+  [[ "$(grep -c 'name: GALIOT_PUBLIC_ORIGINS$' "$WORK/$f.yaml")" == 1 ]] || { echo "FAIL: expected one origins entry in $f"; exit 1; }
+  ok "only the operator's origins entry renders in $f"
+done
 
 echo "== case 7: replicas edge values =="
-tpl --set gate.value="$GATE" --set replicaCount=3 > "$WORK/r3.yaml"
-assert_contains "$WORK/r3.yaml" 'replicas: 3' "replicaCount=3 renders"
+assert_render_fails "multiple grant issuers" --set gate.value="$GATE" --set replicaCount=2
 tpl --set gate.value="$GATE" --set replicaCount=0 > "$WORK/r0.yaml"
-assert_contains "$WORK/r0.yaml" 'replicas: 0' "replicaCount=0 renders (kindIs guard)"
+assert_contains "$WORK/r0.yaml" 'replicas: 0' "can scale down for maintenance"
 
 echo "== case 8: custom port + digest pin =="
 tpl --set gate.value="$GATE" --set service.port=9000 > "$WORK/port.yaml"
@@ -224,6 +283,14 @@ assert_contains "$WORK/gateway-local.yaml" 'name: corp-gateway' "parentRef still
 
 echo "== negative renders (must fail) =="
 assert_render_fails "no gate configured"
+assert_render_fails "boolean false needs a token" --set gate.open=false
+assert_render_fails "string false" --set-string gate.open=false
+assert_render_fails "string true" --set-string gate.open=true
+assert_render_fails "numeric gate mode" --set gate.open=1
+assert_render_fails "numeric zero with a token" --set gate.open=0 --set gate.existingSecret=my-gate
+assert_render_fails "null gate mode with a token" --set gate.open=null --set gate.existingSecret=my-gate
+assert_render_fails "egress rules must be a list" --set gate.existingSecret=my-gate --set networkPolicy.enabled=true --set-string networkPolicy.egress=false
+assert_render_fails "null egress rule" --set gate.existingSecret=my-gate --set networkPolicy.enabled=true --set-json 'networkPolicy.egress=[null]'
 assert_render_fails "gate.value + gate.existingSecret" --set gate.value="$GATE" --set gate.existingSecret=my-gate
 assert_render_fails "gate.open + gate.value" --set gate.open=true --set gate.value="$GATE"
 assert_render_fails "privileged port 80" --set gate.value="$GATE" --set service.port=80
@@ -262,7 +329,7 @@ assert_render_fails "referenceGrant.create without namespace" -f "$WORK/gateway-
 KUBECONFORM="${KUBECONFORM:-$(command -v kubeconform || true)}"
 if [[ -n "$KUBECONFORM" ]]; then
   echo "== kubeconform schema validation =="
-  for f in default existing ingress netpol pdb pdb2 open r3 r0 port digest branded branded-existing preset; do
+  for f in default existing ingress netpol netpol-legacy netpol-empty netpol-scoped pdb pdb2 open origins origins-wildcard origins-override origins-from r0 port digest branded branded-existing preset; do
     "$KUBECONFORM" -strict -summary -kubernetes-version 1.31.0 "$WORK/$f.yaml"
   done
   # Gateway API kinds are CRDs: validate against the community CRD schema catalog.

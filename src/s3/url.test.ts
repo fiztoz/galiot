@@ -78,6 +78,15 @@ describe('buildS3Url addressing regression', () => {
 });
 
 describe('buildS3Url (general behaviour)', () => {
+  test('refuses dot components and round-trips literal percent signs and empty segments', () => {
+    for (const target of [MINIO, R2]) {
+      for (const key of ['folder/./name', 'folder/../name']) {
+        expect(() => buildS3Url(target, key)).toThrow(/dot segment/);
+      }
+      const key = 'folder/%2E//photo #1/';
+      expect(decodeURIComponent(buildS3Url(target, key).pathname)).toEndWith('/' + key);
+    }
+  });
   test('virtual-hosted style prefixes the bucket to the host', () => {
     expect(buildS3Url(R2).toString()).toBe('https://my-bucket.acct.r2.cloudflarestorage.com/');
   });

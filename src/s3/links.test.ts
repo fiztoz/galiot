@@ -1,9 +1,11 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { runMigrations } from '../db/migrations';
-import type { AppDB } from '../db/client';
-import { EXPIRY_PRESETS, isExpired, purgeExpiredLinks } from './links';
+import type { AppDB, ConnectionRow } from '../db/client';
+import { vaultService } from '../vault/vaultService';
+import { createLink, deleteLink, EXPIRY_PRESETS, isExpired, isServerLink, purgeExpiredLinks,
+  SHARE_TARGET_QUERY, shareTargetParams, type ShareTarget } from './links';
 
 const PROFILE_ID = '33333333-3333-4333-8333-333333333333';
 
@@ -42,6 +44,114 @@ async function insertLink(db: PGlite, label: string, offsetMs: number): Promise<
 }
 
 const HOUR = 3_600_000;
+
+test('v5 history retains its bearer and revocation record without guessing its target', async () => {
+  const db = await seededDb();
+  try {
+    await db.exec(`ALTER TABLE presigned_history DROP COLUMN target_identity;
+      UPDATE _meta SET value = '5' WHERE key = 'schema_version'`);
+    await insertLink(db, 'legacy', HOUR);
+    const before = (await db.query<Record<string, unknown>>('SELECT * FROM presigned_history')).rows[0]!;
+    await runMigrations(db);
+    await runMigrations(db);
+    expect((await db.query('SELECT * FROM presigned_history')).rows).toEqual([{ ...before, target_identity: null }]);
+  } finally {
+    await db.close();
+  }
+});
+
+test('issues against the selected target and rejects route or credential changes before signing', async () => {
+  const db = await seededDb();
+  const appDb = db as unknown as AppDB;
+  const rpc = spyOn(vaultService, 'call');
+  const loadProfile = async () => (await db.query<ConnectionRow>('SELECT * FROM profiles')).rows[0]!;
+  const loadTarget = async (profile: ConnectionRow) =>
+    (await db.query<ShareTarget>(SHARE_TARGET_QUERY, shareTargetParams(profile))).rows[0];
+  try {
+    const original = await loadProfile();
+    const selected = (await loadTarget(original))!;
+    expect(selected.target_identity).toMatch(/^[0-9a-f]{64}$/);
+    await db.query("UPDATE profiles SET name = 'Renamed', updated_at = NOW()");
+    expect(await loadTarget(await loadProfile())).toEqual(selected);
+
+    rpc.mockResolvedValueOnce({ url: 'https://s3.example.com/item?signature=test' });
+    const issued = await createLink(appDb, selected, 'item', 'write', 3600, 's3');
+    expect(issued.target_identity).toBe(selected.target_identity);
+    expect(rpc).toHaveBeenCalledWith('s3.presignPut', expect.objectContaining({
+      key: 'item', credentials: { sealed: { iv: 'def', ciphertext: 'abc' } },
+      profile: expect.objectContaining({ bucket: selected.bucket }),
+    }));
+    rpc.mockClear();
+
+    // Keep updated_at unchanged. Each change affects authority in its own right.
+    let previous = selected;
+    for (const sql of [
+      "UPDATE profiles SET bucket = 'other'",
+      "UPDATE profiles SET endpoint = 'https://gateway.example.com'",
+      `UPDATE profiles SET custom_headers = '{"x-tenant":"second"}'`,
+      `UPDATE profiles SET encrypted_credentials = '{"iv":"replacement","ciphertext":"sealed"}'`,
+      "UPDATE profiles SET region = 'us-west-2'",
+      'UPDATE profiles SET path_style = NOT path_style',
+    ]) {
+      await db.exec(sql);
+      for (const via of ['server', 's3'] as const) {
+        for (const permission of ['read', 'write'] as const) {
+          await expect(createLink(appDb, previous, 'item', permission, 3600, via)).rejects.toThrow('select the object again');
+        }
+      }
+      const current = (await loadTarget(await loadProfile()))!;
+      expect(current.target_identity).not.toBe(previous.target_identity);
+      previous = current;
+    }
+    expect(rpc).not.toHaveBeenCalled();
+    expect((await db.query('SELECT target_identity FROM presigned_history')).rows)
+      .toEqual([{ target_identity: selected.target_identity }]);
+
+    // Older vaults can store JSON strings inside either JSONB column.
+    await db.query('UPDATE profiles SET custom_headers = to_jsonb($1::text), encrypted_credentials = to_jsonb($2::text)',
+      [JSON.stringify({ 'x-tenant': 'legacy' }), JSON.stringify({ iv: 'legacy', ciphertext: 'sealed' })]);
+    const legacy = (await loadTarget(await loadProfile()))!;
+    rpc.mockResolvedValueOnce({ url: 'https://s3.example.com/item?signature=test' });
+    await createLink(appDb, legacy, 'item', 'read', 3600, 's3');
+    expect(rpc).toHaveBeenCalledWith('s3.presignGet', expect.objectContaining({
+      credentials: { sealed: { iv: 'legacy', ciphertext: 'sealed' } },
+      profile: expect.objectContaining({ headers: { 'x-tenant': 'legacy' } }),
+    }));
+  } finally {
+    rpc.mockRestore();
+    await db.close();
+  }
+});
+
+test('keeps a grant in history until the issuer confirms revocation', async () => {
+  const origin = 'https://example.com';
+  const path = '/api/s3/media/' + 'a'.repeat(43);
+  const db = await seededDb();
+  const appDb = db as unknown as AppDB;
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: new URL(origin) } });
+  const network = spyOn(globalThis, 'fetch');
+  try {
+    expect(isServerLink('https://s3.example.com' + path + '?X-Amz-Signature=test')).toBe(false);
+    await insertLink(db, 'grant', HOUR);
+    const { rows } = await db.query<{ id: string }>('UPDATE presigned_history SET url = $1 RETURNING id', ['https://s3.example.com' + path]);
+    const id = rows[0]!.id;
+    await expect(deleteLink(appDb, id)).rejects.toThrow('issuing server');
+    expect(network).not.toHaveBeenCalled();
+    await db.query('UPDATE presigned_history SET url = $1 WHERE id = $2', [origin + path, id]);
+    network.mockResolvedValueOnce(Response.json({ result: { revoked: false } }));
+    await expect(deleteLink(appDb, id)).rejects.toThrow('kept in history');
+    expect(await remainingKeys(db)).toEqual(['file-grant.txt']);
+    network.mockResolvedValueOnce(Response.json({ result: { revoked: true } }));
+    await deleteLink(appDb, id);
+    expect(await remainingKeys(db)).toEqual([]);
+  } finally {
+    network.mockRestore();
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+    await db.close();
+  }
+});
 
 async function remainingKeys(db: PGlite): Promise<string[]> {
   const res = await db.query<{ key: string }>(`SELECT key FROM presigned_history ORDER BY key`);

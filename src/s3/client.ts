@@ -3,6 +3,7 @@ import { buildS3Url, encodeKey } from './url';
 import { md5Base64 } from '../transfer/integrity';
 import { withCustomHeaders } from './customHeaders';
 import { BRAND } from '../branding';
+import { readBoundedText } from '../lib/boundedBody';
 import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
 import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
 
@@ -78,6 +79,7 @@ export interface ListObjectsResult {
 }
 
 export interface ObjectMeta {
+  versionId: string | null;
   contentLength: number;
   contentType: string;
   lastModified: string;
@@ -170,6 +172,11 @@ function escapeXml(value: string): string {
   return value.replace(/[&<>"']/g, (ch) => XML_ESCAPES[ch] ?? ch);
 }
 
+/** Allows a full ListObjects page with entity-escaped, maximum-length keys. */
+const MAX_S3_XML_BYTES = 8 * 1024 * 1024;
+const MAX_S3_ERROR_BYTES = 64 * 1024;
+const readXml = (res: Response) => readBoundedText(res, MAX_S3_XML_BYTES);
+
 function serializeCorsRule(rule: CorsRule): string {
   const values = (items: string[], tag: string): string =>
     items.map((item) => `<${tag}>${escapeXml(item)}</${tag}>`).join('');
@@ -256,7 +263,7 @@ async function throwS3Error(res: Response, operation: string): Promise<never> {
   let code = res.statusText || `HTTP ${res.status}`;
   let message = '';
   try {
-    const body = await res.text();
+    const body = await readBoundedText(res, MAX_S3_ERROR_BYTES);
     const parsedCode = xmlFirst(body, 'Code');
     const parsedMessage = xmlFirst(body, 'Message');
     if (parsedCode) code = parsedCode;
@@ -265,6 +272,29 @@ async function throwS3Error(res: Response, operation: string): Promise<never> {
     // A body we cannot read still leaves a usable status.
   }
   throw new S3RequestError(operation, res.status, code, message || res.statusText);
+}
+
+/** Copy and completion can report an S3 error after the HTTP 200 headers. */
+async function confirmedETag(res: Response, operation: string, root: string): Promise<string> {
+  if (!res.ok) await throwS3Error(res, operation);
+  const xml = (await readXml(res)).trim().replace(/^<\?xml\s[^?]*\?>\s*/, '');
+  if (/<(?:[\w-]+:)?Error[\s/>]/.test(xml)) {
+    const failure = xmlBlocks(xml, 'Error')[0] ?? '';
+    throw new S3RequestError(operation, res.status, xmlFirst(failure, 'Code') || 'S3Error',
+      xmlFirst(failure, 'Message') || 'The provider reported an error in the response body.');
+  }
+  const result = new RegExp(`^<((?:[\\w-]+:)?${root})(?:\\s[^>]*)?>([\\s\\S]*)</\\1>$`).exec(xml);
+  // S3 result fields are scalar elements. Exclude truncated/concatenated
+  // documents and markup that merely contains the spelling of an ETag.
+  const fields = result?.[2] ?? '';
+  const scalar = /\s*<([\w.:-]+)(?:\s[^<>]*)?(?:\/>|>[^<>]*<\/\1>)/y;
+  const children = fields.trimEnd();
+  let offset = 0;
+  while (offset < children.length && scalar.exec(children)) offset = scalar.lastIndex;
+  const tags = offset === children.length ? xmlBlocks(fields, 'ETag') : [];
+  const eTag = tags.length === 1 && xmlFirst(fields, 'ETag')?.trim();
+  if (!eTag) throw new S3RequestError(operation, res.status, 'UnconfirmedResult', `Missing ${root} with ETag.`);
+  return eTag;
 }
 
 /**
@@ -326,6 +356,33 @@ export class S3Client {
   }
 
   /**
+   * Operator certification is scoped to the canonical bucket URL, including
+   * addressing style and any gateway path. A move requires enforcement of
+   * CopySourceIfMatch (including multipart) and DeleteObject If-Match.
+   * Successful writes, provider names and ETag presence prove none of these.
+   */
+  public supportsCondition(operation: 'put' | 'copy' | 'move'): boolean {
+    // A custom header can select another tenant or backing service at this URL.
+    if (Object.keys(this.customHeaders).length) return false;
+    try {
+      const endpoint = new URL(this.endpoint);
+      const standardHost = /^(?:s3\.amazonaws\.com|s3(?:-fips)?\.(?:dualstack\.)?(?:us(?:-gov)?|af|ap|ca|eu|il|me|mx|sa)-[a-z]+-\d+\.amazonaws\.com|s3\.(?:dualstack\.)?cn-[a-z]+-\d+\.amazonaws\.com\.cn)$/;
+      const generalBucket = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(this.bucket)
+        && !/(?:--x-s3|-s3alias|--ol-s3|\.mrap|--table-s3)$/.test(this.bucket);
+      if (endpoint.protocol === 'https:' && !endpoint.port && endpoint.pathname === '/'
+        && !endpoint.search && !endpoint.hash && !endpoint.username && !endpoint.password
+        && generalBucket && standardHost.test(endpoint.hostname)) return true;
+      const config: unknown = JSON.parse(process.env.GALIOT_S3_CONDITIONS ?? '{}');
+      if (!config || typeof config !== 'object') return false;
+      const url = this.buildUrl().href;
+      const supported: unknown = Object.hasOwn(config, url) ? (config as Record<string, unknown>)[url] : null;
+      return Array.isArray(supported) && (supported.includes(operation) || (operation === 'copy' && supported.includes('move')));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * The single path every request takes, so a connection's custom headers are
    * folded in before the request is signed.
    *
@@ -339,6 +396,10 @@ export class S3Client {
    * displaced by a stale row that predates the screening rule.
    */
   private async request(url: URL, init?: RequestInit & AwsSignOptions): Promise<Response> {
+    if (init?.method === 'PUT' && new Headers(init.headers).has('if-match') && !this.supportsCondition('put')) {
+      throw new S3RequestError('PutObject', 501, 'ConditionalWriteUnverified',
+        'Conditional writes have not been verified for this bucket.');
+    }
     let requestInit = Object.keys(this.customHeaders).length === 0
       ? init
       : {
@@ -370,6 +431,7 @@ export class S3Client {
   }
 
   private buildUrl(key?: string, queryParams?: Record<string, string>): URL {
+    if (key === '') throw new Error('An object key cannot be empty.');
     return buildS3Url(
       { endpoint: this.endpoint, bucket: this.bucket, pathStyle: this.pathStyle },
       key,
@@ -394,16 +456,19 @@ export class S3Client {
       // Older S3 gateways (Dell ECS family and other on-premises systems) may
       // implement only ListObjects v1. Retry once with marker paging; a real
       // permissions or bucket error fails the same way on both and surfaces.
-      const body = await res.clone().text();
+      const body = await readBoundedText(res, MAX_S3_ERROR_BYTES);
       if (/NotImplemented|InvalidArgument|InvalidRequest|not supported/i.test(body)) {
         res = await this.request(this.buildUrl(undefined, v1Query()));
         v1 = true;
         this.listV1 = true;
+      } else {
+        throw new S3RequestError('ListObjects', res.status, xmlFirst(body, 'Code') || res.statusText,
+          xmlFirst(body, 'Message') || res.statusText);
       }
     }
     if (!res.ok) await throwS3Error(res, 'ListObjects');
 
-    const text = await res.text();
+    const text = await readXml(res);
 
     const objects = xmlBlocks(text, 'Contents').map((block) => ({
       key: xmlFirst(block, 'Key') ?? '',
@@ -434,6 +499,7 @@ export class S3Client {
 
     return {
       contentLength: parseInt(res.headers.get('content-length') || '0', 10),
+      versionId: res.headers.get('x-amz-version-id'),
       contentType: res.headers.get('content-type') || 'application/octet-stream',
       lastModified: res.headers.get('last-modified') || '',
       eTag: res.headers.get('etag') || '',
@@ -469,14 +535,16 @@ export class S3Client {
    * Server-side copy. The bytes never leave S3: one PUT with a copy-source
    * header. Objects above 5 GiB must use `copyPart` instead (AWS limit).
    */
-  public async copyObject(sourceKey: string, destKey: string, versionId?: string): Promise<{ eTag: string }> {
+  public async copyObject(sourceKey: string, destKey: string, versionId?: string, ifMatch?: string): Promise<{ eTag: string }> {
     const url = this.buildUrl(destKey);
     const res = await this.request(url, {
       method: 'PUT',
-      headers: { 'x-amz-copy-source': this.copySource(sourceKey, versionId) },
+      headers: {
+        'x-amz-copy-source': this.copySource(sourceKey, versionId),
+        ...(ifMatch && { 'x-amz-copy-source-if-match': ifMatch }),
+      },
     });
-    if (!res.ok) await throwS3Error(res, 'CopyObject');
-    return { eTag: xmlFirst(await res.text(), 'ETag') ?? '' };
+    return { eTag: await confirmedETag(res, 'CopyObject', 'CopyObjectResult') };
   }
 
   /**
@@ -488,7 +556,7 @@ export class S3Client {
     const url = this.buildUrl(undefined, { versions: '', prefix: key, 'max-keys': '1000' });
     const res = await this.request(url);
     if (!res.ok) await throwS3Error(res, 'ListObjectVersions');
-    const text = await res.text();
+    const text = await readXml(res);
     const parse = (block: string, isDeleteMarker: boolean): ObjectVersion & { key: string } => ({
       key: xmlFirst(block, 'Key') ?? '',
       versionId: xmlFirst(block, 'VersionId') ?? 'null',
@@ -558,17 +626,19 @@ export class S3Client {
     partNumber: number,
     startByte: number,
     endByte: number,
+    ifMatch?: string,
+    versionId?: string,
   ): Promise<string> {
     const url = this.buildUrl(destKey, { uploadId, partNumber: String(partNumber) });
     const res = await this.request(url, {
       method: 'PUT',
       headers: {
-        'x-amz-copy-source': this.copySource(sourceKey),
+        'x-amz-copy-source': this.copySource(sourceKey, versionId),
+        ...(ifMatch && { 'x-amz-copy-source-if-match': ifMatch }),
         'x-amz-copy-source-range': `bytes=${startByte}-${endByte}`,
       },
     });
-    if (!res.ok) await throwS3Error(res, 'UploadPartCopy');
-    return xmlFirst(await res.text(), 'ETag') ?? '';
+    return confirmedETag(res, 'UploadPartCopy', 'CopyPartResult');
   }
 
   private copySource(key: string, versionId?: string): string {
@@ -581,7 +651,7 @@ export class S3Client {
     const url = new URL(`${this.endpoint}/`);
     const res = await this.request(url);
     if (!res.ok) await throwS3Error(res, 'ListBuckets');
-    const text = await res.text();
+    const text = await readXml(res);
     return xmlBlocks(text, 'Bucket')
       .map((block) => xmlFirst(block, 'Name') ?? '')
       .filter(Boolean);
@@ -613,19 +683,50 @@ export class S3Client {
     };
   }
 
-  public async deleteObject(key: string): Promise<void> {
+  public async deleteObject(key: string, ifMatch?: string): Promise<void> {
+    if (ifMatch !== undefined && !this.supportsCondition('move')) {
+      throw new S3RequestError('DeleteObject', 501, 'ConditionalDeleteUnverified',
+        'Conditional moves have not been verified for this bucket. The source was retained.');
+    }
     const url = this.buildUrl(key);
-    const res = await this.request(url, { method: 'DELETE' });
-    if (!res.ok && res.status !== 204) throw new Error(`DeleteObject failed: ${res.statusText}`);
+    const res = await this.request(url, { method: 'DELETE', headers: ifMatch ? { 'if-match': ifMatch } : {} });
+    if (!res.ok) await throwS3Error(res, 'DeleteObject');
   }
 
   public async deleteObjects(keys: string[]): Promise<DeleteResult> {
+    const result: DeleteResult = { deleted: [], errors: [] };
+    const unique: string[] = [];
+    for (const key of new Set(keys)) {
+      // Fetch replaces unpaired surrogates, and XML 1.0 cannot represent
+      // every control character. Never serialize one name as another.
+      if (!key || /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF\uFFFE\uFFFF]/u.test(key)) {
+        result.errors.push({ key, code: 'InvalidKey', message: 'This key cannot be represented in a bulk delete request.' });
+      } else {
+        unique.push(key);
+      }
+    }
+    for (let i = 0; i < unique.length; i += 1000) {
+      const batch = unique.slice(i, i + 1000);
+      try {
+        const reply = await this.deleteBatch(batch);
+        result.deleted.push(...reply.deleted);
+        result.errors.push(...reply.errors);
+      } catch (error) {
+        const message = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+        for (const key of unique.slice(i)) result.errors.push({ key, code: 'UnconfirmedDelete', message });
+        break;
+      }
+    }
+    return result;
+  }
+
+  private async deleteBatch(keys: string[]): Promise<DeleteResult> {
     const url = this.buildUrl(undefined, { delete: '' });
     
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Delete>
   <Quiet>false</Quiet>
-  ${keys.map(k => `<Object><Key>${k.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')}</Key></Object>`).join('\n  ')}
+  ${keys.map(key => `<Object><Key>${escapeXml(key).replace(/\r/g, '&#13;')}</Key></Object>`).join('\n  ')}
 </Delete>`;
 
     const res = await this.request(url, {
@@ -643,8 +744,10 @@ export class S3Client {
     
     if (!res.ok) await throwS3Error(res, 'DeleteObjects');
     
-    const text = await res.text();
-
+    const text = (await readXml(res)).trim().replace(/^<\?xml\s[^?]*\?>\s*/, '');
+    if (!/^<((?:[\w-]+:)?DeleteResult)(?:\s[^>]*)?>[\s\S]*<\/\1>$/.test(text)) {
+      throw new Error('S3 did not return a DeleteResult.');
+    }
     const deleted = xmlBlocks(text, 'Deleted').map((block) => xmlFirst(block, 'Key') ?? '');
     const errors = xmlBlocks(text, 'Error').map((block) => ({
       key: xmlFirst(block, 'Key') ?? '',
@@ -652,7 +755,15 @@ export class S3Client {
       message: xmlFirst(block, 'Message') ?? '',
     }));
     
-    return { deleted, errors };
+    const requested = new Set(keys);
+    const confirmed = new Set(deleted.filter(key => requested.has(key)));
+    const knownErrors = errors.filter(error => requested.has(error.key));
+    const failed = new Set(knownErrors.map(error => error.key));
+    for (const key of keys) {
+      if (failed.has(key)) confirmed.delete(key);
+      else if (!confirmed.has(key)) knownErrors.push({ key, code: 'UnconfirmedDelete', message: 'S3 did not confirm deletion.' });
+    }
+    return { deleted: [...confirmed], errors: knownErrors };
   }
 
   public async createMultipartUpload(key: string, contentType?: string): Promise<string> {
@@ -663,7 +774,7 @@ export class S3Client {
     const res = await this.request(url, { method: 'POST', headers });
     if (!res.ok) await throwS3Error(res, 'CreateMultipartUpload');
     
-    const text = await res.text();
+    const text = await readXml(res);
     const uploadId = xmlFirst(text, 'UploadId');
     if (!uploadId) throw new Error('Failed to parse UploadId');
     return uploadId;
@@ -686,7 +797,7 @@ export class S3Client {
     const url = this.buildUrl(key, { uploadId });
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <CompleteMultipartUpload>
-  ${parts.map(p => `<Part><PartNumber>${p.PartNumber}</PartNumber><ETag>${p.ETag}</ETag></Part>`).join('\n  ')}
+  ${parts.map(p => `<Part><PartNumber>${p.PartNumber}</PartNumber><ETag>${escapeXml(p.ETag)}</ETag></Part>`).join('\n  ')}
 </CompleteMultipartUpload>`;
 
     const res = await this.request(url, {
@@ -697,13 +808,13 @@ export class S3Client {
       },
       body: xml,
     });
-    if (!res.ok) await throwS3Error(res, 'CompleteMultipartUpload');
+    await confirmedETag(res, 'CompleteMultipartUpload', 'CompleteMultipartUploadResult');
   }
 
   public async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
     const url = this.buildUrl(key, { uploadId });
     const res = await this.request(url, { method: 'DELETE' });
-    if (!res.ok && res.status !== 204) throw new Error(`AbortMultipartUpload failed: ${res.statusText}`);
+    if (!res.ok) await throwS3Error(res, 'AbortMultipartUpload');
   }
 
 
@@ -716,7 +827,7 @@ export class S3Client {
     if (res.status === 404) return { rules: [] };
     if (!res.ok) await throwS3Error(res, 'GetBucketCors');
 
-    const text = await res.text();
+    const text = await readXml(res);
     const rules: CorsRule[] = xmlBlocks(text, 'CORSRule').map((block) => ({
       allowedOrigins: xmlTextValues(block, 'AllowedOrigin'),
       allowedMethods: xmlTextValues(block, 'AllowedMethod'),

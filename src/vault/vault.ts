@@ -164,6 +164,14 @@ export class VaultManager {
     }
   }
 
+  async sealBackup(manifest: string, header: Uint8Array<ArrayBuffer>): Promise<EncryptedPayload> {
+    return encrypt(this.ensureUnlocked(), manifest, header);
+  }
+
+  async openBackup(payload: EncryptedPayload, header: Uint8Array<ArrayBuffer>): Promise<string> {
+    return decrypt(this.ensureUnlocked(), payload, header);
+  }
+
   /** Encrypts credentials for storage in the `profiles` table. */
   async encryptCredentials(credentials: CredentialPlaintext): Promise<EncryptedPayload> {
     const dek = this.ensureUnlocked();

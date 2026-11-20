@@ -34,7 +34,7 @@ type Phase = 'choose' | 'preview' | 'done';
  *
  * The file is handed to the vault worker, which parses it and encrypts the
  * credentials; the main thread only ever sees the redacted preview and the
- * sealed rows. The file text is re-read from the File handle per call rather
+ * sealed rows. The worker reads the File handle per call rather
  * than kept in React state, so plaintext keys are not parked in component
  * state (where devtools would happily show them).
  */
@@ -70,21 +70,13 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [busy, onClose, open]);
 
-  const readFile = useCallback(async (file: File): Promise<string> => {
-    if (file.size > MAX_IMPORT_FILE_BYTES) {
-      throw new Error(
-        `That file is ${(file.size / (1024 * 1024)).toFixed(1)} MB. The limit is 5 MB.`,
-      );
-    }
-    return file.text();
-  }, []);
-
   const loadPreview = useCallback(
     async (file: File) => {
       setBusy(true);
       setError(null);
       try {
-        const result = await vaultService.call('galeon.preview', { text: await readFile(file) });
+        if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error('The Galeon import limit is 5 MB.');
+        const result = await vaultService.call('galeon.preview', { file });
         setPreview(result);
         setPhase('preview');
       } catch (err) {
@@ -93,7 +85,7 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
         setBusy(false);
       }
     },
-    [readFile],
+    [],
   );
 
   const handleFile = useCallback(
@@ -114,10 +106,10 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
     setError(null);
     try {
       const prepared = await vaultService.call('galeon.prepare', {
-        text: await readFile(file),
+        file,
         expectedHash: preview.contentHash,
       });
-      const count = await insertSealedConnections(db, prepared.rows);
+      const count = await insertSealedConnections(db, prepared.rows, prepared.generation);
       setImportedCount(count);
       setImportedSkipped(prepared.skipped);
       setPhase('done');
@@ -127,7 +119,7 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
     } finally {
       setBusy(false);
     }
-  }, [db, onImported, preview, readFile]);
+  }, [db, onImported, preview]);
 
   if (!open) return null;
 

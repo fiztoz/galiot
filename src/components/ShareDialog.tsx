@@ -13,7 +13,7 @@ import {
   Upload,
   Clock,
 } from 'lucide-react';
-import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
+import type { AppDB, ObjectRow } from '../db/client';
 import { useFocusTrap } from '../lib/useFocusTrap';
 import {
   EXPIRY_PRESETS,
@@ -27,16 +27,18 @@ import {
   serverWriteHint,
   type LinkPermission,
   type PresignedRecord,
+  type ShareTarget,
 } from '../s3/links';
 
 interface ShareDialogProps {
   db: AppDB;
-  profile: ConnectionRow;
-  file: ObjectRow;
+  target: ShareTarget;
+  currentIdentity: string | undefined;
+  file: ObjectRow | null;
   onClose: () => void;
 }
 
-export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
+export function ShareDialog({ db, target, currentIdentity, file, onClose }: ShareDialogProps) {
   const [permission, setPermission] = useState<LinkPermission>('read');
   const [via, setVia] = useState<'server' | 's3'>('server');
   const [maxBytes, setMaxBytes] = useState(100 * 1024 * 1024);
@@ -47,9 +49,11 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
   const trapRef = useFocusTrap<HTMLDivElement>();
 
   const links = useLiveQuery<PresignedRecord>(
-    `SELECT * FROM presigned_history WHERE profile_id = $1 AND key = $2
-      ORDER BY created_at DESC LIMIT 20`,
-    [profile.id, file.key],
+    file
+      ? `SELECT * FROM presigned_history WHERE profile_id = $1 AND target_identity = $2 AND key = $3
+         ORDER BY created_at DESC LIMIT 20`
+      : 'SELECT * FROM presigned_history WHERE profile_id = $1 ORDER BY created_at DESC',
+    file ? [target.profile_id, target.target_identity, file.key] : [target.profile_id],
   );
 
   useEffect(() => {
@@ -61,16 +65,17 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
   }, [onClose]);
 
   const handleGenerate = useCallback(async () => {
+    if (!file || currentIdentity !== target.target_identity) return;
     setBusy(true);
     setError(null);
     try {
-      await createLink(db, profile, file.key, permission, expirySeconds, via, maxBytes);
+      await createLink(db, target, file.key, permission, expirySeconds, via, maxBytes);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, [db, profile, file.key, permission, expirySeconds, via, maxBytes]);
+  }, [db, target, currentIdentity, file, permission, expirySeconds, via, maxBytes]);
 
   const handleCopy = useCallback(async (link: PresignedRecord) => {
     try {
@@ -82,7 +87,10 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
     }
   }, []);
 
-  const rows = links?.rows ?? [];
+  const stale = file !== null && currentIdentity !== target.target_identity;
+  // A live query can retain its last result while subscribing with new parameters.
+  const rows = stale ? [] : (links?.rows ?? []).filter(link =>
+    link.profile_id === target.profile_id && (!file || (link.key === file.key && link.target_identity === target.target_identity)));
 
   return (
     <div
@@ -102,11 +110,11 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
           <div className="min-w-0">
             <h2 id="share-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
               <Link2 size={18} className="text-teal-500" />
-              Share link
+              {file ? 'Share link' : 'Connection link history'}
             </h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 truncate" title={file.key}>
+            {file && <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 truncate" title={file.key}>
               {file.key}
-            </p>
+            </p>}
           </div>
           <button
             type="button"
@@ -119,6 +127,8 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
         </div>
 
         <div className="p-6 space-y-4">
+          {stale && <p role="alert">Connection changed. Close this dialog and select the object again.</p>}
+          {file && !stale && <>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
@@ -256,7 +266,9 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
             {busy ? <Loader2 size={15} className="animate-spin" /> : <Link2 size={15} />}
             Generate {permission === 'read' ? 'download' : 'upload'} link
           </button>
+          </>}
 
+          {!file && links && !rows.length && <p>No links in this connection’s history.</p>}
           {rows.length > 0 && (
             <div className="border-t border-zinc-100 dark:border-zinc-800 pt-4">
               <div className="flex items-center justify-between mb-2">
@@ -280,6 +292,11 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
                       key={link.id}
                       className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40"
                     >
+                      {!file && <div className="min-w-0 flex-1 break-all text-xs">
+                        <p>{link.bucket}/{link.key}</p>
+                        <p>{link.permission === 'read' ? 'Read' : 'Write'} · {link.target_identity === null
+                          ? 'Unverified legacy target' : link.target_identity === currentIdentity ? 'Current target' : 'Earlier target'}</p>
+                      </div>}
                       {link.permission === 'read' ? (
                         <Download size={12} className="text-zinc-500 flex-none" />
                       ) : (
@@ -296,6 +313,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
                       <span className="flex-none text-[10px] px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
                         {isServerLink(link.url) ? 'server' : 'S3'}
                       </span>
+                      {file && <>
                       <button
                         type="button"
                         onClick={() => void handleCopy(link)}
@@ -319,6 +337,7 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
                       >
                         <Link2 size={12} />
                       </a>
+                      </>}
                       <DeleteLinkButton db={db} link={link} />
                     </li>
                   );
@@ -327,14 +346,14 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
             </div>
           )}
 
-          <p className="flex items-start gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+          {file && !stale && <p className="flex items-start gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
             <Clock size={13} className="flex-none mt-0.5" />
             {rows.some((link) => isServerLink(link.url))
               ? permission === 'write' && via === 'server'
                 ? serverWriteHint
                 : serverLinkHint
               : revocationHint}
-          </p>
+          </p>}
         </div>
       </div>
     </div>

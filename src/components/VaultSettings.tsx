@@ -10,7 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { AppDB } from '../db/client';
-import { downloadVaultBackup, exportVault, importVault } from '../vault/export';
+import { downloadVaultBackup, exportVault, prepareVaultRestore, restoreVerifiedBackup, type PendingRestore } from '../vault/export';
 import { deleteVault, lockVault } from '../vault/repository';
 
 interface VaultSettingsProps {
@@ -28,6 +28,7 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
   const [busy, setBusy] = useState<'export' | 'import' | 'lock' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [pendingRestore, setPendingRestore] = useState<PendingRestore | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deletePhrase, setDeletePhrase] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -51,7 +52,10 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
       return 'Backup downloaded — store it somewhere safe.';
     }).finally(() => setBusy(null));
 
-  const handlePickImport = () => fileInputRef.current?.click();
+  const handlePickImport = () => {
+    setPendingRestore(null);
+    fileInputRef.current?.click();
+  };
 
   const handleImportFile = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -63,8 +67,12 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
 
     void run(async () => {
       setBusy('import');
-      await importVault(db, file, passphrase);
-      return 'Vault restored. Unlock it with the backup passphrase.';
+      const pending = await prepareVaultRestore(file, passphrase);
+      if (pending.backup.legacy) {
+        setPendingRestore(pending);
+        return;
+      }
+      await restoreVerifiedBackup(db, pending);
     }).finally(() => setBusy(null));
   };
 
@@ -90,9 +98,33 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
-        The backup contains only ciphertext — your passphrase is never stored. Losing both the
-        browser profile and the backup means losing the stored credentials.
+        New backups encrypt and authenticate the connection list, settings and sealed credentials.
+        Keep the backup and its master password for recovery.
       </p>
+      {pendingRestore && (
+        <section aria-label="Review legacy backup" className="space-y-2 rounded border p-3 text-xs">
+          <p>Legacy backups store connection names, endpoints, buckets and custom headers in readable form.
+            The credentials passed verification. Review every connection below because the old format
+            cannot authenticate these settings or the number of connections.</p>
+          <p>{pendingRestore.backup.profiles.length} connections</p>
+          <div className="max-h-48 overflow-auto">
+            {pendingRestore.backup.profiles.map(profile => (
+              <pre key={String(profile.id)} className="whitespace-pre-wrap break-all">{JSON.stringify({
+                id: profile.id, name: profile.name, protocol: profile.protocol ?? 's3',
+                endpoint: profile.endpoint, bucket: profile.bucket, region: profile.region,
+                pathStyle: profile.path_style ?? false, headers: profile.custom_headers ?? {},
+                storageClass: profile.storage_class ?? null,
+              }, null, 2)}</pre>
+            ))}
+          </div>
+          <button type="button" disabled={busy !== null} className="rounded border px-2 py-1"
+            onClick={() => {
+              setBusy('import');
+              void run(() => restoreVerifiedBackup(db, pendingRestore, true)).finally(() => setBusy(null));
+            }}>Restore reviewed connections</button>
+          <button type="button" disabled={busy !== null} onClick={() => setPendingRestore(null)}>Cancel</button>
+        </section>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <button
@@ -155,7 +187,7 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
 
       <p className="flex items-start gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
         <ShieldCheck size={13} className="flex-none mt-0.5" />
-        Restoring replaces every connection and the transfer ledger in this browser.
+        Restoring replaces every connection, transfer record and partial staged download in this browser, then locks the vault.
       </p>
 
       <div className="pt-3 border-t border-red-100 dark:border-red-900/40">

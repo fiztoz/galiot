@@ -202,9 +202,10 @@ describe('presigned PutBucketCors', () => {
     expect(query.get('X-Amz-Expires')).toBe('900');
     expect(query.get('cors')).toBe('');
     expect(query.get('X-Amz-Signature')).toMatch(/^[0-9a-f]{64}$/);
-    // host is always signed; content-type is deliberately not (aws-sdk-js
-    // behaviour), so an extra Content-Type from curl is harmless.
-    expect(query.get('X-Amz-SignedHeaders')).toBe('host');
+    expect(query.get('X-Amz-SignedHeaders')).toBe('content-type;host');
+    const mismatched = await verifyPresignedSigV4('PUT', new URL(url).pathname, query,
+      new Headers({ host: new URL(url).host, 'content-type': 'text/plain' }));
+    expect(mismatched.ok).toBe(false);
     // The secret is never in the URL.
     expect(url).not.toContain(SECRET_KEY);
   });

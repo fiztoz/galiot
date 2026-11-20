@@ -3,13 +3,15 @@ import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { runMigrations } from '../db/migrations';
 import { updateConnection, type ConnectionUpdate } from './repository';
-import type { AppDB } from '../db/client';
+import { vaultService } from './vaultService';
+import { harvestFolderStats, loadListing } from '../db/objects';
+import type { AppDB, ConnectionRow } from '../db/client';
 
 /**
  * Update semantics, against a real PGlite.
  *
  * The rules that matter: credentials are replaced only when new ones are given,
- * and the cached listing is dropped only when the *target* moves — not when the
+ * and the cached listing is dropped when the identity or target changes — not when the
  * user merely renames the connection.
  */
 
@@ -23,13 +25,14 @@ const SEALED = { ciphertext: 'sealed-blob', iv: 'iv' };
 let encryptCalls: unknown[] = [];
 const encryptStub = async (credentials: unknown) => {
   encryptCalls.push(credentials);
-  return { payload: { ...SEALED, marker: `sealed:${encryptCalls.length}` } };
+  return { generation: 'test-generation', payload: { ...SEALED, ciphertext: `sealed-${encryptCalls.length}`, marker: `sealed:${encryptCalls.length}` } };
 };
 
 beforeEach(async () => {
   db = await PGlite.create(undefined, { extensions: { pg_trgm } });
   await runMigrations(db);
   appDb = db as unknown as AppDB;
+  await db.exec("INSERT INTO _meta VALUES ('salt','test'), ('wrapped_dek','test-generation')");
   encryptCalls = [];
 
   const now = new Date().toISOString();
@@ -61,6 +64,7 @@ const withEncrypted = async <T>(fn: () => Promise<T>): Promise<T> => {
   const original = vaultService.call;
   // @ts-expect-error — the stub stands in for the worker's real encryption.
   vaultService.call = async (method: never, params: never) => {
+    if (method === 'vault.status') return { unlocked: true, generation: 'test-generation' };
     if (method === 'creds.encrypt') {
       return encryptStub((params as { credentials: unknown }).credentials);
     }
@@ -159,13 +163,48 @@ describe('updateConnection', () => {
     expect(encryptCalls).toEqual([{ accessKeyId: 'AKIANEW', secretAccessKey: 'new-secret' }]);
   });
 
-  test('rotating keys does not clear the cache on its own', async () => {
+  test('replacing keys clears cached objects even when the target stays the same', async () => {
     const result = await update({
       credentials: { accessKeyId: 'AKIANEW', secretAccessKey: 'new-secret' },
     });
-    expect(result.clearedCache).toBe(false);
-    expect(await cacheCount()).toBe(2);
+    expect(result.clearedCache).toBe(true);
+    expect(await cacheCount()).toBe(0);
   });
+
+  for (const method of ['s3.list', 's3.folderStats'] as const) {
+    test(`${method} cannot repopulate the cache after the profile's credentials change`, async () => {
+      const { rows } = await db.query<ConnectionRow>('SELECT * FROM profiles WHERE id = $1', [id]);
+      const profile = rows[0]!;
+      const original = vaultService.call;
+      let received!: () => void;
+      let finish!: () => void;
+      const started = new Promise<void>(resolve => { received = resolve; });
+      const pending = new Promise<void>(resolve => { finish = resolve; });
+      vaultService.call = (async (op, params) => {
+        if (op !== method) return original.call(vaultService, op, params);
+        received();
+        await pending;
+        return op === 's3.list'
+          ? { prefixes: ['restricted/'], objects: [], isTruncated: false }
+          : { directories: ['restricted/'], files: [], entryCount: 1, truncated: false };
+      }) as typeof vaultService.call;
+      try {
+        const listing = method === 's3.list' ? loadListing(appDb, profile, '') : harvestFolderStats(appDb, profile, '');
+        await started;
+        await update({ credentials: { accessKeyId: 'new-id', secretAccessKey: 'new-fixture' } });
+        // Same-millisecond profile edits must still be distinguished by the sealed credential bytes.
+        await db.query('UPDATE profiles SET updated_at = $1 WHERE id = $2', [profile.updated_at, id]);
+        finish();
+        const failure: unknown = await listing.catch((reason: unknown) => reason);
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toContain('credentials changed');
+        expect(await cacheCount()).toBe(0);
+      } finally {
+        finish();
+        vaultService.call = original;
+      }
+    });
+  }
 
   test('bumps updated_at', async () => {
     const before = await row();

@@ -47,6 +47,19 @@ export function isLoopbackHost(hostname: string): boolean {
   return host === '127.0.0.1' || host === 'localhost' || host === '::1';
 }
 
+/** Browser-facing origins of reverse proxies that preserve the public Host header. */
+export function publicOrigins(env: NodeJS.ProcessEnv): string[] {
+  if (!env.GALIOT_PUBLIC_ORIGINS?.trim()) return [];
+  return env.GALIOT_PUBLIC_ORIGINS.split(',').map(entry => {
+    try {
+      const url = new URL(entry.trim());
+      if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password &&
+          url.pathname === '/' && !url.search && !url.hash && !url.hostname.includes('*')) return url.origin;
+    } catch { /* report the setting without printing its value */ }
+    throw new Error('GALIOT_PUBLIC_ORIGINS must contain comma-separated HTTP(S) origins.');
+  });
+}
+
 /**
  * Refuses a non-loopback listen unless the operator set a token or explicitly
  * accepted an open signed-request proxy.

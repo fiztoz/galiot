@@ -12,6 +12,7 @@
  * screens addresses at startup and on every request.
  */
 
+import { assertConnectionEndpoint } from './s3/endpoint';
 import {
   MAX_PRESET_ENDPOINT_LENGTH,
   MAX_PRESET_REGION_LENGTH,
@@ -31,15 +32,12 @@ function safeEndpoint(value: unknown): string {
   const trimmed = value.trim();
   if (trimmed === '' || trimmed.length > MAX_PRESET_ENDPOINT_LENGTH) return '';
   if (/[\u0000-\u001f\u007f]/.test(trimmed)) return '';
-  let url: URL;
   try {
-    url = new URL(trimmed);
+    assertConnectionEndpoint(trimmed);
+    return trimmed;
   } catch {
     return '';
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
-  if (url.username !== '' || url.password !== '') return '';
-  return trimmed;
 }
 
 /** Parses the meta tag content defensively; anything odd falls back. */

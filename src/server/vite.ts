@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { handleAppRequest } from './api';
 import { isAppApiPath } from './protocol';
-import { accessGate, assertBindAllowed } from './proxy';
+import { accessGate, assertBindAllowed, publicOrigins } from './proxy';
 
 /** Same proxy and bind policy for Vite dev and preview, under Bun or Node. */
 export function s3ProxyPlugin(env: NodeJS.ProcessEnv = process.env): Plugin {
@@ -16,6 +16,7 @@ export function s3ProxyPlugin(env: NodeJS.ProcessEnv = process.env): Plugin {
     // Vite resolves undefined/false to localhost and true/empty to all interfaces.
     const hostname = host === undefined || host === false ? 'localhost' : host === true || host === '' ? '0.0.0.0' : host;
     const gate = accessGate(env);
+    const origins = publicOrigins(env);
     assertBindAllowed(hostname, gate.token, gate.open);
     middlewares.use(async (req, res, next) => {
       const pathname = req.url?.split('?')[0];
@@ -31,14 +32,17 @@ export function s3ProxyPlugin(env: NodeJS.ProcessEnv = process.env): Plugin {
         const method = req.method ?? 'GET';
         const hasBody = method !== 'GET' && method !== 'HEAD' &&
           (headers.has('content-length') || headers.has('transfer-encoding'));
-        const request = new Request(`http://${req.headers.host ?? 'localhost'}${req.url}`, {
+        const scheme = 'encrypted' in req.socket && req.socket.encrypted ? 'https' : 'http';
+        const request = new Request(`${scheme}://${req.headers.host ?? 'localhost'}${req.url}`, {
           method,
           headers,
           body: hasBody ? Readable.toWeb(req) as unknown as ReadableStream<Uint8Array> : undefined,
           signal: controller.signal,
           duplex: 'half',
         } as RequestInit);
-        const response = await handleAppRequest(request, { expectedToken: gate.token });
+        const response = await handleAppRequest(request, {
+          expectedToken: gate.token, open: gate.open, listenerPort: req.socket.localPort, listenerHost: hostname, publicOrigins: origins,
+        });
         res.statusCode = response.status;
         response.headers.forEach((value, key) => res.setHeader(key, value));
         if (response.body) await pipeline(Readable.fromWeb(response.body as unknown as NodeReadableStream), res);

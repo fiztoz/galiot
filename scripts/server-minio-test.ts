@@ -18,6 +18,9 @@
 import { createHash } from 'node:crypto';
 import { handleAppRequest } from '../src/server/api';
 import { AwsClient } from '../src/lib/aws4fetch';
+import { S3Client } from '../src/s3/client';
+import { buildS3Url } from '../src/s3/url';
+import { readBoundedText } from '../src/lib/boundedBody';
 
 const endpoint = process.env.GALIOT_S3_ENDPOINT ?? '';
 const bucket = process.env.GALIOT_S3_BUCKET ?? '';
@@ -81,6 +84,62 @@ async function call<T>(sessionId: string, body: Record<string, unknown>): Promis
 
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
+// Probe the provider directly, before enabling any capability in this process.
+// All keys are unique to this run. Some gateways acknowledge stale conditions.
+async function checkProviderConditions(prefix: string, aws: AwsClient) {
+  const target = { endpoint, bucket, pathStyle: true };
+  const direct = new S3Client({ ...target, region, accessKeyId, secretAccessKey, sessionToken: sts, direct: true });
+  const src = prefix + 'condition-source';
+  const dst = prefix + 'condition-copy';
+  const srcUrl = buildS3Url(target, src);
+  const dstUrl = buildS3Url(target, dst);
+  const seed = async (body = 'original') => {
+    const written = await aws.fetch(srcUrl, { method: 'PUT', body });
+    const tag = written.headers.get('etag');
+    if (!written.ok || !tag) throw new Error('Could not create the conditional-operation fixture.');
+    return tag;
+  };
+  const unchanged = async (url: URL, value: string) => {
+    const response = await aws.fetch(url);
+    return response.ok && (await readBoundedText(response, 1024)) === value;
+  };
+  const stale = await seed('earlier revision');
+  let tag = await seed();
+  if (tag === stale) throw new Error('The fixture requires distinguishable revision ETags.');
+  const stalePut = await aws.fetch(srcUrl, { method: 'PUT', headers: { 'if-match': stale }, body: 'changed' });
+  const put = stalePut.status === 412 && await unchanged(srcUrl, 'original');
+  if (!put) tag = await seed();
+  await direct.putObject(dst, 'keep');
+  const copyHeaders = { 'x-amz-copy-source': '/' + encodeURIComponent(bucket) + '/' + src };
+  const copy = await aws.fetch(dstUrl, { method: 'PUT', headers: { ...copyHeaders, 'x-amz-copy-source-if-match': stale } });
+  const guardedCopy = copy.status === 412 && await unchanged(dstUrl, 'keep');
+  if (guardedCopy) await direct.copyObject(src, dst, undefined, tag);
+  let guardedPart = false;
+  const uploadId = await direct.createMultipartUpload(dst);
+  try {
+    const url = buildS3Url(target, dst, { uploadId, partNumber: '1' });
+    const copiedPart = await aws.fetch(url, { method: 'PUT', headers: { ...copyHeaders, 'x-amz-copy-source-if-match': stale } });
+    const listed = await aws.fetch(buildS3Url(target, dst, { uploadId }));
+    guardedPart = copiedPart.status === 412 && listed.ok && !/<(?:[\w-]+:)?Part>/.test(await readBoundedText(listed, 65536));
+    if (guardedPart) await direct.copyPart(src, dst, uploadId, 1, 0, 7, tag);
+  } finally {
+    await direct.abortMultipartUpload(dst, uploadId);
+  }
+  const staleDelete = await aws.fetch(srcUrl, { method: 'DELETE', headers: { 'if-match': stale } });
+  const guardedDelete = staleDelete.status === 412 && await unchanged(srcUrl, 'original');
+  if (guardedDelete) {
+    const matched = await aws.fetch(srcUrl, { method: 'DELETE', headers: { 'if-match': tag } });
+    const after = await aws.fetch(srcUrl, { method: 'HEAD' });
+    check('provider accepts a matching conditional delete on the probe key', matched.ok && after.status === 404);
+  }
+  const move = guardedCopy && guardedPart && guardedDelete;
+  // The in-process app uses only the operations this run actually observed.
+  const capabilities = [...(put ? ['put'] : []), ...(guardedCopy && guardedPart ? ['copy'] : []), ...(move ? ['move'] : [])];
+  process.env.GALIOT_S3_CONDITIONS = JSON.stringify({ [buildS3Url(target).href]: capabilities });
+  console.log('  Provider enforced stale ETags:', { put, copy: guardedCopy, part: guardedPart, delete: guardedDelete });
+  return { put, move };
+}
+
 async function main(): Promise<void> {
   console.log(`Galiot server API on ${origin}, S3 at ${endpoint}/${bucket}\n`);
 
@@ -103,7 +162,9 @@ async function main(): Promise<void> {
   const sessionId = ((await opened.json()) as { result: { sessionId: string } }).result.sessionId;
   check('session opens against the real endpoint', opened.status === 200 && sessionId.length > 0);
 
-  const prefix = `server-suite-${Date.now()}/`;
+  const prefix = `server-suite-${crypto.randomUUID()}/`;
+  const aws = new AwsClient({ accessKeyId, secretAccessKey, sessionToken: sts, region, service: 's3' });
+  const conditions = await checkProviderConditions(prefix, aws);
   const listed = await call<{ objects: unknown[] }>(sessionId, { op: 'list', prefix, maxKeys: 5 });
   check('listing works through the session', Array.isArray(listed.objects));
   const helloKey = `${prefix}hello.txt`;
@@ -117,6 +178,23 @@ async function main(): Promise<void> {
 
   const head = await call<{ contentLength: number; contentType: string }>(sessionId, { op: 'head', key: helloKey });
   check('head reports size and type', head.contentLength === 12 && head.contentType === 'text/plain');
+
+  const editorKey = prefix + 'editor.json';
+  const editor = await call<{ eTag: string }>(sessionId, { op: 'putText', key: editorKey, body: '{}', contentType: 'application/json' });
+  const editorUrl = origin + '/api/s3/sessions/' + sessionId + '/object?key=' + encodeURIComponent(editorKey);
+  const save = (tag: string) => fetch(editorUrl, { method: 'PUT',
+    headers: { ...gateHeaders(), 'if-match': tag, 'content-type': 'application/json' }, body: new Blob([]) });
+  const reported = await call<{ conditionalPut: boolean }>(sessionId, { op: 'editorWriteSupport' });
+  check('editor capability matches observed enforcement', reported.conditionalPut === conditions.put);
+  const rejected = await save('"' + crypto.randomUUID() + '"');
+  const retained = await fetch(editorUrl, { headers: gateHeaders() });
+  check('stale editor save retains original bytes', rejected.status === (conditions.put ? 412 : 501) && await retained.text() === '{}');
+  if (conditions.put) {
+    const saved = await save(editor.eTag);
+    const empty = await fetch(editorUrl, { headers: gateHeaders() });
+    check('matching editor save preserves MIME and allows empty bytes',
+      saved.ok && empty.headers.get('x-galiot-object-type') === 'application/json' && await empty.text() === '');
+  }
 
   // Multipart upload through /part, the path the transfer worker uses.
   const partBytes = [0, 1].map((n) => {
@@ -164,10 +242,23 @@ async function main(): Promise<void> {
   const inFolder = await call<{ objects: { key: string }[] }>(sessionId, { op: 'list', prefix: `${prefix}folder/` });
   check('copy lands inside the new folder', inFolder.objects.some((o) => o.key === `${prefix}folder/copy.txt`));
 
-  const renamed = await call<{ moved: number }>(sessionId, { op: 'rename', sourceKey: `${prefix}folder/`, destKey: `${prefix}moved/` });
+  const sourceHead = await call<{ versionId: string | null }>(sessionId, { op: 'head', key: prefix + 'folder/copy.txt' });
+  let moved = 0;
+  let retainedSources = false;
+  try {
+    const renamed = await call<{ moved: number }>(sessionId, { op: 'rename', sourceKey: `${prefix}folder/`, destKey: `${prefix}moved/` });
+    moved = renamed.moved;
+  } catch (error) {
+    retainedSources = error instanceof Error && /not been verified|sources were retained/.test(error.message);
+  }
   const inMoved = await call<{ objects: { key: string }[] }>(sessionId, { op: 'list', prefix: `${prefix}moved/` });
   const oldFolder = await call<{ objects: { key: string }[] }>(sessionId, { op: 'list', prefix: `${prefix}folder/` });
-  check('folder rename moves every key and empties the source', renamed.moved >= 1 && inMoved.objects.some((o) => o.key === `${prefix}moved/copy.txt`) && oldFolder.objects.length === 0);
+  if (conditions.move && sourceHead.versionId === null) {
+    check('verified folder rename moves every key and empties the source', moved >= 1 && inMoved.objects.some((o) => o.key === `${prefix}moved/copy.txt`) && oldFolder.objects.length === 0);
+  } else {
+    check('source-preserving move reports why the original remains', retainedSources && oldFolder.objects.some(o => o.key === prefix + 'folder/copy.txt'));
+    check('destination matches reported copy outcome', inMoved.objects.length === (conditions.move ? inFolder.objects.length : 0));
+  }
 
   // Share grants: readable without the gate, revocable only with it.
   const shared = await call<{ url: string }>(sessionId, { op: 'share', key: helloKey, expiresIn: 3600 });
@@ -199,6 +290,8 @@ async function main(): Promise<void> {
     expiresIn: 3600,
     maxBytes: 32,
   });
+  const uploadBig = await fetch(`${origin}${writeGrant.url}`, { method: 'PUT', body: 'x'.repeat(33) });
+  check('write grant refuses bodies over the cap', uploadBig.status === 413);
   const uploadOk = await fetch(`${origin}${writeGrant.url}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/octet-stream' },
@@ -207,8 +300,8 @@ async function main(): Promise<void> {
   check('write grant accepts a bounded PUT without the gate', uploadOk.status === 200);
   const uploadedHead = await call<{ contentLength: number }>(writeSession, { op: 'head', key: `${prefix}inbox.bin` });
   check('uploaded bytes landed in S3', uploadedHead.contentLength === 5);
-  const uploadBig = await fetch(`${origin}${writeGrant.url}`, { method: 'PUT', body: 'x'.repeat(33) });
-  check('write grant refuses bodies over the cap', uploadBig.status === 413);
+  const replay = await fetch(`${origin}${writeGrant.url}`, { method: 'PUT', body: 'again' });
+  check('a consumed write grant cannot replace the uploaded object', replay.status === 404);
   const uploadAnonRevoke = await fetch(`${origin}${writeGrant.url}`, { method: 'DELETE' });
   check('revoking a write grant without the gate is refused', uploadAnonRevoke.status === 403);
   await fetch(`${origin}${writeGrant.url}`, { method: 'DELETE', headers: gateHeaders() });
@@ -240,7 +333,6 @@ async function main(): Promise<void> {
   });
   const verSession = ((await verOpened.json()) as { result: { sessionId: string } }).result.sessionId;
 
-  const aws = new AwsClient({ accessKeyId, secretAccessKey, sessionToken: sts, region, service: 's3' });
   let versioningEnabled = false;
   const enable = scoped
     ? new Response(null, { status: 403 })

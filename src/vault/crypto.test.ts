@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import {
   deriveKEK,
   generateDEK,
@@ -27,6 +27,26 @@ describe('vault crypto primitives', () => {
 
     const plaintext = await decrypt(dek, payload);
     expect(plaintext).toBe('hunter2-s3cret');
+  });
+
+  test('credential operations omit the optional WebCrypto additionalData member', async () => {
+    const dek = await generateDEK();
+    const encryptCall = spyOn(crypto.subtle, 'encrypt');
+    const decryptCall = spyOn(crypto.subtle, 'decrypt');
+    try {
+      const payload = await encrypt(dek, 'fixture');
+      await decrypt(dek, payload);
+      expect(encryptCall.mock.calls[0]?.[0]).not.toHaveProperty('additionalData');
+      expect(decryptCall.mock.calls[0]?.[0]).not.toHaveProperty('additionalData');
+      const header = new TextEncoder().encode('manifest');
+      const backup = await encrypt(dek, 'fixture', header);
+      await decrypt(dek, backup, header);
+      expect(encryptCall.mock.calls[1]?.[0]).toHaveProperty('additionalData', header);
+      expect(decryptCall.mock.calls[1]?.[0]).toHaveProperty('additionalData', header);
+    } finally {
+      encryptCall.mockRestore();
+      decryptCall.mockRestore();
+    }
   });
 
   test('ciphertext differs on every encryption (fresh IV)', async () => {

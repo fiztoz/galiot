@@ -70,11 +70,16 @@ export function FilePreview({ db, profile, file, kind }: FilePreviewProps) {
 
   if (kind === 'pdf') {
     return (
-      <iframe
-        src={url}
-        title={file.filename}
-        className="h-full w-full border-0 bg-zinc-100 dark:bg-zinc-900"
-      />
+      <div className="h-full flex flex-col">
+        <a className="p-2 text-sm underline" href={url} download={file.filename}>Download PDF</a>
+        <iframe
+          sandbox=""
+          referrerPolicy="no-referrer"
+          src={url}
+          title={file.filename}
+          className="min-h-0 flex-1 w-full border-0 bg-zinc-100 dark:bg-zinc-900"
+        />
+      </div>
     );
   }
 

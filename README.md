@@ -73,10 +73,12 @@ bun run build && bun run server
 A public bind refuses to start unless `GALIOT_PROXY_TOKEN` or `GALIOT_GATE` is set (or you explicitly set `GALIOT_PROXY_OPEN=1`). The gate is not an S3 key.
 
 Rename, move, copy and new folders run inside S3 (`CopyObject`, multipart
-`UploadPartCopy` above 5 GiB) — the bytes never pass through the browser. Share
+`UploadPartCopy` above 5 GiB). Moves and editor saves depend on the bucket
+enforcing revision checks. On private gateways, see the
+[conditional operation settings](docs/OPERATIONS.md#conditional-saves-and-moves). Share
 links default to a short-lived URL that streams from this server, so they work
-for people who cannot reach S3 and can be revoked here; upload links work the
-same way with a byte cap and a single fixed key. Presigned S3 links remain
+for people who cannot reach S3 and can be revoked here. An upload link allows
+one attempt against a fixed key, up to its byte limit. Presigned S3 links remain
 available as an explicit option; they use the recipient's network and cannot
 be revoked. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
 

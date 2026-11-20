@@ -1,5 +1,5 @@
 import { AwsClient } from '../lib/aws4fetch';
-import { buildS3Url } from './url';
+import { assertSafeObjectKey, buildS3Url } from './url';
 
 /**
  * A connection's custom headers are deliberately NOT applied here.
@@ -28,6 +28,7 @@ export async function presignGetUrl(
   key: string,
   expiresIn: number = 3600,
 ): Promise<string> {
+  assertSafeObjectKey(key);
   const url = buildS3Url(target, key);
   url.searchParams.set('X-Amz-Expires', expiresIn.toString());
 
@@ -50,18 +51,16 @@ export async function presignPutUrl(
   contentType?: string,
   expiresIn: number = 3600,
 ): Promise<string> {
+  assertSafeObjectKey(key);
   const url = buildS3Url(target, key);
   url.searchParams.set('X-Amz-Expires', expiresIn.toString());
 
-  const headers = new Headers();
-  if (contentType) {
-    headers.set('Content-Type', contentType);
-  }
+  const headers = new Headers({ 'content-type': contentType || 'application/octet-stream' });
 
   const req = await client.sign(url, {
     method: 'PUT',
     headers,
-    aws: { signQuery: true },
+    aws: { signQuery: true, allHeaders: true },
   });
 
   return req.url;
@@ -91,7 +90,7 @@ export async function presignPutBucketCors(
   const req = await client.sign(url, {
     method: 'PUT',
     headers,
-    aws: { signQuery: true },
+    aws: { signQuery: true, allHeaders: true },
   });
 
   return req.url;

@@ -19,7 +19,10 @@ bun run build && bun run server  # production, serves dist/ and /api/s3
 
 Container: build the `Dockerfile`, run it with `GALIOT_HOST=0.0.0.0` (already set
 in the image) and a gate (below). The image carries a HEALTHCHECK against
-`/api/health`.
+`/api/health`. Its build context allowlists application inputs, including each
+published asset in `public/`. The runtime stage copies the built SPA, bundled
+server and license. [Docker build contexts](https://docs.docker.com/build/concepts/context/#dockerignore-files)
+· [Multi-stage builds](https://docs.docker.com/build/building/multi-stage/)
 
 Prebuilt images are published to GHCR on version tags
 (`ghcr.io/fiztoz/galiot`). An example compose file lives at
@@ -38,15 +41,33 @@ browser vault; server sessions are memory-only.
 | `GALIOT_PORT` | Listen port. Default `8788`. |
 | `GALIOT_PROXY_TOKEN` / `GALIOT_GATE` | Access gate for a non-loopback bind. Not an S3 key. |
 | `GALIOT_PROXY_OPEN` / `GALIOT_GATE_OPEN` | Set to `1` to accept an unauthenticated public bind. Only if you understand what that exposes. |
+| `GALIOT_PUBLIC_ORIGINS` | Comma-separated browser origins for gate-free controls behind a reverse proxy, e.g. `https://galiot.example.com`. Preserve the public Host header. Direct connections to loopback, or to an IP address on an explicitly open listener, work without this setting. |
 | `GALIOT_BRAND_NAME` | White-label display name, max 64 characters. Default `Galiot`. |
 | `GALIOT_BRAND_TAGLINE` | Browser-title tagline, max 96 characters. Unset keeps `The Agile Cloud Explorer`; an empty string removes it. |
 | `GALIOT_BRAND_LOGO` | Path to a logo image file (svg, png, jpg, jpeg, webp, gif, ico; ≤1 MiB), served same-origin at `/branding/logo`. |
 | `GALIOT_PRESET_ENDPOINT` | Pre-fills the endpoint field for new connections, e.g. `https://s3.example.com`. Screened at startup like a live target. |
 | `GALIOT_PRESET_REGION` | Pre-fills the region field. Empty keeps `us-east-1`. |
 | `GALIOT_PRESET_PATH_STYLE` | `1` starts new connections with path-style addressing (most on-premises gateways). |
+| `GALIOT_S3_CONDITIONS` | JSON map of private gateway bucket URLs to verified conditional operations. See below. |
 
 A non-loopback bind refuses to start without a gate. On loopback no gate is
 needed, because only this machine can reach the listener.
+
+### Conditional saves and moves
+
+Standard AWS S3 general-purpose buckets on HTTPS service endpoints support saving with the ETag read by the editor and moving with conditional source deletion. [AWS S3 endpoints](https://docs.aws.amazon.com/general/latest/gr/s3.html) · [Conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html) · [DeleteObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html)
+
+For a private gateway, enable each operation after verifying that a stale ETag is rejected and the original object survives. The server-path integration suite in section 7 checks this on temporary keys. By default the editor opens read-only and a move stops before copying. Ordinary copy remains available.
+
+```bash
+export GALIOT_S3_CONDITIONS='{"https://s3.example.com/archive/":["put","move"]}'
+```
+
+Use the exact bucket-root URL including addressing style, gateway path, port and trailing slash. A virtual-hosted bucket at the domain root uses `https://archive.s3.example.com/`. Enable `put` for verified PutObject If-Match. Enable `move` after verifying CopyObject and UploadPartCopy source If-Match and DeleteObject If-Match. Apply the setting to the server process and repeat verification after gateway or proxy changes.
+
+Connections with custom request headers keep the read-only editor and copy-only behavior because the same URL may route to a different provider or tenant. When a move copies a versioned source, Galiot retains all sources and reports the copy outcome. Review version history before deleting. A later version can have the same ETag as the copied one.
+
+Copying an object larger than 5 GiB uses multiple requests. For mutable source versions, `copy` enables multipart copies after the gateway has demonstrated copy-source precondition enforcement. The `move` setting includes this capability. An immutable version ID also allows Galiot to read every part from the same revision.
 
 ### Custom name and logo (white-label)
 
@@ -124,20 +145,30 @@ kubectl port-forward svc/galiot 8788:8788   # then open http://127.0.0.1:8788
 ```
 
 Released charts are published to GHCR as OCI artifacts (`chart-v*` tags), so
-you can also install without cloning the repo:
+you can also install without cloning the repo. Set `CHART_VERSION` to the
+published chart version you intend to install.
 
 ```bash
-helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version 0.2.0 \
+helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version "$CHART_VERSION" \
   --set gate.value="$(openssl rand -hex 24)"
 ```
 
-Enter the gate in the app's **Server access** panel. It is not an S3 key.
+Enter the gate in the app's **Server access** panel. The chart requires a
+boolean for `gate.open`. Leave it at `false` when using a token.
 
-- **Keep one replica.** Sessions and share-link grants live in one pod's
-  memory. With more replicas, a share link minted on one pod returns 404 on
-  the others. The chart ships no HPA for this reason; scale with `resources`.
-- **Nodes must reach the bucket** (§2). Pod egress — and any NetworkPolicy you
-  enable — must allow the S3 endpoint's address and port, plus cluster DNS.
+- **Schedule downtime for pod replacements.** A revocation has to reach the pod
+  that issued the link. The chart accepts one replica, or zero for maintenance.
+  A `Recreate` rollout stops the old pod before starting the new one. The service
+  is unavailable until the replacement is ready. Active transfers can be
+  interrupted, and stopping the pod ends its sessions and through-server links.
+  Reconnect and issue fresh links as needed. Scale capacity with `resources`.
+  [Kubernetes Deployment strategies](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment)
+- **Allow DNS and the S3 endpoint** (§2). Enabling `networkPolicy.enabled`
+  creates an ingress-only policy by default. Upgrading removes the old chart's
+  allow-all egress rule. Check existing cluster policies for DNS and S3 access.
+  To manage outbound traffic in the chart, set `networkPolicy.egress` to a list
+  of rules. An empty list grants no outbound access through this policy.
+  [Chart example](../deploy/helm/galiot/README.md#networkpolicy) · [Kubernetes NetworkPolicies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
 - **Ingress:** terminate TLS there. The server emits HSTS only when the request
   is HTTPS or carries `X-Forwarded-Proto: https`. Uploads stream through the
   server (up to 1 GiB per object), so raise the proxy body limit — for nginx:
@@ -221,8 +252,9 @@ bucket.
 
 Upload links through the server accept a single PUT to exactly one key, up to
 the byte cap chosen at creation (10 MiB / 100 MiB / 1 GiB), until they expire
-or are revoked. Content-Length is required; oversized bodies are refused with
-413. The recipient needs no credentials and no route to S3 — e.g.
+or are revoked. The server requires Content-Length and rejects oversized bodies
+with 413 before consuming the link. Once it forwards a PUT, an interrupted or
+failed upload needs a new link. The recipient can upload directly with
 `curl -X PUT --data-binary @file <url>`.
 
 ## 5. Limits worth knowing
@@ -240,12 +272,14 @@ or are revoked. Content-Length is required; oversized bodies are refused with
 Three different tools, three different trust levels:
 
 - **Share connection** (card action): secret-free JSON — endpoint, bucket,
-  region, addressing, screened headers. No keys. The recipient imports it
+  region and addressing. The sender may opt in to including screened routing
+  headers after checking their values. The recipient imports it
   ("Import connection") and types their own credentials. A file that contains
   credential fields is refused on import.
-- **Vault backup / restore** (Vault settings): the whole vault as ciphertext,
-  including sealed keys. Restoring needs the backup's master password. This is
-  the only supported way to move keys between machines or people.
+- **Vault backup / restore** encrypts and authenticates connection settings and
+  sealed credentials. Restoring requires the backup's master password. When
+  restoring a version 1 backup, review each connection destination before
+  confirming. That format stored settings outside the authenticated ciphertext.
 - **Import from Galeon**: reads a Galeon profile export with credentials and
   seals them into this vault.
 

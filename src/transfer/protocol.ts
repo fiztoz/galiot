@@ -44,22 +44,23 @@ export interface UploadJob {
   credentials: import('../vault/crypto').EncryptedPayload;
   key: string;
   file: File;
+  prefix?: string;
   partSize: number;
   concurrency: number;
   /** Set when resuming an interrupted multipart upload. */
   uploadId?: string;
   completedParts?: CompletedPart[];
+  uploadFingerprint?: string | null;
 }
 
 /**
  * Where a finished download should land.
  * - `staged`: stream into OPFS staging, then hand a File to the browser.
- * - `directory`: stream straight into a user-granted local folder
- *   (dual-pane mode), resuming from that file's current size.
+ * - `directory`: publish a verified staged file to a user-granted folder.
  */
 export type DownloadDestination =
   | { kind: 'staged' }
-  | { kind: 'directory'; handle: FileSystemDirectoryHandle; filename: string };
+  | { kind: 'directory'; handle: FileSystemDirectoryHandle; filename: string; replace?: boolean };
 
 export interface DownloadJob {
   taskId: string;
@@ -77,13 +78,14 @@ export type TransferCommand =
   | { type: 'download'; job: DownloadJob }
   | { type: 'pause'; taskId: string }
   | { type: 'cancel'; taskId: string }
-  | { type: 'cleanup-staging'; taskId: string };
+  | { type: 'invalidate-profile'; profileId: string };
 
 export type TransferEvent =
-  | { type: 'upload-created'; taskId: string; uploadId: string }
+  | { type: 'upload-created'; taskId: string; uploadId: string; fingerprint: string; partSize: number }
   | { type: 'part-complete'; taskId: string; part: CompletedPart }
   | { type: 'progress'; taskId: string; bytesTransferred: number; speedBytesSec: number }
-  | { type: 'done'; taskId: string; totalBytes: number; stagedFile?: File }
+  | { type: 'done'; taskId: string; totalBytes: number; stagedFile?: File; filename?: string;
+      upload?: { profileId: string; bucket: string; key: string; prefix?: string } }
   | { type: 'paused'; taskId: string; bytesTransferred: number }
   | { type: 'canceled'; taskId: string }
   | { type: 'error'; taskId: string; message: string };

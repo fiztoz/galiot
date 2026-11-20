@@ -1,3 +1,4 @@
+import { localFolder } from '../transfer/download';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FolderOpen,
@@ -165,20 +166,20 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
   );
 
   const handleRemoteDrop = useCallback(
-    (event: React.DragEvent) => {
+    async (event: React.DragEvent) => {
       event.preventDefault();
       setDropActive(false);
       const payload = event.dataTransfer.getData(REMOTE_OBJECT_MIME);
       if (!payload) return;
       try {
         const items = JSON.parse(payload) as RemoteDropItem[];
-        const handle = root?.kind === 'directory' && canWrite ? root.handle : null;
+        const handle = root?.kind === 'directory' && canWrite ? await localFolder(root.handle, path) : null;
         if (items.length > 0) onDownloadToLocal(items, handle);
       } catch {
         onError('Could not read the dropped items.');
       }
     },
-    [onDownloadToLocal, onError, root, canWrite],
+    [onDownloadToLocal, onError, root, canWrite, path],
   );
 
   const eject = useCallback(() => {

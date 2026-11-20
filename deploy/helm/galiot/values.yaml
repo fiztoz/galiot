@@ -14,11 +14,8 @@
 #   kubectl create secret generic galiot-gate --from-literal=gate="$(openssl rand -hex 24)"
 #   helm install galiot deploy/helm/galiot --set gate.existingSecret=galiot-gate
 
-# -- Number of replicas. KEEP AT 1 unless you understand the consequences:
-# sessions and share-link grants live in ONE pod's memory. With >1 replica,
-# a share link minted on pod A returns 404 on pod B, and operator sessions
-# bounce between pods (the client retries, but transfers degrade). There is
-# no shared session store and no HPA in this chart on purpose.
+# -- Run one pod, or set to 0 to stop serving. Recreate upgrades end the old
+# pod's sessions and share grants before the replacement starts.
 replicaCount: 1
 
 image:
@@ -174,8 +171,9 @@ resources:
     # proxy many concurrent large objects.
     memory: 512Mi
 
-# -- Extra environment variables, e.g. future GALIOT_* server settings.
-# List of {name, value} or {name, valueFrom}.
+# -- Extra environment variables as {name, value} or {name, valueFrom}.
+# In open mode, GALIOT_PUBLIC_ORIGINS here replaces the origins inferred
+# from ingress.hosts and ingress.tls. Include every public origin you use.
 extraEnv: []
 
 # -- Extra volumes/mounts, e.g. a private CA bundle for a derived image.
@@ -203,7 +201,7 @@ pdb:
 
 networkPolicy:
   enabled: false
-  # -- Sources allowed to reach the HTTP port. Default [{}] allows all
+  # -- Sources allowed to reach the HTTP port. An empty list allows all
   # sources; restrict to your ingress controller, e.g.:
   # ingressFrom:
   #   - namespaceSelector:
@@ -212,8 +210,7 @@ networkPolicy:
   #     podSelector:
   #       matchLabels:
   #         app.kubernetes.io/name: ingress-nginx
-  ingressFrom:
-    - {}
-  # Egress is intentionally unrestricted: the server must reach arbitrary
-  # S3 endpoints plus cluster DNS. Restrict it yourself if your endpoints
-  # are fixed and you know their address ranges.
+  ingressFrom: []
+  # -- Omit or use null for an ingress-only policy. Supply Kubernetes
+  # NetworkPolicyEgressRule entries to manage egress. [] grants no egress.
+  egress: null

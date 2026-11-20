@@ -17,6 +17,7 @@ type EventListener = (reason: VaultLockReason) => void;
 class VaultService {
   private worker: Worker | null = null;
   private nextId = 1;
+  private changes: BroadcastChannel | null = null;
   private pending = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
   private lockedListeners = new Set<EventListener>();
   private deletedListeners = new Set<() => void>();
@@ -66,6 +67,15 @@ class VaultService {
       this.pending.clear();
     });
 
+    if (typeof BroadcastChannel !== 'undefined' && !this.changes) {
+      this.changes = new BroadcastChannel('galiot-vault-changes');
+      this.changes.onmessage = ({ data }) => {
+        if (typeof data?.generation !== 'string') return;
+        void this.call('vault.invalidate', { generation: data.generation }).then(() => {
+          if (data.deleted === true) this.notifyDeleted();
+        });
+      };
+    }
     this.worker = worker;
     return worker;
   }
@@ -97,6 +107,11 @@ class VaultService {
   public onDeleted(listener: () => void): () => void {
     this.deletedListeners.add(listener);
     return () => this.deletedListeners.delete(listener);
+  }
+
+  public notifyReplacement(generation: string, deleted: boolean): void {
+    this.changes?.postMessage({ generation, deleted });
+    if (deleted) this.notifyDeleted();
   }
 
   /** Broadcasts that the vault was deleted and storage wiped. */

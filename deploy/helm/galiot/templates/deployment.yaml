@@ -6,15 +6,10 @@ metadata:
   labels:
     {{- include "galiot.labels" . | nindent 4 }}
 spec:
-  {{- if not (kindIs "invalid" .Values.replicaCount) }}
   replicas: {{ .Values.replicaCount }}
-  {{- end }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    type: Recreate
   selector:
     matchLabels:
       {{- include "galiot.selectorLabels" . | nindent 6 }}
@@ -69,6 +64,10 @@ spec:
             - name: HOME
               value: /tmp
             {{- include "galiot.gateEnv" . | nindent 12 }}
+            {{- with include "galiot.ingressPublicOrigins" . }}
+            - name: GALIOT_PUBLIC_ORIGINS
+              value: {{ . | quote }}
+            {{- end }}
             {{- include "galiot.brandingEnv" . | nindent 12 }}
             {{- include "galiot.presetEnv" . | nindent 12 }}
             {{- with .Values.extraEnv }}

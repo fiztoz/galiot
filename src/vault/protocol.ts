@@ -1,3 +1,4 @@
+import type { BackupEnvelope, BackupManifest, VerifiedBackup } from './exportFormat';
 import type { EncryptedPayload } from './crypto';
 import type { BucketSearchResult, CorsConfiguration, ListObjectsResult, ObjectMeta, VersionListResult } from '../s3/client';
 import type { GaleonImportPrepareResult, GaleonImportPreview } from './galeonImport';
@@ -118,8 +119,10 @@ export type VaultMethod =
   | 'vault.create'
   | 'vault.unlock'
   | 'vault.lock'
+  | 'vault.invalidate'
   | 'vault.status'
-  | 'vault.verify'
+  | 'vault.export'
+  | 'vault.import'
   | 'vault.attachTransferPort'
   | 'creds.encrypt'
   | 's3.test'
@@ -161,11 +164,13 @@ export interface VaultRequest<M extends VaultMethod = VaultMethod> {
 }
 
 export interface VaultParams {
-  'vault.create': { passphrase: string };
-  'vault.unlock': { passphrase: string; salt: string; wrappedDek: string };
+  'vault.create': { passphrase: string; generation: string };
+  'vault.unlock': { passphrase: string; salt: string; wrappedDek: string; generation: string };
   'vault.lock': undefined;
+  'vault.invalidate': { generation: string };
   'vault.status': undefined;
-  'vault.verify': { passphrase: string; salt: string; wrappedDek: string };
+  'vault.export': { manifest: BackupManifest; generation: string };
+  'vault.import': { file: File; passphrase: string };
   'vault.attachTransferPort': { port: MessagePort };
   'creds.encrypt': { credentials: CredentialPlaintext };
   's3.test': { profile: S3ProfileConfig; credentials: Credentials };
@@ -206,7 +211,8 @@ export interface VaultParams {
     credentials: Credentials;
     key: string;
     body: string;
-    contentType: string;
+    contentType: string | null;
+    eTag: string;
   };
   's3.presignGet': {
     profile: S3ProfileConfig;
@@ -245,25 +251,27 @@ export interface VaultParams {
   's3.restore': { profile: S3ProfileConfig; credentials: Credentials; key: string; days: number };
   /**
    * Parses a Galeon profile export inside the worker and returns a preview with
-   * no credential material in it. `text` is the raw file the user picked.
+   * no credential material in it. The page supplies the selected File handle.
    */
-  'galeon.preview': { text: string };
+  'galeon.preview': { file: File };
   /**
    * Encrypts each importable Galeon profile's credentials and returns rows that
    * are ready to insert. `expectedHash` is the preview's content hash, so a
    * file swapped between preview and confirm is rejected instead of imported.
    */
-  'galeon.prepare': { text: string; expectedHash: string };
+  'galeon.prepare': { file: File; expectedHash: string };
 }
 
 export type VaultResults = {
   'vault.create': CreateVaultResult;
   'vault.unlock': { unlocked: true };
   'vault.lock': { locked: true };
-  'vault.status': { unlocked: boolean };
-  'vault.verify': { valid: boolean };
+  'vault.invalidate': { invalidated: boolean };
+  'vault.status': { unlocked: boolean; generation: string | null };
+  'vault.export': BackupEnvelope;
+  'vault.import': VerifiedBackup;
   'vault.attachTransferPort': { attached: true };
-  'creds.encrypt': { payload: EncryptedPayload };
+  'creds.encrypt': { payload: EncryptedPayload; generation: string };
   's3.test': TestConnectionResult;
   's3.probe': {
     reachable: boolean;
@@ -280,7 +288,7 @@ export type VaultResults = {
   's3.list': ListObjectsResult;
   's3.delete': { deleted: string[]; errors: { key: string; code: string; message: string }[] };
   's3.folderStats': FolderStatsResult;
-  's3.getText': { text: string; size: number; contentType: string | null; eTag: string | null };
+  's3.getText': { text: string; size: number; contentType: string | null; eTag: string | null; conditionalPut: boolean };
   's3.putText': { eTag: string };
   's3.presignGet': PresignResult;
   's3.presignPut': PresignResult;
@@ -300,7 +308,7 @@ export type VaultResults = {
   's3.listTree': { objects: { key: string; size: number; storageClass: string | null }[] };
   's3.restore': { requested: boolean };
   'galeon.preview': GaleonImportPreview;
-  'galeon.prepare': GaleonImportPrepareResult;
+  'galeon.prepare': GaleonImportPrepareResult & { generation: string };
 };
 
 export type VaultResponse<M extends VaultMethod = VaultMethod> =

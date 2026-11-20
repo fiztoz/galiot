@@ -32,12 +32,21 @@ const forbiddenFields = [
 
 describe('connection share', () => {
   test('round-trips without keys and with screened headers', () => {
-    const parsed = parseConnectionShare(connectionShareText(row));
+    const parsed = parseConnectionShare(connectionShareText(row, true));
     expect(parsed.endpoint).toBe('https://s3.example.com');
     expect(parsed.bucket).toBe('archive');
     expect(parsed.pathStyle).toBe(true);
     // The credential-looking stored header is dropped on the way out.
     expect(parsed.headers).toEqual({ 'x-tenant-id': 'acme' });
+  });
+
+  test('omits header values by default and always screens customer encryption keys', () => {
+    expect(buildConnectionShare(row).headers).toEqual({});
+    const header = 'x-amz-server-side-encryption-customer-key';
+    const old = { ...row, custom_headers: { [header]: 'fixture', 'x-tenant-id': 'acme' } };
+    expect(buildConnectionShare(old, true).headers).toEqual({ 'x-tenant-id': 'acme' });
+    expect(() => buildConnectionShare({ ...row, endpoint: 'https://name@s3.example.com' })).toThrow(/credentials/);
+    expect(() => buildConnectionShare({ ...row, endpoint: 'https://s3.example.com/?routing=private' })).toThrow(/query/);
   });
 
   test('the builder emits only the share fields', () => {

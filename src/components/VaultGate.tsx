@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { BRAND } from '../branding';
 import { Eye, EyeOff, Lock, ArrowRight, Check, Loader2, ShieldCheck } from 'lucide-react';
 import type { AppDB } from '../db/client';
-import { createVault, unlockVault, vaultExists, isVaultUnlocked } from '../vault/repository';
+import { createVault, unlockVault, vaultExists, readVaultState } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 
 interface VaultGateProps {
@@ -11,10 +11,11 @@ interface VaultGateProps {
   onUnlockChange?: (unlocked: boolean) => void;
 }
 
-type GateState = 'loading' | 'create' | 'unlock' | 'unlocked';
+type GateState = 'loading' | 'error' | 'create' | 'unlock' | 'unlocked';
 
 export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
   const [state, setState] = useState<GateState>('loading');
+  const [attempt, setAttempt] = useState(0);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -26,30 +27,34 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
   useEffect(() => {
     let cancelled = false;
 
-    void (async () => {
+    const checkState = async () => {
       try {
-        const [exists, unlocked] = await Promise.all([vaultExists(db), isVaultUnlocked()]);
+        const next = await readVaultState(db);
         if (cancelled) return;
-        if (unlocked) {
-          setState('unlocked');
-          onUnlockChange?.(true);
-        } else {
-          setState(exists ? 'unlock' : 'create');
-          onUnlockChange?.(false);
-        }
+        setState(next);
+        onUnlockChange?.(next === 'unlocked');
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
-          setState('create');
+          setState('error');
+          onUnlockChange?.(false);
         }
       }
-    })();
+    };
+    const checkVisible = () => {
+      if (document.visibilityState === 'visible') void checkState();
+    };
+    void checkState();
+    // A tab restored from the browser's page cache can have missed a broadcast.
+    window.addEventListener('pageshow', checkVisible);
+    document.addEventListener('visibilitychange', checkVisible);
 
     // Covers manual lock, idle auto-lock, and an explicit vault deletion: if the
     // vault no longer exists, fall back to the create screen instead of unlock.
     const unsubscribe = vaultService.onLocked((reason) => {
       if (cancelled) return;
       setPassword('');
+      setShowPassword(false);
       setConfirmPassword('');
       setShowConfirmPassword(false);
       onUnlockChange?.(false);
@@ -73,20 +78,24 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
     const unsubscribeDeleted = vaultService.onDeleted(() => {
       if (cancelled) return;
       setPassword('');
+      setShowPassword(false);
       setConfirmPassword('');
       setShowConfirmPassword(false);
       setError(null);
       onUnlockChange?.(false);
       setNotice('The vault was deleted. Create a new one to continue.');
-      setState('create');
+      setState('loading');
+      setAttempt(value => value + 1);
     });
 
     return () => {
       cancelled = true;
+      window.removeEventListener('pageshow', checkVisible);
+      document.removeEventListener('visibilitychange', checkVisible);
       unsubscribe();
       unsubscribeDeleted();
     };
-  }, [db, onUnlockChange]);
+  }, [db, onUnlockChange, attempt]);
 
   const handleCreateVault = useCallback(
     async (e: React.FormEvent) => {
@@ -109,10 +118,14 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
         setPassword('');
         setConfirmPassword('');
         setShowConfirmPassword(false);
+        setShowPassword(false);
         setState('unlocked');
         onUnlockChange?.(true);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+        setPassword('');
+        setConfirmPassword('');
+        setState('error');
       } finally {
         setBusy(false);
       }
@@ -135,6 +148,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       try {
         await unlockVault(db, password);
         setPassword('');
+        setShowPassword(false);
         setState('unlocked');
         onUnlockChange?.(true);
       } catch (err) {
@@ -155,6 +169,15 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
     },
     [db, password, onUnlockChange],
   );
+
+  if (state === 'error') {
+    return (
+      <div className="flex flex-col items-center gap-3 p-6">
+        <p role="alert">{error}</p>
+        <button type="button" onClick={() => window.location.reload()}>Retry vault check</button>
+      </div>
+    );
+  }
 
   if (state === 'loading') {
     return (

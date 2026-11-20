@@ -105,14 +105,18 @@ export async function unwrapDEK(kek: CryptoKey, wrappedDek: ArrayBuffer): Promis
 /**
  * Encrypts a plaintext string using the DEK (AES-GCM-256).
  */
-export async function encrypt(dek: CryptoKey, plaintext: string): Promise<EncryptedPayload> {
+export async function encrypt(dek: CryptoKey, plaintext: string, additionalData?: Uint8Array<ArrayBuffer>): Promise<EncryptedPayload> {
   const encoder = new TextEncoder();
   const iv = generateIV();
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
-    dek,
-    encoder.encode(plaintext)
-  );
+  const bytes = encoder.encode(plaintext);
+  let ciphertext: ArrayBuffer;
+  try {
+    const params: AesGcmParams = { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer };
+    if (additionalData !== undefined) params.additionalData = additionalData;
+    ciphertext = await crypto.subtle.encrypt(params, dek, bytes);
+  } finally {
+    bytes.fill(0);
+  }
 
   return {
     ciphertext: arrayBufferToBase64(ciphertext),
@@ -123,18 +127,20 @@ export async function encrypt(dek: CryptoKey, plaintext: string): Promise<Encryp
 /**
  * Decrypts a payload using the DEK (AES-GCM-256).
  */
-export async function decrypt(dek: CryptoKey, payload: EncryptedPayload): Promise<string> {
+export async function decrypt(dek: CryptoKey, payload: EncryptedPayload, additionalData?: Uint8Array<ArrayBuffer>): Promise<string> {
   const decoder = new TextDecoder();
   const iv = base64ToArrayBuffer(payload.iv);
   const ciphertext = base64ToArrayBuffer(payload.ciphertext);
   
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: new Uint8Array(iv) },
-    dek,
-    ciphertext
-  );
+  const params: AesGcmParams = { name: 'AES-GCM', iv: new Uint8Array(iv) };
+  if (additionalData !== undefined) params.additionalData = additionalData;
+  const plaintext = await crypto.subtle.decrypt(params, dek, ciphertext);
 
-  return decoder.decode(plaintext);
+  try {
+    return decoder.decode(plaintext);
+  } finally {
+    zeroBuffer(plaintext);
+  }
 }
 
 /**

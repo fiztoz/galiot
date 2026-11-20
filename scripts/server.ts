@@ -21,11 +21,12 @@ import {
 } from '../src/server/branding';
 import { BRANDING_LOGO_PATH, isAppApiPath } from '../src/server/protocol';
 import { injectPresets, presetsFromEnv } from '../src/server/presets';
-import { proxyListenConfig } from '../src/server/proxy';
+import { proxyListenConfig, publicOrigins } from '../src/server/proxy';
 import { headersForPath } from '../src/server/securityHeaders';
 import { contentTypeFor, resolveStaticPath } from '../src/server/static';
 
 const { hostname, port, gate, open } = proxyListenConfig();
+const origins = publicOrigins(process.env);
 const root = resolve(import.meta.dir, '../dist');
 
 // Branding is read once at startup; a bad logo path fails fast, like a missing
@@ -47,7 +48,7 @@ const server = Bun.serve({
   async fetch(request) {
     const url = new URL(request.url);
     if (isAppApiPath(url.pathname)) {
-      return handleAppRequest(request, { expectedToken: gate });
+      return handleAppRequest(request, { expectedToken: gate, open, listenerPort: port, listenerHost: hostname, publicOrigins: origins });
     }
 
     // Deployment logo: same-origin bytes read at startup, sandboxed so an

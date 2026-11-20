@@ -105,6 +105,7 @@ export const APP_OWNED_FOR_TEST = [...APP_OWNED].sort();
  * `x-api-version` are ordinary routing hints and are not.
  */
 const CREDENTIAL_PATTERNS: RegExp[] = [
+  /^x-amz-(?:copy-source-)?server-side-encryption-customer-key(?:-md5)?$/,
   /authorization/,
   /(?:^|[-_])api[-_]?key(?:$|[-_])/,
   /(?:^|[-_])auth(?:$|[-_])/,

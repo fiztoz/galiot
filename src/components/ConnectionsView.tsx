@@ -301,9 +301,9 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
         )}
       </div>
 
-      <ConnectionDialog
+      {(dialogOpen || editing !== null) && <ConnectionDialog
         db={db}
-        open={dialogOpen || editing !== null}
+        open
         onClose={() => {
           setDialogOpen(false);
           setEditingId(null);
@@ -315,7 +315,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
           setEditingId(null);
           setDraft(null);
         }}
-      />
+      />}
 
       {sharing && (
         <ShareConnectionDialog profile={sharing} onClose={() => setSharingId(null)} />

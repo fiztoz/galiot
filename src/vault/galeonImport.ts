@@ -1,6 +1,7 @@
 import type { EncryptedPayload } from './crypto';
 import type { CredentialPlaintext } from './protocol';
 import { canUseVirtualHosting, normalizeEndpoint } from '../s3/url';
+import { assertConnectionEndpoint } from '../s3/endpoint';
 import { sha256Hex } from '../lib/hash';
 
 /**
@@ -235,8 +236,7 @@ export function mapGaleonProfile(raw: GaleonProfile): GaleonMapped {
     }
     endpoint = normalizeEndpoint(rawEndpoint);
     try {
-      const parsed = new URL(endpoint);
-      if (parsed.hostname.length === 0) return skip('The endpoint has no host.');
+      assertConnectionEndpoint(endpoint);
     } catch {
       return skip('The endpoint is not a valid URL.');
     }

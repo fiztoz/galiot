@@ -18,31 +18,22 @@ import type {
   UploadJob,
 } from '../transfer/protocol';
 import { S3_ACCESS_TOKEN_HEADER } from '../server/protocol';
+import { removeStaging, TRANSFER_LOCK, uploadFingerprint } from '../transfer/checkpoint';
+import { closeServerSession } from '../s3/remote';
+import { downloadFile, publishLocal } from '../transfer/download';
 import { isSessionExpired, sessionCacheKey } from '../transfer/session';
 
 /** Per-part retry policy for transient network failures. */
 const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 400;
 const PROGRESS_INTERVAL_MS = 300;
-const STAGING_DIR = 'galiot-transfers';
+
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
-
-/** Minimal structural type so we do not depend on lib.dom's sync-access API. */
-interface SyncAccessHandle {
-  write(buffer: BufferSource, options?: { at?: number }): number;
-  truncate(size: number): void;
-  flush(): void;
-  close(): void;
-}
-
-type SyncCapableFileHandle = FileSystemFileHandle & {
-  createSyncAccessHandle?: () => Promise<SyncAccessHandle>;
-};
 
 /** Asks the vault worker for a server session. The secret never arrives here. */
 class PortSession {
@@ -56,6 +47,8 @@ class PortSession {
 
   private handle(msg: SessionResponse): void {
     if (msg.type === 'sessions-closed') {
+      for (const entry of this.pending.values()) entry.reject(new Error('Transfer session closed'));
+      this.pending.clear();
       this.onClosed();
       return;
     }
@@ -75,133 +68,110 @@ class PortSession {
   }
 }
 
-/**
- * Byte-addressable write target for a download. Backed by OPFS staging (with
- * sync access handles where available) or by a file inside a user-granted local
- * directory, so a resumed transfer continues from whatever is already on disk.
- */
-class DownloadTarget {
-  private constructor(
-    private readonly handle: FileSystemFileHandle,
-    private readonly sync: SyncAccessHandle | null,
-    private readonly writable: FileSystemWritableFileStream | null,
-    public size: number,
-    public readonly staged: boolean,
-  ) {}
-
-  static async open(job: DownloadJob): Promise<DownloadTarget> {
-    const destination = job.destination;
-    let handle: FileSystemFileHandle;
-
-    if (destination.kind === 'directory') {
-      // Folder downloads carry relative names with subdirectories; create the
-      // chain so the structure survives instead of flattening or failing.
-      const segments = destination.filename.split('/').filter((s) => s.length > 0 && s !== '.' && s !== '..');
-      const filename = segments.pop() ?? destination.filename;
-      let dir = destination.handle;
-      for (const segment of segments) {
-        dir = await dir.getDirectoryHandle(segment, { create: true });
-      }
-      handle = await dir.getFileHandle(filename, { create: true });
-    } else {
-      const root = await navigator.storage.getDirectory();
-      const dir = await root.getDirectoryHandle(STAGING_DIR, { create: true });
-      handle = await dir.getFileHandle(`download-${job.taskId}`, { create: true });
-    }
-
-    const file = await handle.getFile();
-    const syncCapable = handle as SyncCapableFileHandle;
-
-    let sync: SyncAccessHandle | null = null;
-    let writable: FileSystemWritableFileStream | null = null;
-
-    // Sync access handles are OPFS-only, so local-directory files always use
-    // the writable-stream path.
-    if (destination.kind === 'staged' && typeof syncCapable.createSyncAccessHandle === 'function') {
-      sync = await syncCapable.createSyncAccessHandle();
-    } else {
-      writable = await handle.createWritable({ keepExistingData: true });
-      await writable.seek(file.size);
-    }
-
-    return new DownloadTarget(
-      handle,
-      sync,
-      writable,
-      file.size,
-      destination.kind === 'staged',
-    );
-  }
-
-  async write(chunk: Uint8Array, offset: number): Promise<void> {
-    if (this.sync) {
-      // Streamed chunks are typed as Uint8Array<ArrayBufferLike>; OPFS wants a
-      // plain BufferSource view. No copy - this is the same underlying buffer.
-      this.sync.write(chunk as unknown as BufferSource, { at: offset });
-      this.sync.flush();
-    } else if (this.writable) {
-      await this.writable.seek(offset);
-      await this.writable.write(chunk as unknown as FileSystemWriteChunkType);
-    }
-    this.size = offset + chunk.byteLength;
-  }
-
-  async reset(): Promise<void> {
-    if (this.sync) this.sync.truncate(0);
-    else if (this.writable) await this.writable.truncate(0);
-    this.size = 0;
-  }
-
-  async close(): Promise<void> {
-    if (this.sync) this.sync.close();
-    if (this.writable) await this.writable.close();
-  }
-
-  /** Flushes and returns a File backed by the target (no full read into RAM). */
-  async finish(): Promise<File> {
-    await this.close();
-    return this.handle.getFile();
-  }
-}
-
 interface TaskRuntime {
   taskId: string;
+  profileId: string;
+  signingKey: string;
   pauseRequested: boolean;
   cancelRequested: boolean;
+  uploadId?: string;
   controllers: Set<AbortController>;
   bytesTransferred: number;
   speedSamples: SpeedSample[];
   lastProgressAt: number;
 }
 
-class TransferEngine {
+export class TransferEngine {
+  constructor(
+    private readonly send: (event: TransferEvent) => void = event => postMessage(event),
+    private readonly fetchObject: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> =
+      (input, init) => globalThis.fetch(input, init),
+    private readonly storage = globalThis.navigator?.storage,
+    private readonly revokeSession = closeServerSession,
+  ) {}
+
   private readonly tasks = new Map<string, TaskRuntime>();
   private sessions: PortSession | null = null;
-  private sessionIds = new Map<string, string>();
+  private fingerprintQueue: Promise<void> = Promise.resolve();
+  private signingKeys = new Map<string, string>();
+  private sessionIds = new Map<string, { id: Promise<string>; token?: string }>();
 
   attachPort(port: MessagePort): void {
-    this.sessions = new PortSession(port, () => this.sessionIds.clear());
+    this.sessions = new PortSession(port, () => {
+      this.sessionIds.clear();
+      this.signingKeys.clear();
+      for (const id of this.tasks.keys()) this.pause(id);
+    });
   }
 
-  private runtime(taskId: string): TaskRuntime {
-    let rt = this.tasks.get(taskId);
-    if (!rt) {
-      rt = {
-        taskId,
-        pauseRequested: false,
-        cancelRequested: false,
-        controllers: new Set(),
-        bytesTransferred: 0,
-        speedSamples: [],
-        lastProgressAt: 0,
-      };
-      this.tasks.set(taskId, rt);
+  invalidateProfile(profileId: string): void {
+    for (const rt of this.tasks.values()) {
+      if (rt.profileId === profileId) this.pause(rt.taskId);
     }
-    return rt;
+    const cached = this.sessionIds.get(profileId);
+    if (cached) void cached.id.then(id => this.revokeSession(id, cached.token), () => undefined);
+    this.sessionIds.delete(profileId);
+    this.signingKeys.delete(profileId);
+  }
+
+  async run(job: UploadJob | DownloadJob): Promise<void> {
+    if (this.tasks.has(job.taskId)) return;
+    const signingKey = sessionCacheKey({ ...job.target, profileId: job.profileId, credentials: job.credentials });
+    if (this.signingKeys.has(job.profileId) && this.signingKeys.get(job.profileId) !== signingKey) {
+      this.invalidateProfile(job.profileId);
+    }
+    this.signingKeys.set(job.profileId, signingKey);
+    const rt: TaskRuntime = {
+      taskId: job.taskId, profileId: job.profileId, signingKey, pauseRequested: false, cancelRequested: false,
+      uploadId: 'file' in job ? job.uploadId : undefined,
+      controllers: new Set(), bytesTransferred: 0, speedSamples: [], lastProgressAt: 0,
+    };
+    this.tasks.set(job.taskId, rt);
+    const execute = async () => {
+      try {
+        if (rt.pauseRequested) throw new Error('Transfer interrupted');
+        if ('file' in job) await this.upload(rt, job);
+        else await this.download(rt, job);
+      } catch (error) {
+        if (!rt.cancelRequested || !rt.uploadId || !('file' in job)) throw error;
+        try {
+          await this.abortMultipart(rt, job, rt.uploadId);
+        } catch (cleanupError) {
+          this.emit({ type: 'error', taskId: job.taskId,
+            message: `Upload stopped. S3 did not confirm multipart cleanup: ${errorText(cleanupError)}` });
+          return;
+        }
+        this.emit({ type: 'canceled', taskId: job.taskId });
+      }
+    };
+    try {
+      const locks = globalThis.navigator?.locks;
+      if (locks) {
+        await locks.request(TRANSFER_LOCK, { mode: 'shared', ifAvailable: true }, async lock => {
+          if (!lock) throw new Error('The vault is being deleted.');
+          await locks.request(`galiot-task-${job.taskId}`, { ifAvailable: true }, async taskLock => {
+            if (taskLock) await execute();
+          });
+        });
+      } else await execute();
+    } catch (err) {
+      if (rt.cancelRequested) this.emit({ type: 'canceled', taskId: rt.taskId });
+      else if (rt.pauseRequested) this.emit({ type: 'paused', taskId: rt.taskId, bytesTransferred: rt.bytesTransferred });
+      else this.emit({ type: 'error', taskId: rt.taskId, message: errorText(err) });
+    } finally {
+      this.tasks.delete(rt.taskId);
+      if (rt.cancelRequested && !('file' in job)) {
+        try {
+          await removeStaging(job.taskId, this.storage);
+        } catch (error) {
+          this.emit({ type: 'error', taskId: rt.taskId, message: errorText(error) });
+        }
+      }
+    }
   }
 
   private emit(event: TransferEvent): void {
-    postMessage(event);
+    this.send(event);
   }
 
   private advance(rt: TaskRuntime, bytes: number, force = false): void {
@@ -223,15 +193,11 @@ class TransferEngine {
 
   private async sessionFor(job: UploadJob | DownloadJob): Promise<string> {
     if (!this.sessions) throw new Error('Transfer worker has no session channel');
-    const cacheKey = sessionCacheKey({
-      profileId: job.profileId,
-      endpoint: job.target.endpoint,
-      bucket: job.target.bucket,
-      headers: job.target.headers,
-    });
-    const cached = this.sessionIds.get(cacheKey);
-    if (cached) return cached;
-    const sessionId = await this.sessions.open({
+    const rt = this.tasks.get(job.taskId);
+    if (!rt || rt.signingKey !== this.signingKeys.get(job.profileId)) throw new Error('Connection changed');
+    const cached = this.sessionIds.get(job.profileId);
+    if (cached) return cached.id;
+    const pending = this.sessions.open({
       profileId: job.profileId,
       endpoint: job.target.endpoint,
       region: job.target.region,
@@ -241,8 +207,13 @@ class TransferEngine {
       headers: job.target.headers,
       accessToken: job.target.proxyToken,
     });
-    this.sessionIds.set(cacheKey, sessionId);
-    return sessionId;
+    this.sessionIds.set(job.profileId, { id: pending, token: job.target.proxyToken });
+    try {
+      return await pending;
+    } catch (err) {
+      if (this.sessionIds.get(job.profileId)?.id === pending) this.sessionIds.delete(job.profileId);
+      throw err;
+    }
   }
 
   private async serverFetch(
@@ -254,11 +225,13 @@ class TransferEngine {
     // once on the server's own expired-session answer; an S3 404 is not that.
     for (let attempt = 0; ; attempt += 1) {
       const sessionId = await this.sessionFor(job);
+      options.signal?.throwIfAborted();
+      const cached = this.sessionIds.get(job.profileId);
       const headers = new Headers(options.headers);
       if (job.target.proxyToken) headers.set(S3_ACCESS_TOKEN_HEADER, job.target.proxyToken);
       let response: Response;
       try {
-        response = await fetch(`/api/s3/sessions/${sessionId}${path}`, {
+        response = await this.fetchObject(`/api/s3/sessions/${sessionId}${path}`, {
           method: options.method ?? 'GET',
           headers,
           body: options.body ?? undefined,
@@ -275,12 +248,7 @@ class TransferEngine {
       if (attempt === 0 && response.status === 404) {
         const text = await response.clone().text();
         if (isSessionExpired(response.status, text)) {
-          this.sessionIds.delete(sessionCacheKey({
-            profileId: job.profileId,
-            endpoint: job.target.endpoint,
-            bucket: job.target.bucket,
-            headers: job.target.headers,
-          }));
+          if (this.sessionIds.get(job.profileId) === cached) this.sessionIds.delete(job.profileId);
           continue;
         }
       }
@@ -324,8 +292,7 @@ class TransferEngine {
 
   /* ----------------------------- uploads ----------------------------- */
 
-  async upload(job: UploadJob): Promise<void> {
-    const rt = this.runtime(job.taskId);
+  private async upload(rt: TaskRuntime, job: UploadJob): Promise<void> {
     const file = job.file;
 
     if (file.size === 0) {
@@ -338,35 +305,47 @@ class TransferEngine {
       return;
     }
 
-    const parts = planParts(file.size, job.partSize || DEFAULT_PART_SIZE);
+    const partSize = job.partSize || DEFAULT_PART_SIZE;
+    const fingerprintSignal = this.track(rt);
+    // Folder uploads can submit thousands of jobs. Bound the concurrent file reads.
+    const hashing = this.fingerprintQueue.then(() => uploadFingerprint(file, fingerprintSignal));
+    this.fingerprintQueue = hashing.then(() => undefined, () => undefined);
+    const fingerprint = await hashing;
+    let uploadId = job.uploadId;
+    if (uploadId && job.uploadFingerprint && job.uploadFingerprint !== fingerprint) {
+      throw new Error('The selected file differs from the original upload. Re-select the original file.');
+    }
+    if (uploadId && !job.uploadFingerprint) {
+      // Legacy ledgers have no fingerprint. Never reuse bytes of unknown provenance.
+      await this.abortMultipart(rt, job, uploadId);
+      rt.uploadId = undefined;
+      uploadId = undefined;
+    }
+    const parts = planParts(file.size, partSize);
     const done = new Map<number, CompletedPart>();
 
-    if (job.uploadId && job.completedParts) {
+    if (uploadId && job.completedParts) {
       for (const part of job.completedParts) done.set(part.partNumber, part);
       rt.bytesTransferred = [...done.values()].reduce((sum, p) => sum + p.size, 0);
     }
-
-    let uploadId = job.uploadId;
 
     if (uploadId) {
       // Trust the server over local bookkeeping: only keep parts S3 knows about.
       try {
         const remote = await this.listParts(rt, job, uploadId);
         for (const partNumber of [...done.keys()]) {
-          if (!remote.has(partNumber)) done.delete(partNumber);
+          const landed = remote.get(partNumber);
+          const local = done.get(partNumber)!;
+          if (landed?.eTag !== local.eTag || landed?.size !== local.size) done.delete(partNumber);
         }
         rt.bytesTransferred = [...done.values()].reduce((sum, p) => sum + p.size, 0);
       } catch (err) {
-        this.emit({
-          type: 'error',
-          taskId: job.taskId,
-          message: `Could not verify existing parts: ${errorText(err)}`,
-        });
-        return;
+        throw new Error(`Could not verify existing parts: ${errorText(err)}`);
       }
     } else {
       uploadId = await this.createMultipart(rt, job);
-      this.emit({ type: 'upload-created', taskId: job.taskId, uploadId });
+      rt.uploadId = uploadId;
+      this.emit({ type: 'upload-created', taskId: job.taskId, uploadId, fingerprint, partSize });
     }
 
     const queue = parts.filter((part) => !done.has(part.partNumber));
@@ -382,15 +361,13 @@ class TransferEngine {
       }
     };
 
-    await Promise.all(
+    const results = await Promise.allSettled(
       Array.from({ length: clampConcurrency(job.concurrency) }, () => poolWorker()),
     );
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
 
-    if (rt.cancelRequested) {
-      await this.abortMultipart(rt, job, uploadId).catch(() => undefined);
-      this.emit({ type: 'canceled', taskId: job.taskId });
-      return;
-    }
+    if (rt.cancelRequested) throw new Error('Transfer canceled');
 
     if (rt.pauseRequested) {
       this.emit({ type: 'paused', taskId: job.taskId, bytesTransferred: rt.bytesTransferred });
@@ -413,7 +390,12 @@ class TransferEngine {
 
     await this.completeMultipart(rt, job, uploadId, ordered);
     this.advance(rt, 0, true);
-    this.emit({ type: 'done', taskId: job.taskId, totalBytes: rt.bytesTransferred });
+    this.uploadDone(rt, job);
+  }
+
+  private uploadDone(rt: TaskRuntime, job: UploadJob): void {
+    this.emit({ type: 'done', taskId: job.taskId, totalBytes: rt.bytesTransferred,
+      upload: { profileId: job.profileId, bucket: job.target.bucket, key: job.key, prefix: job.prefix } });
   }
 
   private async putObject(
@@ -435,7 +417,7 @@ class TransferEngine {
         throw new Error(`Upload failed: ${res.status} ${res.statusText}`);
       }
       this.advance(rt, body.size, true);
-      this.emit({ type: 'done', taskId: job.taskId, totalBytes: rt.bytesTransferred });
+      this.uploadDone(rt, job);
     } finally {
       rt.controllers.delete(controller);
     }
@@ -505,10 +487,13 @@ class TransferEngine {
   }
 
   private async createMultipart(_rt: TaskRuntime, job: UploadJob): Promise<string> {
+    if (_rt.pauseRequested) throw new Error('Transfer interrupted');
+    // Once initiated, receive the upload ID even if the user clicks Cancel.
+    // S3 needs that ID to abort a newly created upload.
     const result = await this.serverCall<{ uploadId: string }>(job, 'createMultipart', {
       key: job.key,
       contentType: job.file.type || undefined,
-    }, this.track(_rt));
+    });
     if (!result.uploadId) throw new Error('Failed to parse UploadId from response');
     return result.uploadId;
   }
@@ -556,128 +541,37 @@ class TransferEngine {
     job: UploadJob,
     uploadId: string,
   ): Promise<void> {
-    await this.serverCall(job, 'abortMultipart', { key: job.key, uploadId }, this.track(_rt));
+    await this.serverCall(job, 'abortMultipart', { key: job.key, uploadId }, this.track(_rt, _rt.cancelRequested));
   }
 
-  private track(rt: TaskRuntime): AbortSignal {
+  private track(rt: TaskRuntime, allowCanceledCleanup = false): AbortSignal {
     const controller = new AbortController();
+    if (rt.pauseRequested && !allowCanceledCleanup) controller.abort();
     rt.controllers.add(controller);
     return controller.signal;
   }
 
   /* ---------------------------- downloads ---------------------------- */
 
-  async download(job: DownloadJob): Promise<void> {
-    const rt = this.runtime(job.taskId);
-    const target = await DownloadTarget.open(job);
-    let offset = target.size;
-    rt.bytesTransferred = offset;
-
-    try {
-      if (job.expectedSize !== null && offset > 0 && offset >= job.expectedSize) {
-        // Already fully staged from an earlier session.
-        const file = await target.finish();
-        this.emit({
-          type: 'done',
-          taskId: job.taskId,
-          totalBytes: offset,
-          stagedFile: target.staged ? file : undefined,
-        });
-        return;
-      }
-
-      for (;;) {
-        if (rt.cancelRequested || rt.pauseRequested) break;
-
-        const headers: Record<string, string> = {};
-        if (offset > 0) headers['Range'] = `bytes=${offset}-`;
-
-        const res = await this.serverFetch(job, `/object?key=${encodeURIComponent(job.key)}`, { headers });
-
-        if (offset > 0 && res.status === 200) {
-          // Server ignored the range header — restart from zero.
-          await target.reset();
-          offset = 0;
-          rt.bytesTransferred = 0;
-          continue;
-        }
-
-        if (!res.ok && res.status !== 206) {
-          throw new Error(`Download failed: ${res.status} ${res.statusText}`);
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          throw new Error('Response body is not streamable');
-        }
-
-        let interrupted = false;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          if (rt.cancelRequested || rt.pauseRequested) {
-            await reader.cancel();
-            interrupted = true;
-            break;
-          }
-
-          if (value) {
-            await target.write(value, offset);
-            offset += value.byteLength;
-            this.advance(rt, value.byteLength);
-          }
-        }
-        if (interrupted) break;
-
-        // A short read means the connection dropped — resume with Range.
-        if (job.expectedSize !== null && offset < job.expectedSize) continue;
-        break;
-      }
-
-      if (rt.cancelRequested) {
-        this.emit({ type: 'canceled', taskId: job.taskId });
-        return;
-      }
-
-      if (rt.pauseRequested) {
-        this.emit({ type: 'paused', taskId: job.taskId, bytesTransferred: rt.bytesTransferred });
-        return;
-      }
-
-      if (job.expectedSize !== null && offset !== job.expectedSize) {
-        throw new Error(
-          `Size mismatch: received ${offset} of ${job.expectedSize} bytes`,
-        );
-      }
-
-      const file = await target.finish();
-      this.emit({
-        type: 'done',
-        taskId: job.taskId,
-        totalBytes: offset,
-        stagedFile: target.staged ? file : undefined,
-      });
-    } catch (err) {
-      this.emit({ type: 'error', taskId: job.taskId, message: errorText(err) });
+  private async download(rt: TaskRuntime, job: DownloadJob): Promise<void> {
+    const signal = this.track(rt);
+    const file = await downloadFile(job, (method, headers) =>
+      this.serverFetch(job, `/object?key=${encodeURIComponent(job.key)}&raw=1`, { method, headers, signal }),
+      signal, bytes => this.advance(rt, bytes), () => rt.pauseRequested && !rt.cancelRequested, this.storage);
+    signal.throwIfAborted();
+    if (job.destination.kind === 'directory') {
+      await publishLocal(file, job.destination, signal);
+      await removeStaging(job.taskId, this.storage);
     }
-  }
-
-  /** Removes the OPFS staging file after a completed download is handed off. */
-  async cleanupStaging(taskId: string): Promise<void> {
-    try {
-      const root = await navigator.storage.getDirectory();
-      const dir = await root.getDirectoryHandle(STAGING_DIR, { create: true });
-      await dir.removeEntry(`download-${taskId}`);
-    } catch {
-      // Nothing staged (or already removed) — cleanup is best-effort.
-    }
+    this.emit({ type: 'done', taskId: job.taskId, totalBytes: file.size,
+      stagedFile: job.destination.kind === 'staged' ? file : undefined,
+      filename: job.key.split('/').pop() || 'download' });
   }
 }
 
 const engine = new TransferEngine();
 
-addEventListener(
+if (typeof self !== 'undefined' && typeof document === 'undefined') addEventListener(
   'message',
   (event: MessageEvent<TransferCommand | { type: 'attach-signing-port'; port: MessagePort }>) => {
     const msg = event.data;
@@ -690,17 +584,12 @@ addEventListener(
 
     switch (msg.type) {
       case 'upload':
-        void engine.upload(msg.job).catch((err: unknown) => {
-          postMessage({
-            type: 'error',
-            taskId: msg.job.taskId,
-            message: errorText(err),
-          } satisfies TransferEvent);
-        });
+      case 'download':
+        void engine.run(msg.job);
         break;
 
-      case 'download':
-        void engine.download(msg.job);
+      case 'invalidate-profile':
+        engine.invalidateProfile(msg.profileId);
         break;
 
       case 'pause':
@@ -711,9 +600,6 @@ addEventListener(
         engine.cancel(msg.taskId);
         break;
 
-      case 'cleanup-staging':
-        void engine.cleanupStaging(msg.taskId);
-        break;
     }
   },
 );

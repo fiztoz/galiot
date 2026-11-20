@@ -1,19 +1,10 @@
+import { transferManager } from '../transfer/manager';
 import type { AppDB } from '../db/client';
 import { vaultService } from './vaultService';
 
-/**
- * Vault backup/restore.
- *
- * The file contains only ciphertext (wrapped DEK + sealed credentials), but
- * verifying an import requires PBKDF2 — which must never run on the main
- * thread, so verification is delegated to the vault worker.
- */
-
-export interface VaultExportData {
-  version: number;
-  meta: { key: string; value: string }[];
-  profiles: Record<string, unknown>[];
-}
+import { SCHEMA_VERSION } from '../db/migrations';
+import { readVaultMeta, requireGeneration, withCurrentVault } from './repository';
+import type { VerifiedBackup } from './exportFormat';
 
 /** Columns copied during import — must exist in `schema.sql`. */
 const PROFILE_COLUMNS = [
@@ -32,18 +23,18 @@ const PROFILE_COLUMNS = [
   'updated_at',
 ] as const;
 
-/** Dumps the vault as a JSON file. Works while locked. */
+/** Read a consistent database snapshot and encrypt its entire manifest in the worker. */
 export async function exportVault(db: AppDB): Promise<Blob> {
-  const metaRes = await db.query<{ key: string; value: string }>('SELECT key, value FROM _meta');
-  const profilesRes = await db.query<Record<string, unknown>>('SELECT * FROM profiles');
-
-  const payload: VaultExportData = {
-    version: 1,
-    meta: metaRes.rows,
-    profiles: profilesRes.rows,
-  };
-
-  return new Blob([JSON.stringify(payload)], { type: 'application/json' });
+  const envelope = await db.transaction(async tx => {
+    const meta = await readVaultMeta(tx);
+    if (!meta) throw new Error('Vault not found');
+    const { rows } = await tx.query<Record<string, unknown>>(`SELECT ${PROFILE_COLUMNS.join(', ')} FROM profiles`);
+    return vaultService.call('vault.export', {
+      manifest: { salt: meta.salt, wrappedDek: meta.wrappedDek, profiles: rows },
+      generation: meta.generation,
+    });
+  });
+  return new Blob([JSON.stringify(envelope)], { type: 'application/json' });
 }
 
 function profileValues(profile: Record<string, unknown>): unknown[] {
@@ -76,53 +67,41 @@ function profileValues(profile: Record<string, unknown>): unknown[] {
   });
 }
 
-/**
- * Restores a backup after verifying the passphrase in the vault worker.
- * The current vault is replaced only once the passphrase checks out.
- */
-export async function importVault(db: AppDB, file: File, passphrase: string): Promise<void> {
-  let data: VaultExportData;
-  try {
-    data = JSON.parse(await file.text()) as VaultExportData;
-  } catch {
-    throw new Error('Failed to parse vault backup file');
-  }
+export interface PendingRestore {
+  generation: string;
+  backup: VerifiedBackup;
+}
 
-  if (!data.version || !data.meta || !data.profiles) {
-    throw new Error('Invalid vault export format');
-  }
+export async function prepareVaultRestore(file: File, passphrase: string): Promise<PendingRestore> {
+  const { generation } = await vaultService.call('vault.status');
+  if (!generation) throw new Error('Unlock the current vault before restoring a backup');
+  const backup = await vaultService.call('vault.import', { file, passphrase });
+  return { generation, backup };
+}
 
-  const salt = data.meta.find((m) => m.key === 'salt')?.value;
-  const wrappedDek = data.meta.find((m) => m.key === 'wrapped_dek')?.value;
-  if (!salt || !wrappedDek) {
-    throw new Error('Backup does not contain vault key material');
-  }
-
-  const { valid } = await vaultService.call('vault.verify', {
-    passphrase,
-    salt,
-    wrappedDek,
-  });
-  if (!valid) {
-    throw new Error('Invalid passphrase for the provided vault file');
-  }
-
-  await db.transaction(async (tx) => {
-    await tx.exec('DELETE FROM _meta; DELETE FROM profiles;');
-    // transfer ledger is invalidated by the new vault; drop it with the keys.
-    await tx.exec('DELETE FROM transfer_tasks;');
-
-    for (const meta of data.meta) {
-      await tx.query('INSERT INTO _meta (key, value) VALUES ($1, $2)', [meta.key, meta.value]);
-    }
-
-    const placeholders = PROFILE_COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
-    for (const profile of data.profiles) {
+export async function restoreVerifiedBackup(db: AppDB, { generation, backup }: PendingRestore, reviewedLegacy = false): Promise<void> {
+  if (backup.legacy && !reviewedLegacy) throw new Error('Review the legacy connection settings before restoring.');
+  await withCurrentVault(db, generation, async () => {
+    await transferManager.withVaultDeletion(() => db.transaction(async tx => {
+      await requireGeneration(tx, generation);
+      if ((await vaultService.call('vault.status')).generation !== generation) {
+        throw new Error('Vault locked during restore. Unlock it and retry.');
+      }
+      await tx.exec('DELETE FROM _meta; DELETE FROM profiles; DELETE FROM transfer_tasks;');
       await tx.query(
-        `INSERT INTO profiles (${PROFILE_COLUMNS.join(', ')}) VALUES (${placeholders})`,
-        profileValues(profile),
+        "INSERT INTO _meta (key, value) VALUES ('salt', $1), ('wrapped_dek', $2), ('vault_generation', $3), ('schema_version', $4)",
+        [backup.salt, backup.wrappedDek, crypto.randomUUID(), String(SCHEMA_VERSION)],
       );
-    }
+      const placeholders = PROFILE_COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
+      for (const profile of backup.profiles) {
+        await tx.query(
+          `INSERT INTO profiles (${PROFILE_COLUMNS.join(', ')}) VALUES (${placeholders})`,
+          profileValues(profile),
+        );
+      }
+      await vaultService.call('vault.invalidate', { generation });
+    }));
+    vaultService.notifyReplacement(generation, false);
   });
 }
 

@@ -15,6 +15,7 @@
  */
 
 import { checkProxyTarget } from './proxy';
+import { assertConnectionEndpoint } from '../s3/endpoint';
 import {
   MAX_PRESET_ENDPOINT_LENGTH,
   MAX_PRESET_REGION_LENGTH,
@@ -59,6 +60,7 @@ export function presetsFromEnv(env: NodeJS.ProcessEnv = process.env): Connection
     if (!checked.ok) {
       throw new Error(`${PRESET_ENDPOINT_ENV} is not a usable S3 endpoint: ${checked.detail} Include the scheme, e.g. https://s3.example.com`);
     }
+    assertConnectionEndpoint(endpoint);
   }
   const region = cleanRegion(env[PRESET_REGION_ENV] ?? '');
   const rawPathStyle = (env[PRESET_PATH_STYLE_ENV] ?? '').trim().toLowerCase();

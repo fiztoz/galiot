@@ -6,13 +6,8 @@ Galiot {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}" in 
 # Use only on an isolated test network.                                    #
 ############################################################################
 {{ end }}
-{{- if gt (int .Values.replicaCount) 1 }}
 
-WARNING: replicaCount={{ .Values.replicaCount }}. Sessions and share-link grants live in
-ONE pod's memory. Share links minted on one pod return 404 on the others,
-and operator sessions bounce between pods. Keep replicaCount=1 unless you
-have deliberately accepted this.
-{{- end }}
+Pod replacements interrupt service and expire sessions and server-issued share links.
 
 1. Reach the app:
 

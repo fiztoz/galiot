@@ -1,7 +1,9 @@
 /// <reference lib="webworker" />
+import { openManifest, sealManifest } from '../vault/exportFormat';
 import { VaultManager } from '../vault/vault';
-import { RemoteS3, RemoteS3Error, closeServerSession, listBucketsFromServer, openServerSession, probeFromServer } from '../s3/remote';
+import { MAX_EDITOR_BYTES, RemoteS3, RemoteS3Error, closeServerSession, listBucketsFromServer, openServerSession, probeFromServer, readEditorText } from '../s3/remote';
 import {
+  MAX_IMPORT_FILE_BYTES,
   buildGaleonPreview,
   prepareGaleonImport,
 } from '../vault/galeonImport';
@@ -36,23 +38,48 @@ function formatBytesForWorker(bytes: number): string {
 
 
 let vault: VaultManager | null = null;
+let epoch = 0;
+let generation: string | null = null;
 /** Direct channel to the transfer worker for server sessions. */
 let transferPort: MessagePort | null = null;
 /** Server sessions opened by this worker, closed when the vault locks. */
 const openSessions = new Map<string, string | undefined>();
 
 function emitLocked(reason: VaultLockReason): void {
-  void closeSessions();
+  epoch++;
+  generation = null;
+  closeSessions();
   const event: VaultEvent = { channel: VAULT_EVENT_CHANNEL, event: 'locked', reason };
   postMessage(event);
 }
 
-async function closeSessions(): Promise<void> {
+function closeSessions(): void {
   const open = [...openSessions];
   openSessions.clear();
-  await Promise.all(open.map(([id, token]) => closeServerSession(id, token)));
   // The transfer worker caches session ids; tell it they are all dead.
   transferPort?.postMessage({ type: 'sessions-closed' });
+  for (const [id, token] of open) void closeServerSession(id, token);
+}
+
+function invalidate(): void {
+  // Also cancel any unlock or create which is still deriving a key.
+  vault?.lock('manual');
+  epoch++;
+  vault = null;
+  generation = null;
+}
+
+// Receive replacements in the worker even when the UI thread is busy.
+if (typeof BroadcastChannel !== 'undefined') {
+  const changes = new BroadcastChannel('galiot-vault-changes');
+  changes.onmessage = ({ data }) => {
+    if (typeof data?.generation === 'string' && data.generation === generation) invalidate();
+  };
+}
+
+async function readGaleon(file: File): Promise<string> {
+  if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error('The Galeon import limit is 5 MB.');
+  return file.text();
 }
 
 function requireUnlocked(): VaultManager {
@@ -62,47 +89,65 @@ function requireUnlocked(): VaultManager {
   return vault;
 }
 
-async function resolveCredentials(credentials: Credentials): Promise<CredentialPlaintext> {
-  if ('plain' in credentials) {
-    return credentials.plain;
+interface SessionCredentials {
+  owner: VaultManager;
+  material: CredentialPlaintext;
+}
+
+function assertOwner(owner: VaultManager): void {
+  if (owner !== vault || !owner.isUnlocked()) throw new Error('Vault session changed');
+}
+
+async function resolveCredentials(credentials: Credentials): Promise<SessionCredentials> {
+  const owner = requireUnlocked();
+  const material = 'plain' in credentials ? credentials.plain : await owner.decryptCredentials(credentials.sealed);
+  assertOwner(owner);
+  return { material, owner };
+}
+
+async function trackedSession(profile: S3ProfileConfig, creds: SessionCredentials): Promise<string> {
+  assertOwner(creds.owner);
+  const id = await openServerSession(profile, creds.material, profile.proxyToken);
+  if (creds.owner !== vault || !creds.owner.isUnlocked()) {
+    void closeServerSession(id, profile.proxyToken);
+    throw new Error('Vault locked while the server session was opening');
   }
-  return requireUnlocked().decryptCredentials(credentials.sealed);
+  openSessions.set(id, profile.proxyToken);
+  return id;
 }
 
-/** Opens a server session. Credentials go to the self-hosted origin, not the main thread. */
-async function sessionClient(profile: S3ProfileConfig, creds: CredentialPlaintext): Promise<RemoteS3> {
-  const sessionId = await openServerSession(profile, creds, profile.proxyToken);
-  openSessions.set(sessionId, profile.proxyToken);
-  return new RemoteS3(sessionId, profile.proxyToken);
+async function sessionClient(profile: S3ProfileConfig, creds: SessionCredentials): Promise<RemoteS3> {
+  return new RemoteS3(await trackedSession(profile, creds), profile.proxyToken);
 }
 
-/** Gives the transfer worker a session id. It never receives the secret. */
 async function handleSessionRequest(request: SessionRequest): Promise<void> {
-  if (!transferPort || request.type !== 'session') return;
+  const port = transferPort;
+  if (!port || request.type !== 'session') return;
   try {
-    const creds = await requireUnlocked().decryptCredentials(request.credentials);
-    const sessionId = await openServerSession(
-      {
-        endpoint: request.endpoint,
-        region: request.region,
-        bucket: request.bucket,
-        pathStyle: request.pathStyle,
-        headers: request.headers,
-        proxyToken: request.accessToken,
-      },
-      creds,
-      request.accessToken,
-    );
-    openSessions.set(sessionId, request.accessToken);
+    const creds = await resolveCredentials({ sealed: request.credentials });
+    const sessionId = await trackedSession({
+      endpoint: request.endpoint,
+      region: request.region,
+      bucket: request.bucket,
+      pathStyle: request.pathStyle,
+      headers: request.headers,
+      proxyToken: request.accessToken,
+    }, creds);
+    if (transferPort !== port) {
+      openSessions.delete(sessionId);
+      void closeServerSession(sessionId, request.accessToken);
+      throw new Error('Transfer worker changed');
+    }
+    assertOwner(creds.owner);
     const response: SessionResponse = { type: 'session', id: request.id, sessionId };
-    transferPort.postMessage(response);
+    port.postMessage(response);
   } catch (err) {
     const response: SessionResponse = {
       type: 'session-error',
       id: request.id,
       error: err instanceof Error ? err.message : String(err),
     };
-    transferPort.postMessage(response);
+    port.postMessage(response);
   }
 }
 
@@ -171,42 +216,60 @@ async function dispatch<M extends VaultMethod>(
   params: VaultRequest<M>['params'],
 ): Promise<unknown> {
   switch (method) {
-    case 'vault.create': {
-      const p = params as { passphrase: string };
-      vault?.lock('manual');
-      const { vault: created, sealed } = await VaultManager.create(p.passphrase, emitLocked);
-      vault = created;
-      return sealed;
-    }
-
+    case 'vault.create':
     case 'vault.unlock': {
-      const p = params as { passphrase: string; salt: string; wrappedDek: string };
-      vault?.lock('manual');
-      vault = await VaultManager.unlock(p.passphrase, { salt: p.salt, wrappedDek: p.wrappedDek }, emitLocked);
-      return { unlocked: true as const };
+      const p = params as NonNullable<VaultRequest<'vault.unlock'>['params']>;
+      invalidate();
+      const ticket = epoch;
+      const onLock = (reason: VaultLockReason) => {
+        if (ticket === epoch) emitLocked(reason);
+      };
+      const result = method === 'vault.create'
+        ? await VaultManager.create(p.passphrase, onLock)
+        : { vault: await VaultManager.unlock(p.passphrase, p, onLock), sealed: undefined };
+      if (ticket !== epoch) {
+        result.vault.lock();
+        throw new Error('Vault state changed during key derivation');
+      }
+      vault = result.vault;
+      generation = p.generation;
+      return result.sealed ?? { unlocked: true };
     }
 
     case 'vault.lock': {
-      await closeSessions();
-      vault?.lock('manual');
-      vault = null;
-      return { locked: true as const };
+      invalidate();
+      return { locked: true };
     }
 
-    case 'vault.status': {
-      return { unlocked: vault?.isUnlocked() ?? false };
+    case 'vault.invalidate': {
+      const p = params as NonNullable<VaultRequest<'vault.invalidate'>['params']>;
+      const invalidated = p.generation === generation;
+      if (invalidated) invalidate();
+      return { invalidated };
     }
 
-    case 'vault.verify': {
-      const p = params as { passphrase: string; salt: string; wrappedDek: string };
-      const valid = await VaultManager.verify(p.passphrase, { salt: p.salt, wrappedDek: p.wrappedDek });
-      return { valid };
+    case 'vault.status':
+      return { unlocked: vault?.isUnlocked() ?? false, generation };
+
+    case 'vault.export': {
+      const p = params as NonNullable<VaultRequest<'vault.export'>['params']>;
+      const owner = requireUnlocked();
+      if (generation !== p.generation) throw new Error('Vault changed before backup');
+      const result = await sealManifest(owner, p.manifest);
+      assertOwner(owner);
+      return result;
+    }
+
+    case 'vault.import': {
+      const p = params as NonNullable<VaultRequest<'vault.import'>['params']>;
+      return openManifest(p.file, p.passphrase);
     }
 
     case 'vault.attachTransferPort': {
       // A port arrives here directly from the main thread; the other end lives
       // in the transfer worker. From now on this worker signs for it.
       const p = params as { port: MessagePort };
+      transferPort?.close();
       transferPort = p.port;
       transferPort.onmessage = (event: MessageEvent<SessionRequest>) => {
         void handleSessionRequest(event.data);
@@ -216,25 +279,24 @@ async function dispatch<M extends VaultMethod>(
 
     case 'creds.encrypt': {
       const p = params as { credentials: CredentialPlaintext };
-      const payload = await requireUnlocked().encryptCredentials(p.credentials);
-      return { payload };
+      const owner = requireUnlocked();
+      const payload = await owner.encryptCredentials(p.credentials);
+      assertOwner(owner);
+      return { payload, generation };
     }
 
-    // Galeon import. The file text arrives from a file the user picked, it is
-    // parsed here, and the credentials are encrypted here — so the plaintext
-    // keys exist in this worker and nowhere else. The preview the main thread
-    // renders is built from the secret-free entries only.
     case 'galeon.preview': {
-      const p = params as { text: string };
-      return buildGaleonPreview(p.text);
+      const { file } = params as NonNullable<VaultRequest<'galeon.preview'>['params']>;
+      return buildGaleonPreview(await readGaleon(file));
     }
 
     case 'galeon.prepare': {
-      const p = params as { text: string; expectedHash: string };
-      const manager = requireUnlocked();
-      return prepareGaleonImport(p.text, p.expectedHash, (credentials) =>
-        manager.encryptCredentials(credentials),
-      );
+      const { file, expectedHash } = params as NonNullable<VaultRequest<'galeon.prepare'>['params']>;
+      const owner = requireUnlocked();
+      const prepared = await prepareGaleonImport(await readGaleon(file), expectedHash,
+        (credentials) => owner.encryptCredentials(credentials));
+      assertOwner(owner);
+      return { ...prepared, generation };
     }
 
     case 's3.test': {
@@ -329,35 +391,28 @@ async function dispatch<M extends VaultMethod>(
       const p = params as NonNullable<VaultRequest<'s3.getText'>['params']>;
       const creds = await resolveCredentials(p.credentials);
       const client = await sessionClient(p.profile, creds);
-      const maxBytes = p.maxBytes ?? 2 * 1024 * 1024;
+      const maxBytes = Math.min(p.maxBytes ?? MAX_EDITOR_BYTES, MAX_EDITOR_BYTES);
       const res = await client.getObject(p.key);
       if (!res.ok) throw new Error(`GetObject failed: ${res.status} ${res.statusText}`);
 
       const declared = parseInt(res.headers.get('content-length') ?? '0', 10);
       if (declared > maxBytes) {
+        void res.body?.cancel().catch(() => {});
         throw new Error(
           `File is ${formatBytesForWorker(declared)} — the editor opens files up to 2 MB. Use Download instead.`,
         );
       }
 
-      const buffer = await res.arrayBuffer();
-      if (buffer.byteLength > maxBytes) {
-        throw new Error('File is too large for the in-browser editor.');
-      }
-
-      return {
-        text: new TextDecoder('utf-8', { fatal: false }).decode(buffer),
-        size: buffer.byteLength,
-        contentType: res.headers.get('content-type'),
-        eTag: res.headers.get('etag'),
-      };
+      const decoded = await readEditorText(res, maxBytes);
+      const { conditionalPut } = await client.editorWriteSupport();
+      return { ...decoded, conditionalPut };
     }
 
     case 's3.putText': {
       const p = params as NonNullable<VaultRequest<'s3.putText'>['params']>;
       const creds = await resolveCredentials(p.credentials);
       const client = await sessionClient(p.profile, creds);
-      const result = await client.putObject(p.key, p.body, p.contentType);
+      const result = await client.putTextIfMatch(p.key, p.body, p.contentType, p.eTag);
       return { eTag: result.eTag };
     }
 
@@ -418,7 +473,7 @@ async function dispatch<M extends VaultMethod>(
     case 's3.listBuckets': {
       const p = params as NonNullable<VaultRequest<'s3.listBuckets'>['params']>;
       const creds = await resolveCredentials(p.credentials);
-      const buckets = await listBucketsFromServer(p.profile, creds, p.profile.proxyToken);
+      const buckets = await listBucketsFromServer(p.profile, creds.material, p.profile.proxyToken);
       return { buckets };
     }
 

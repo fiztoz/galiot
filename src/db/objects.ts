@@ -1,4 +1,5 @@
 import type { AppDB, ConnectionRow } from './client';
+import type { EncryptedPayload } from '../vault/crypto';
 import type { S3ProfileConfig } from '../vault/protocol';
 import { vaultService } from '../vault/vaultService';
 import { getSealedCredentials } from '../vault/repository';
@@ -25,6 +26,33 @@ export function profileConfig(profile: ConnectionRow): S3ProfileConfig {
   };
 }
 
+interface ListingSnapshot {
+  profile: ConnectionRow;
+  sealed: EncryptedPayload;
+}
+
+/** Read the credentials and verify their target in one snapshot, including legacy JSONB strings. */
+async function listingCredentials(db: Pick<AppDB, 'query'>, profile: ConnectionRow): Promise<EncryptedPayload> {
+  const { rows } = await db.query<{ encrypted_credentials: EncryptedPayload | string; custom_headers: unknown }>(
+    `SELECT encrypted_credentials, custom_headers FROM profiles
+      WHERE id = $1 AND bucket = $2 AND endpoint = $3 AND region = $4 AND path_style = $5
+        AND date_trunc('milliseconds', updated_at) = $6`,
+    [profile.id, profile.bucket, profile.endpoint, profile.region, profile.path_style, new Date(profile.updated_at).toISOString()],
+  );
+  const row = rows[0];
+  if (!row || JSON.stringify(parseStoredHeaders(row.custom_headers)) !== JSON.stringify(parseStoredHeaders(profile.custom_headers))) {
+    throw new Error('Connection changed while reading the listing. Refresh to use the current settings.');
+  }
+  return typeof row.encrypted_credentials === 'string' ? JSON.parse(row.encrypted_credentials) : row.encrypted_credentials;
+}
+
+async function verifyListingSnapshot(tx: Pick<AppDB, 'query'>, { profile, sealed }: ListingSnapshot): Promise<void> {
+  const current = await listingCredentials(tx, profile);
+  if (current.iv !== sealed.iv || current.ciphertext !== sealed.ciphertext) {
+    throw new Error('Connection credentials changed while reading the listing. Refresh to use the current identity.');
+  }
+}
+
 function lastSegment(key: string): string {
   const trimmed = key.endsWith('/') ? key.slice(0, -1) : key;
   const slash = trimmed.lastIndexOf('/');
@@ -41,8 +69,12 @@ export async function replaceListing(
   bucket: string,
   prefix: string,
   listing: Pick<ListObjectsResult, 'objects' | 'prefixes'>,
+  signal?: AbortSignal,
+  snapshot?: ListingSnapshot,
 ): Promise<void> {
   await db.transaction(async (tx) => {
+    signal?.throwIfAborted();
+    if (snapshot) await verifyListingSnapshot(tx, snapshot);
     await tx.query(
       `DELETE FROM objects_cache WHERE profile_id = $1 AND bucket = $2 AND prefix = $3`,
       [profileId, bucket, prefix],
@@ -50,6 +82,7 @@ export async function replaceListing(
 
     const dirSet = new Set(listing.prefixes);
     for (const dirPrefix of listing.prefixes) {
+      signal?.throwIfAborted();
       await tx.query(
         `INSERT INTO objects_cache
            (profile_id, bucket, key, prefix, filename, is_dir, size, cached_at)
@@ -65,6 +98,7 @@ export async function replaceListing(
     }
 
     for (const obj of listing.objects) {
+      signal?.throwIfAborted();
       if ((prefix.length > 0 && obj.key === prefix) || dirSet.has(obj.key)) {
         continue;
       }
@@ -96,6 +130,7 @@ export async function replaceListing(
         ],
       );
     }
+    signal?.throwIfAborted();
   });
 }
 
@@ -107,8 +142,9 @@ export async function loadListing(
   db: AppDB,
   profile: ConnectionRow,
   prefix: string,
+  signal?: AbortSignal,
 ): Promise<{ total: number; truncated: boolean }> {
-  const sealed = await getSealedCredentials(db, profile.id);
+  const sealed = await listingCredentials(db, profile);
   const config = profileConfig(profile);
 
   const objects: ListObjectsResult['objects'] = [];
@@ -119,6 +155,7 @@ export async function loadListing(
   let pages = 0;
 
   do {
+    signal?.throwIfAborted();
     const page: ListObjectsResult = await vaultService.call('s3.list', {
       profile: config,
       credentials: { sealed },
@@ -139,7 +176,7 @@ export async function loadListing(
   await replaceListing(db, profile.id, profile.bucket, prefix, {
     objects,
     prefixes: [...prefixes],
-  });
+  }, signal, { profile, sealed });
 
   return { total: objects.length + prefixes.size, truncated };
 }
@@ -151,21 +188,28 @@ export async function deleteKeys(
   keys: string[],
 ): Promise<{ deleted: string[]; errors: { key: string; code: string; message: string }[] }> {
   const sealed = await getSealedCredentials(db, profile.id);
-  const result = await vaultService.call('s3.delete', {
-    profile: profileConfig(profile),
-    credentials: { sealed },
-    keys,
-  });
-
-  await db.transaction(async (tx) => {
-    for (const key of keys) {
-      await tx.query(
-        `DELETE FROM objects_cache WHERE profile_id = $1 AND bucket = $2 AND key = $3`,
-        [profile.id, profile.bucket, key],
+  const result: { deleted: string[]; errors: { key: string; code: string; message: string }[] } = { deleted: [], errors: [] };
+  for (let i = 0; i < keys.length; i += 1000) {
+    const batch = keys.slice(i, i + 1000);
+    const response = await vaultService.call('s3.delete', {
+      profile: profileConfig(profile), credentials: { sealed }, keys: batch,
+    });
+    const deleted = new Set(response.deleted);
+    const failed = new Map(response.errors.map(error => [error.key, error]));
+    const confirmed = batch.filter(key => deleted.has(key) && !failed.has(key));
+    if (confirmed.length) {
+      await db.query(
+        'DELETE FROM objects_cache WHERE profile_id = $1 AND bucket = $2 AND key = ANY($3::text[])',
+        [profile.id, profile.bucket, confirmed],
       );
+      result.deleted.push(...confirmed);
     }
-  });
-
+    for (const key of batch) {
+      const error = failed.get(key);
+      if (error) result.errors.push(error);
+      else if (!deleted.has(key)) result.errors.push({ key, code: 'Unconfirmed', message: 'Deletion was not acknowledged' });
+    }
+  }
   return result;
 }
 
@@ -197,7 +241,7 @@ export async function harvestFolderStats(
   rootKey: string,
   maxEntries = 20000,
 ): Promise<{ truncated: boolean; entryCount: number }> {
-  const sealed = await getSealedCredentials(db, profile.id);
+  const sealed = await listingCredentials(db, profile);
   const stats = await vaultService.call('s3.folderStats', {
     profile: profileConfig(profile),
     credentials: { sealed },
@@ -206,6 +250,7 @@ export async function harvestFolderStats(
   });
 
   await db.transaction(async (tx) => {
+    await verifyListingSnapshot(tx, { profile, sealed });
     for (const key of stats.directories) {
       await tx.query(
         `INSERT INTO objects_cache

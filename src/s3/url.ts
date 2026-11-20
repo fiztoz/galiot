@@ -108,27 +108,21 @@ export function buildS3Url(
 ): URL {
   // Strip every trailing slash: URL.toString() always ends with one, which
   // would otherwise produce a double slash in the object path.
-  const base = addressing.endpoint.replace(/\/+$/, '');
   const resolved = effectiveAddressing(addressing);
-
-  let urlStr: string;
+  const url = new URL(resolved.endpoint);
+  if (url.search || url.hash) throw new Error('The S3 endpoint cannot contain a query or fragment.');
+  let path = url.pathname.replace(/\/+$/, '');
   if (resolved.pathStyle) {
-    urlStr = `${base}/${encodeURIComponent(resolved.bucket)}`;
-    if (key) {
-      urlStr += `/${encodeKey(key)}`;
-    } else {
-      urlStr += '/';
-    }
+    path += `/${encodeURIComponent(resolved.bucket)}`;
   } else {
-    const url = new URL(addressing.endpoint);
-    url.hostname = `${resolved.bucket}.${url.hostname}`;
-    urlStr = url.toString().replace(/\/+$/, '');
-    if (key) {
-      urlStr += `/${encodeKey(key)}`;
-    }
+    const host = `${resolved.bucket}.${url.hostname}`.toLowerCase();
+    url.hostname = host;
+    if (url.hostname !== host) throw new Error('Invalid virtual-hosted bucket name.');
   }
-
-  const url = new URL(urlStr);
+  if (key) path += '/' + encodeKey(key);
+  else if (resolved.pathStyle || !path) path += '/';
+  url.pathname = path;
+  if (url.pathname !== path) throw new Error('The S3 path cannot be represented exactly.');
   if (queryParams) {
     for (const [name, value] of Object.entries(queryParams)) {
       if (value !== undefined && value !== null) {
@@ -139,7 +133,18 @@ export function buildS3Url(
   return url;
 }
 
+/** S3 keys are literal names. URL dot-segment normalization cannot be undone after signing. */
+export function assertSafeObjectKey(key: string): void {
+  if (!key || /[\uD800-\uDFFF]/u.test(key) || new TextEncoder().encode(key).length > 1024) {
+    throw new Error('An S3 object key must be 1–1024 UTF-8 bytes.');
+  }
+  if (key.split('/').some(segment => segment === '.' || segment === '..')) {
+    throw new Error('Object keys containing a standalone dot segment cannot be addressed exactly.');
+  }
+}
+
 /** Percent-encodes each path segment but keeps the separators intact. */
 export function encodeKey(key: string): string {
+  assertSafeObjectKey(key);
   return key.split('/').map(encodeURIComponent).join('/');
 }

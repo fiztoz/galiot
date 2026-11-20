@@ -78,6 +78,9 @@ gate
 server's own refusal to start. Called from deployment.yaml and the test pod. */}}
 {{- define "galiot.validateConfig" -}}
 {{- $g := .Values.gate -}}
+{{- if not (kindIs "bool" $g.open) -}}
+{{- fail "gate.open must be a boolean (true or false)." -}}
+{{- end -}}
 {{- $value := $g.value | toString | trim -}}
 {{- if and $g.open (or $value $g.existingSecret) -}}
 {{- fail "gate.open=true cannot be combined with gate.value or gate.existingSecret — pick exactly one gate mode." -}}
@@ -90,6 +93,9 @@ server's own refusal to start. Called from deployment.yaml and the test pod. */}
 {{- end -}}
 {{- if and $g.existingSecret (not ($g.existingSecretKey | toString | trim)) -}}
 {{- fail "gate.existingSecretKey must not be empty when gate.existingSecret is set." -}}
+{{- end -}}
+{{- if not (has (toString .Values.replicaCount) (list "0" "1")) -}}
+{{- fail "replicaCount must be 0 or 1 because sessions and share revocations are pod-local." -}}
 {{- end -}}
 {{- $port := int .Values.service.port -}}
 {{- if or (lt $port 1024) (gt $port 65535) -}}
@@ -145,6 +151,34 @@ source of truth so the two can never disagree. Emits a YAML list fragment. */}}
       key: {{ include "galiot.gateSecretKey" . }}
 {{- end }}
 {{- end }}
+
+{{/* Browser origins inferred from concrete Ingress rules. An explicit env
+entry takes precedence, including valueFrom and an intentionally empty list. */}}
+{{- define "galiot.ingressPublicOrigins" -}}
+{{- $generate := and .Values.gate.open .Values.ingress.enabled -}}
+{{- range .Values.extraEnv -}}
+{{- if eq .name "GALIOT_PUBLIC_ORIGINS" -}}
+{{- $generate = false -}}
+{{- end -}}
+{{- end -}}
+{{- if $generate -}}
+{{- $tlsHosts := list -}}
+{{- range .Values.ingress.tls -}}
+{{- $tlsHosts = concat $tlsHosts (.hosts | default list) -}}
+{{- end -}}
+{{- $origins := list -}}
+{{- range .Values.ingress.hosts -}}
+{{- $host := .host | default "" | toString -}}
+{{- if regexMatch `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$` $host -}}
+{{- /* A TLS wildcard covers exactly the leftmost label. */ -}}
+{{- $wildcard := regexReplaceAll "^[^.]+" $host "*" -}}
+{{- $tls := or (has $host $tlsHosts) (has $wildcard $tlsHosts) -}}
+{{- $origins = append $origins (printf "%s://%s" (ternary "https" "http" $tls) $host) -}}
+{{- end -}}
+{{- end -}}
+{{- join "," (uniq $origins) -}}
+{{- end -}}
+{{- end -}}
 
 {{/* Branding: mount path, ConfigMap name/key, and env fragment. */}}
 {{- define "galiot.brandingMountPath" -}}

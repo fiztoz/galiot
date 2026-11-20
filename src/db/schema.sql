@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS transfer_tasks (
     status TEXT NOT NULL CHECK (status IN ('queued', 'transferring', 'paused', 'completed', 'failed')),
     speed_bytes_sec BIGINT NOT NULL DEFAULT 0,
     upload_id TEXT,
+    upload_fingerprint TEXT,
+    target_identity TEXT,
+    part_size BIGINT,
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -77,6 +80,7 @@ CREATE TABLE IF NOT EXISTS transfer_parts (
 CREATE TABLE IF NOT EXISTS presigned_history (
     id UUID PRIMARY KEY,
     profile_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    target_identity TEXT,
     bucket TEXT NOT NULL,
     key TEXT NOT NULL,
     url TEXT NOT NULL,

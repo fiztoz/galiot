@@ -1,15 +1,14 @@
 import type { ConnectionRow } from '../db/client';
 import { parseStoredHeaders } from '../s3/customHeaders';
+import { assertConnectionEndpoint } from '../s3/endpoint';
 import { BRAND } from '../branding';
 
 /**
  * Share one connection without its secrets.
  *
  * The payload carries only what a colleague needs to point at the same bucket:
- * endpoint, region, bucket, addressing, and the screened custom headers. Keys
- * are never included — the recipient types their own. Sharing keys is a
- * different decision with a different tool: the ciphertext-only vault backup
- * (Vault settings), which moves a whole vault under its passphrase.
+ * endpoint, region, bucket and addressing. The sender can also select screened
+ * routing headers. The recipient supplies their own S3 credentials.
  */
 
 export const CONNECTION_SHARE_KIND = 'galiot.connection' as const;
@@ -25,7 +24,8 @@ export interface ConnectionShare {
   headers: Record<string, string>;
 }
 
-export function buildConnectionShare(profile: ConnectionRow): ConnectionShare {
+export function buildConnectionShare(profile: ConnectionRow, includeHeaders = false): ConnectionShare {
+  assertConnectionEndpoint(profile.endpoint);
   return {
     kind: CONNECTION_SHARE_KIND,
     version: 1,
@@ -34,12 +34,12 @@ export function buildConnectionShare(profile: ConnectionRow): ConnectionShare {
     region: profile.region,
     bucket: profile.bucket,
     pathStyle: profile.path_style,
-    headers: parseStoredHeaders(profile.custom_headers),
+    headers: includeHeaders ? parseStoredHeaders(profile.custom_headers) : {},
   };
 }
 
-export function connectionShareText(profile: ConnectionRow): string {
-  return JSON.stringify(buildConnectionShare(profile), null, 2);
+export function connectionShareText(profile: ConnectionRow, includeHeaders = false): string {
+  return JSON.stringify(buildConnectionShare(profile, includeHeaders), null, 2);
 }
 
 /**
@@ -74,15 +74,7 @@ export function parseConnectionShare(text: string): ConnectionShare {
     return value;
   };
   const endpoint = str(row.endpoint, 'endpoint', 2048);
-  let url: URL;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    throw new Error('The connection file has an invalid endpoint URL.');
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('The endpoint must be http or https.');
-  }
+  assertConnectionEndpoint(endpoint);
   return {
     kind: CONNECTION_SHARE_KIND,
     version: 1,

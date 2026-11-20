@@ -1,4 +1,14 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- $egress := .Values.networkPolicy.egress }}
+{{- $manageEgress := not (kindIs "invalid" $egress) }}
+{{- if and $manageEgress (not (kindIs "slice" $egress)) }}
+{{- fail "networkPolicy.egress must be null or a list of Kubernetes egress rules." }}
+{{- end }}
+{{- range $egress }}
+{{- if not (kindIs "map" .) }}
+{{- fail "Each networkPolicy.egress entry must be a Kubernetes egress rule." }}
+{{- end }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -11,14 +21,21 @@ spec:
       {{- include "galiot.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if $manageEgress }}
     - Egress
+    {{- end }}
   ingress:
-    - from:
-        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
-      ports:
+    - ports:
         - protocol: TCP
           port: {{ .Values.service.port }}
-  # Egress stays open: the server must reach arbitrary S3 endpoints and DNS.
-  egress:
-    - {}
+      {{- with .Values.networkPolicy.ingressFrom }}
+      {{- /* The old default [{}] meant all sources. Kubernetes represents that by omitting from. */}}
+      {{- if not (deepEqual . (list (dict))) }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+  {{- if $manageEgress }}
+  egress: {{- toYaml $egress | nindent 4 }}
+  {{- end }}
 {{- end }}

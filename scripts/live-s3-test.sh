@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-CONTAINER=galiot-live-s3
+CONTAINER="galiot-live-s3-$$"
 PORT="${GALIOT_MINIO_PORT:-9000}"
 ENDPOINT="http://127.0.0.1:${PORT}"
 BUCKET=galiot-test
@@ -51,10 +51,6 @@ trap cleanup EXIT
 if ! docker info >/dev/null 2>&1; then
   echo "Docker is not running. Start colima (colima start) or Docker Desktop first." >&2
   exit 2
-fi
-
-if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER}"; then
-  docker rm -f "${CONTAINER}" >/dev/null
 fi
 
 echo "Starting Zenko CloudServer on ${ENDPOINT}…"

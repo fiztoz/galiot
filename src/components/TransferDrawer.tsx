@@ -42,7 +42,7 @@ export function TransferDrawer(_props: TransferDrawerProps) {
 
   const tasks = useLiveQuery<TransferTaskRow>(
     `SELECT id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred,
-            status, speed_bytes_sec, upload_id, error_message, created_at, updated_at
+            status, speed_bytes_sec, upload_id, upload_fingerprint, part_size, error_message, created_at, updated_at
        FROM transfer_tasks
       ORDER BY created_at DESC
       LIMIT 50`,
@@ -328,12 +328,12 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           </button>
                         )}
 
-                        {task.status === 'failed' && task.upload_id && (
+                        {task.status === 'failed' && task.error_message !== 'Canceled by user' && (
                           <button
                             type="button"
                             onClick={() => handleResume(task)}
                             className="p-1 rounded text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                            title="Retry with the same file"
+                            title={task.direction === 'upload' ? 'Retry with the same file' : 'Retry download'}
                             aria-label="Retry transfer"
                           >
                             <RotateCcw size={13} />

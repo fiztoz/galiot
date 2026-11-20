@@ -1,10 +1,14 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { runMigrations, SCHEMA_VERSION } from './migrations';
 import { wipeVaultData } from '../vault/repository';
-import { replaceListing } from './objects';
-import type { AppDB } from './client';
+import { matchesStoredTarget } from '../transfer/manager';
+import type { DownloadJob } from '../transfer/protocol';
+import { transferTargetIdentity } from '../transfer/session';
+import { vaultService } from '../vault/vaultService';
+import { deleteKeys, profileConfig, replaceListing } from './objects';
+import type { AppDB, ConnectionRow } from './client';
 
 async function freshDb(): Promise<PGlite> {
   // Mirrors the worker's extension set — schema.sql requires pg_trgm.
@@ -24,6 +28,23 @@ async function seedProfile(db: PGlite): Promise<void> {
 }
 
 describe('schema migrations', () => {
+  test('upgrades a v4 transfer ledger without trusting legacy upload parts', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await seedProfile(db);
+      await db.exec(`ALTER TABLE transfer_tasks DROP COLUMN upload_fingerprint, DROP COLUMN part_size, DROP COLUMN target_identity;
+                     UPDATE _meta SET value = '4' WHERE key = 'schema_version'`);
+      await db.query(`INSERT INTO transfer_tasks (id, profile_id, direction, remote_key, file_size, status, upload_id)
+                     VALUES ($1, $2, 'upload', 'item', 100, 'paused', 'old')`, [crypto.randomUUID(), PROFILE_ID]);
+      await runMigrations(db);
+      expect((await db.query('SELECT upload_id, upload_fingerprint, part_size, target_identity FROM transfer_tasks')).rows)
+        .toEqual([{ upload_id: 'old', upload_fingerprint: null, part_size: null, target_identity: null }]);
+    } finally {
+      await db.close();
+    }
+  });
+
   test('runMigrations applies the schema and is idempotent', async () => {
     const db = await freshDb();
 
@@ -36,7 +57,7 @@ describe('schema migrations', () => {
     expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION));
     // Pinned so bumping the schema is a deliberate, reviewed edit: a new version
     // needs a migration step for every vault already in the field.
-    expect(SCHEMA_VERSION).toBe(4);
+    expect(SCHEMA_VERSION).toBe(6);
 
     const tables = await db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
@@ -215,7 +236,7 @@ describe('schema migrations', () => {
     const upgraded = await db.query<{ network: string }>(`SELECT network FROM profiles WHERE name = 'browser'`);
     expect(upgraded.rows[0]?.network).toBe('server');
     const version = await db.query<{ value: string }>(`SELECT value FROM _meta WHERE key = 'schema_version'`);
-    expect(version.rows[0]?.value).toBe('4');
+    expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION));
 
     await db.close();
   });
@@ -395,6 +416,66 @@ describe('explorer SQL patterns', () => {
 
     await db.close();
   });
+});
+
+test('transfer dispatch preserves the original authority after profile edits and refuses ambiguous legacy jobs', async () => {
+  const db = await freshDb();
+  try {
+    await runMigrations(db);
+    await seedProfile(db);
+    const profile = (await db.query<ConnectionRow>('SELECT * FROM profiles')).rows[0]!;
+    const credentials = { iv: 'def', ciphertext: 'abc' };
+    const target = profileConfig(profile);
+    const job: DownloadJob = { taskId: crypto.randomUUID(), profileId: profile.id, target, credentials,
+      key: 'file.bin', expectedSize: 3, destination: { kind: 'staged' } };
+    const appDb = db as unknown as AppDB;
+    const id = await transferTargetIdentity({ ...target, profileId: profile.id, credentials });
+    await db.query(`INSERT INTO transfer_tasks (id, profile_id, direction, remote_key, file_size, status)
+        VALUES ($1, $2, 'download', 'file.bin', 3, 'paused')`, [job.taskId, profile.id]);
+    expect(await matchesStoredTarget(appDb, job)).toBe(false);
+    await db.query('UPDATE transfer_tasks SET target_identity = $1 WHERE id = $2', [id, job.taskId]);
+    expect(await matchesStoredTarget(appDb, job)).toBe(true);
+    await db.query("UPDATE profiles SET name = 'renamed' WHERE id = $1", [profile.id]);
+    expect(await matchesStoredTarget(appDb, job)).toBe(true);
+    await db.query("UPDATE profiles SET bucket = 'example-bucket' WHERE id = $1", [profile.id]);
+    expect(await matchesStoredTarget(appDb, job)).toBe(false);
+    expect(await matchesStoredTarget(appDb, { ...job, target: { ...target, bucket: 'example-bucket' } })).toBe(false);
+    const rotated = { iv: 'rotated', ciphertext: 'new' };
+    await db.query('UPDATE profiles SET bucket = $1, encrypted_credentials = $2 WHERE id = $3',
+      [target.bucket, JSON.stringify(rotated), profile.id]);
+    expect(await matchesStoredTarget(appDb, { ...job, credentials: rotated })).toBe(false);
+    expect(await matchesStoredTarget(appDb, { ...job, key: 'another.bin' })).toBe(false);
+  } finally {
+    await db.close();
+  }
+});
+
+test('a bulk delete evicts only acknowledged keys across S3 batch boundaries', async () => {
+  const db = await freshDb();
+  const keys = Array.from({ length: 1002 }, (_, i) => `key-${i}`);
+  const rpc = spyOn(vaultService, 'call');
+  try {
+    await runMigrations(db);
+    await seedProfile(db);
+    const profile = (await db.query<ConnectionRow>('SELECT * FROM profiles')).rows[0]!;
+    await db.query(`INSERT INTO objects_cache (profile_id, bucket, key, prefix, filename, is_dir, size)
+        SELECT $1, $2, name, '', name, false, 1 FROM unnest($3::text[]) AS name`, [profile.id, profile.bucket, keys]);
+    rpc.mockResolvedValueOnce({ deleted: keys.slice(1, 1000),
+      errors: [{ key: keys[0]!, code: 'Denied', message: 'Retained' }] });
+    rpc.mockResolvedValueOnce({ deleted: [keys[1000]!], errors: [] });
+    const result = await deleteKeys(db as unknown as AppDB, profile, keys);
+    expect(rpc.mock.calls.map(([, params]) => (params as { keys: string[] }).keys.length)).toEqual([1000, 2]);
+    expect(result.errors.map(err => err.key)).toEqual([keys[0]!, keys[1001]!]);
+    expect((await db.query('SELECT key FROM objects_cache ORDER BY key')).rows).toEqual([{ key: keys[0] }, { key: keys[1001] }]);
+    const obsolete = new AbortController();
+    obsolete.abort();
+    await expect(replaceListing(db as unknown as AppDB, profile.id, profile.bucket, '',
+      { prefixes: [], objects: [] }, obsolete.signal)).rejects.toThrow();
+    expect((await db.query('SELECT key FROM objects_cache')).rows).toHaveLength(2);
+  } finally {
+    rpc.mockRestore();
+    await db.close();
+  }
 });
 
 describe('wipeVaultData (vault delete)', () => {

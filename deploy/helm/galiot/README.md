@@ -22,10 +22,11 @@ helm install galiot deploy/helm/galiot \
   --set gate.existingSecret=galiot-gate
 ```
 
-Released charts are published to GHCR as OCI artifacts (`chart-v*` tags):
+Released charts are published to GHCR as OCI artifacts (`chart-v*` tags).
+Set `CHART_VERSION` to the published version you intend to install.
 
 ```bash
-helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version 0.2.0 \
+helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version "$CHART_VERSION" \
   --set gate.value="$(openssl rand -hex 24)"
 ```
 
@@ -33,7 +34,8 @@ The gate protects the Galiot API. It is **not** an S3 key. Enter it in the
 app's *Server access* panel. A non-loopback bind refuses to start without a
 gate, so the chart fails the render when none is configured. `gate.open=true`
 explicitly accepts an unauthenticated public bind — dangerous, test networks
-only.
+only. Supply a YAML boolean or use `--set gate.open=true`. Quoted strings
+and numbers fail the render.
 
 Reach the app:
 
@@ -42,16 +44,20 @@ kubectl port-forward svc/galiot 8788:8788
 # open http://127.0.0.1:8788
 ```
 
-## Keep replicaCount at 1
+## Upgrades and downtime
 
-Sessions and share-link grants live in **one pod's memory** (15-minute session
-TTL, 1-hour share grants). With more replicas:
+The chart accepts one serving replica, or zero for maintenance. Sessions,
+share grants and revocations live in the issuing pod. Keep a single issuer
+behind the Service and scale capacity with `resources`.
 
-- a share link minted on pod A returns 404 when pod B answers;
-- operator sessions bounce between pods (clients retry, transfers degrade).
-
-There is no shared session store, so this chart ships no HPA. Scale vertically
-(`resources`) instead.
+During a pod-template upgrade, `Recreate` waits for the old pod to terminate
+before starting its replacement. Schedule downtime until the replacement is
+ready. Active transfers can be interrupted. Reconnect and reissue any
+through-server links that recipients still need. Direct S3 presigned links
+retain their original expiry. For a planned restart, use
+`kubectl rollout restart deployment/<name>`. Manually deleting a pod can
+start its replacement while the old pod is terminating.
+[Kubernetes Deployment strategies](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment)
 
 ## Custom name and logo (white-label)
 
@@ -105,6 +111,26 @@ ingress:
     - secretName: galiot-tls
       hosts:
         - galiot.example.com
+```
+
+In open mode (`gate.open: true`), the chart sets `GALIOT_PUBLIC_ORIGINS`
+from the concrete hostnames in the enabled Ingress. Each host gets HTTPS
+when it matches an `ingress.tls[].hosts` entry and HTTP otherwise. For the
+example above, the generated value is `https://galiot.example.com`.
+A TLS wildcard covers one DNS label. [Kubernetes Ingress hostnames](https://kubernetes.io/docs/concepts/services-networking/ingress/#hostname-wildcards)
+
+For a wildcard or hostless route, a Gateway, an external proxy, or a public
+port other than 80 for HTTP or 443 for HTTPS, set the complete list of browser
+origins in `extraEnv`. This entry replaces the inferred list and also accepts
+`valueFrom`. Use comma-separated absolute HTTP or HTTPS origins with the port
+users visit. Configure the proxy to preserve the public `Host` header,
+including any non-default port. Loopback and literal IP access work without
+an entry.
+
+```yaml
+extraEnv:
+  - name: GALIOT_PUBLIC_ORIGINS
+    value: "https://galiot.example.com,https://files.example.com:8443"
 ```
 
 Two server behaviours matter behind a proxy:
@@ -161,8 +187,43 @@ at it (see `docs/OPERATIONS.md`).
   app never talks to the Kubernetes API.
 - `service.port` must be ≥1024 (non-root cannot bind privileged ports); the
   render fails otherwise.
-- Optional NetworkPolicy (`networkPolicy.enabled`) and PDB (`pdb.create`).
-  Egress is left open because the server must reach arbitrary S3 endpoints.
+- Optional PodDisruptionBudget (`pdb.create`).
+
+### NetworkPolicy
+
+With `networkPolicy.enabled: true`, the chart allows ingress on the HTTP port.
+Set `ingressFrom` to select allowed sources. The default policy manages ingress
+only. When upgrading from 0.2.0, any other policy that isolates these pods for
+egress will now determine which outbound connections succeed.
+
+To manage egress here, supply a list of Kubernetes egress rules. This example
+allows DNS to labeled pods and HTTPS to a single S3 address. Substitute your
+cluster's resolver and endpoint.
+
+```yaml
+networkPolicy:
+  enabled: true
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock: {cidr: 10.0.0.5/32}
+      ports:
+        - {protocol: TCP, port: 443}
+```
+
+`egress: []` isolates the pods for egress and grants no outbound connections
+through this policy. Other matching policies can still allow traffic.
+`egress: [{}]` explicitly allows all destinations and ports.
+[Kubernetes NetworkPolicies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
 
 ## Verify
 
@@ -181,7 +242,7 @@ restrict `networkPolicy.ingressFrom`, allow that pod too or the test is blocked.
 
 | Value | Default | Meaning |
 |---|---|---|
-| `replicaCount` | `1` | Keep at 1 — memory-only sessions/share grants |
+| `replicaCount` | `1` | One serving replica, or zero for maintenance |
 | `image.repository` / `image.tag` / `image.digest` | `ghcr.io/fiztoz/galiot` / appVersion / `""` | Image; digest wins over tag |
 | `gate.value` | `""` | Chart-managed gate Secret |
 | `gate.existingSecret` / `gate.existingSecretKey` | `""` / `gate` | Bring-your-own gate Secret |
@@ -192,7 +253,8 @@ restrict `networkPolicy.ingressFrom`, allow that pod too or the test is blocked.
 | `service.port` | `8788` | Service + container listen port (≥1024) |
 | `ingress.enabled` | `false` | Ingress with hosts/TLS |
 | `gateway.enabled` | `false` | Gateway API HTTPRoute (+ optional ReferenceGrant) |
-| `networkPolicy.enabled` | `false` | Ingress restriction; egress open |
+| `networkPolicy.enabled` | `false` | Enable the ingress policy |
+| `networkPolicy.egress` | `null` | Optional list of outbound rules |
 | `pdb.create` | `false` | PDB; with 1 replica prefer `maxUnavailable: 1` |
 | `resources` | 100m/128Mi req, 512Mi limit | No CPU limit by design |
 | `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Escape hatches |

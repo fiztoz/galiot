@@ -13,6 +13,7 @@ import {
 } from '../s3/customHeaders';
 import { diagnoseCors } from '../s3/diagnostics';
 import { normalizeEndpoint } from '../s3/url';
+import { assertConnectionEndpoint } from '../s3/endpoint';
 import { getProxyToken } from '../server/session';
 import type { ConnectionShare } from '../vault/share';
 import { useFocusTrap } from '../lib/useFocusTrap';
@@ -159,6 +160,11 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
     | { ok: false; error: string } => {
     if (!form.name.trim()) return { ok: false, error: 'Connection name is required.' };
     if (!form.endpoint.trim()) return { ok: false, error: 'Endpoint is required.' };
+    try {
+      assertConnectionEndpoint(normalizeEndpoint(form.endpoint));
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'Invalid endpoint.' };
+    }
     if (!form.bucket.trim()) return { ok: false, error: 'Bucket name is required.' };
 
     // Validated here so neither Save nor Test can proceed with a header the

@@ -27,6 +27,8 @@ describe('presetsFromMetaContent', () => {
       's3.example.com',
       '//s3.example.com',
       'https://user:pass@s3.example.com',
+      'https://s3.example.com?token=fixture',
+      'https://s3.example.com#fixture',
       'https://s3.example.com\u0000',
       'https://' + 'x'.repeat(2048),
       42,

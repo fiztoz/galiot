@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, Download, Share2, X } from 'lucide-react';
 import type { ConnectionRow } from '../db/client';
 import { connectionShareText } from '../vault/share';
+import { parseStoredHeaders } from '../s3/customHeaders';
 import { useFocusTrap } from '../lib/useFocusTrap';
 
 interface ShareConnectionDialogProps {
@@ -12,7 +13,15 @@ interface ShareConnectionDialogProps {
 /** Exports one connection as secret-free JSON: copy it or save it as a file. */
 export function ShareConnectionDialog({ profile, onClose }: ShareConnectionDialogProps) {
   const [copied, setCopied] = useState(false);
-  const text = connectionShareText(profile);
+  const [includeHeaders, setIncludeHeaders] = useState(false);
+  const hasHeaders = Object.keys(parseStoredHeaders(profile.custom_headers)).length > 0;
+  let text = '';
+  let error = '';
+  try {
+    text = connectionShareText(profile, includeHeaders);
+  } catch (err) {
+    error = err instanceof Error ? err.message : 'Edit the endpoint before sharing.';
+  }
   const trapRef = useFocusTrap<HTMLDivElement>();
 
   useEffect(() => {
@@ -74,9 +83,15 @@ export function ShareConnectionDialog({ profile, onClose }: ShareConnectionDialo
         </div>
         <div className="p-6 space-y-4">
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
-            This carries the endpoint, bucket, and settings — <span className="font-medium">no keys</span>.
-            The recipient imports it and types their own credentials.
+            Share the endpoint and bucket settings. The recipient supplies their own S3 credentials.
           </p>
+          {hasHeaders && !error && (
+            <label className="flex gap-2 text-sm">
+              <input type="checkbox" checked={includeHeaders} onChange={e => setIncludeHeaders(e.target.checked)} />
+              Include custom header values in the shared JSON
+            </label>
+          )}
+          {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           <textarea
             readOnly
             value={text}
@@ -89,6 +104,7 @@ export function ShareConnectionDialog({ profile, onClose }: ShareConnectionDialo
             <button
               type="button"
               onClick={() => void copy()}
+              disabled={Boolean(error)}
               className="flex-1 inline-flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 rounded-lg font-medium text-sm"
             >
               {copied ? <Check size={15} /> : <Copy size={15} />}
@@ -97,6 +113,7 @@ export function ShareConnectionDialog({ profile, onClose }: ShareConnectionDialo
             <button
               type="button"
               onClick={download}
+              disabled={Boolean(error)}
               className="flex-1 inline-flex items-center justify-center gap-2 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 px-4 py-2.5 rounded-lg font-medium text-sm"
             >
               <Download size={15} />

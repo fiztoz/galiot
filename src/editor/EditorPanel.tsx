@@ -27,7 +27,7 @@ import {
 } from '@codemirror/language';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-import { MergeView, type DirectMergeConfig } from '@codemirror/merge';
+import { MergeView } from '@codemirror/merge';
 import { X, Save, Columns2, PenLine, Loader2, AlertTriangle, CheckCircle2, FileText } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
 import { profileConfig } from '../db/objects';
@@ -38,6 +38,7 @@ import { languageSupport } from './languages';
 import { formatBytes } from '../lib/format';
 import { useFocusTrap } from '../lib/useFocusTrap';
 import { FilePreview } from './FilePreview';
+import { isStrongETag } from '../s3/clientHeaders';
 
 interface EditorPanelProps {
   db: AppDB;
@@ -140,6 +141,9 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [eTag, setETag] = useState<string | null>(null);
+  const [contentType, setContentType] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [original, setOriginal] = useState('');
@@ -160,8 +164,6 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const [langResolved, setLangResolved] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
-  const mergeRef = useRef<MergeView | null>(null);
   const currentTextRef = useRef('');
   const trapRef = useFocusTrap<HTMLDivElement>();
 
@@ -175,37 +177,53 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose, saving]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const detectedMedia = mediaKind(filename, file.content_type);
-      if (detectedMedia !== null) {
-        setMedia(detectedMedia);
-        return;
-      }
-
-      const sealed = await getSealedCredentials(db, profile.id);
-      const result = await vaultService.call('s3.getText', {
-        profile: profileConfig(profile),
-        credentials: { sealed },
-        key: file.key,
-      });
-      setOriginal(result.text);
-      currentTextRef.current = result.text;
-      setMedia(mediaKind(filename, result.contentType));
-      setLangSupport(await languageSupport(detectLanguage(filename)));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLangResolved(true);
-      setLoading(false);
-    }
-  }, [db, profile, file.key, file.content_type, filename]);
+  const readRemote = useCallback(async () => {
+    const sealed = await getSealedCredentials(db, profile.id);
+    return vaultService.call('s3.getText', {
+      profile: profileConfig(profile), credentials: { sealed }, key: file.key,
+    });
+  }, [db, profile, file.key]);
 
   useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setLangResolved(false);
+    setDirty(false);
+    setError(null);
+    setSaveError(null);
+    setNotice(null);
+    setETag(null);
+    async function load() {
+      try {
+        const detectedMedia = mediaKind(filename, file.content_type);
+        if (detectedMedia !== null) {
+          setMedia(detectedMedia);
+          return;
+        }
+
+        const result = await readRemote();
+        const support = await languageSupport(detectLanguage(filename));
+        if (!active) return;
+        setOriginal(result.text);
+        setETag(result.conditionalPut ? result.eTag : null);
+        setContentType(result.contentType);
+        currentTextRef.current = result.text;
+        setMedia(mediaKind(filename, result.contentType));
+        setLangSupport(support);
+        if (!result.conditionalPut) setNotice('Read only — conditional writes have not been verified for this bucket.');
+        else if (!isStrongETag(result.eTag)) setNotice('Read only — the provider did not return a strong ETag.');
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (active) {
+          setLangResolved(true);
+          setLoading(false);
+        }
+      }
+    }
     void load();
-  }, [load]);
+    return () => { active = false; };
+  }, [readRemote, file.content_type, filename]);
 
   // Mount the CodeMirror view for the loaded text.
   useEffect(() => {
@@ -213,105 +231,89 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     // so the gate is `canMountEditor` — resolution finished — not the extension.
     if (!canMountEditor({ loading, error, media, langResolved })) return;
     const container = containerRef.current;
-    if (!container || viewRef.current) return;
-
-    const state = EditorState.create({
-      doc: original,
+    if (!container) return;
+    const base = [...baseExtensions(langSupport), darkTheme, lightTheme, EditorState.lineSeparator.of('\n')];
+    const draft = {
+      doc: currentTextRef.current,
       extensions: [
-        ...baseExtensions(langSupport),
-        darkTheme,
-        lightTheme,
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            currentTextRef.current = update.state.doc.toString();
-            setDirty(true);
-            setNotice(null);
-          }
+        ...base,
+        EditorView.contentAttributes.of({ 'aria-label': 'Local edits' }),
+        EditorState.readOnly.of(!isStrongETag(eTag)),
+        EditorView.editable.of(isStrongETag(eTag)),
+        EditorView.updateListener.of(update => {
+          if (!update.docChanged) return;
+          currentTextRef.current = update.state.sliceDoc();
+          setDirty(currentTextRef.current !== original);
+          setNotice(null);
         }),
       ],
-    });
-
-    const view = new EditorView({ state, parent: container });
-    viewRef.current = view;
-    return () => {
-      view.destroy();
-      viewRef.current = null;
     };
-  }, [loading, error, media, original, filename, langSupport, langResolved]);
-
-  // Mount the side-by-side merge view on demand.
-  useEffect(() => {
-    // Same reasoning as the editor mount: "resolution finished", not "a grammar
-    // was found", so Diff works for plain text too.
-    if (mode !== 'diff' || !viewRef.current || !langResolved) return;
-    const container = containerRef.current;
-    if (!container || mergeRef.current) return;
-
-    const view = viewRef.current;
-    view.dom.style.display = 'none';
-
-    const label = (name: string) => EditorView.contentAttributes.of({ 'aria-label': name });
-
-    const config: DirectMergeConfig = {
-      a: {
-        doc: original,
-        extensions: [
-          ...baseExtensions(langSupport),
-          darkTheme,
-          lightTheme,
-          label('Remote version'),
-          EditorState.readOnly.of(true),
-          EditorView.editable.of(false),
-        ],
-      },
-      b: {
-        doc: currentTextRef.current,
-        extensions: [
-          ...baseExtensions(langSupport),
-          darkTheme,
-          lightTheme,
-          label('Local edits'),
-        ],
-      },
-      parent: container,
-      orientation: 'a-b',
-      highlightChanges: true,
-      gutter: true,
-    };
-
-    const merge = new MergeView(config);
-    mergeRef.current = merge;
-    return () => {
-      merge.destroy();
-      mergeRef.current = null;
-      view.dom.style.display = '';
-    };
-  }, [mode, original, filename, langSupport]);
+    const view = mode === 'edit'
+      ? new EditorView({ state: EditorState.create(draft), parent: container })
+      : new MergeView({
+          a: {
+            doc: original,
+            extensions: [
+              ...base, EditorView.contentAttributes.of({ 'aria-label': 'Remote version' }),
+              EditorState.readOnly.of(true), EditorView.editable.of(false),
+            ],
+          },
+          b: draft,
+          parent: container,
+          orientation: 'a-b',
+          gutter: true,
+          highlightChanges: true,
+        });
+    return () => view.destroy();
+  }, [mode, loading, error, media, original, eTag, langSupport, langResolved]);
 
   const handleSave = useCallback(async () => {
+    if (!isStrongETag(eTag) || saving) return;
     setSaving(true);
-    setError(null);
+    setSaveError(null);
+    const text = currentTextRef.current;
     try {
       const sealed = await getSealedCredentials(db, profile.id);
-      const text = currentTextRef.current;
       const result = await vaultService.call('s3.putText', {
         profile: profileConfig(profile),
         credentials: { sealed },
         key: file.key,
         body: text,
-        contentType: 'text/plain; charset=utf-8',
+        contentType,
+        eTag,
       });
 
       setOriginal(text);
-      setDirty(false);
-      setNotice(`Uploaded — ETag ${result.eTag.slice(0, 24)}${result.eTag.length > 24 ? '…' : ''}`);
+      setDirty(currentTextRef.current !== text);
+      setETag(result.eTag);
+      setNotice(isStrongETag(result.eTag) ? 'Changes uploaded.' : 'Uploaded. Reopen to obtain an ETag before saving again.');
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
-  }, [db, profile, file.key, onSaved]);
+  }, [db, profile, file.key, onSaved, saving, eTag, contentType]);
+
+  async function compareLatest() {
+    setSaving(true);
+    try {
+      const result = await readRemote();
+      if (!result.conditionalPut) throw new Error('Conditional writes are unavailable for this bucket. Your draft is still open.');
+      if (!isStrongETag(result.eTag)) throw new Error('The latest version has no strong ETag. Your draft is still open.');
+      setOriginal(result.text);
+      setContentType(result.contentType);
+      setETag(result.eTag);
+      setDirty(currentTextRef.current !== result.text);
+      setMode('diff');
+      setSaveError(null);
+      setNotice('Review your draft against the latest remote version before saving.');
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div
@@ -370,7 +372,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
           <button
             type="button"
             onClick={() => void handleSave()}
-            disabled={saving || !dirty}
+            disabled={saving || !dirty || !isStrongETag(eTag)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-600 hover:bg-teal-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
@@ -388,10 +390,11 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
         </button>
       </header>
 
-      {error && (
+      {(error || saveError) && (
         <div className="flex-none flex items-start gap-2 px-4 py-2 bg-red-50 dark:bg-red-950/40 border-b border-red-100 dark:border-red-900/40 text-sm text-red-700 dark:text-red-400">
           <AlertTriangle size={14} className="flex-none mt-0.5" />
-          <span className="break-words">{error}</span>
+          <span className="break-words">{error || saveError}</span>
+          {saveError && <button type="button" disabled={saving} onClick={() => void compareLatest()} className="underline">Compare with latest</button>}
         </div>
       )}
 

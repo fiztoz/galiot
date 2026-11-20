@@ -1,3 +1,4 @@
+import { transferManager } from '../transfer/manager';
 import type { AppDB } from '../db/client';
 
 import type { EncryptedPayload } from './crypto';
@@ -5,6 +6,7 @@ import type { CredentialPlaintext } from './protocol';
 import { vaultService } from './vaultService';
 import { SCHEMA_VERSION } from '../db/migrations';
 import { assertSafeCustomHeaders, parseStoredHeaders } from '../s3/customHeaders';
+import { assertConnectionEndpoint } from '../s3/endpoint';
 
 
 const META_SALT = 'salt';
@@ -18,52 +20,69 @@ function headersColumnValue(headers: Record<string, string>): string | null {
 export interface VaultMeta {
   salt: string;
   wrappedDek: string;
+  generation: string;
 }
 
-/** Reads the sealed vault material (salt + wrapped DEK), if the vault exists. */
-export async function readVaultMeta(db: AppDB): Promise<VaultMeta | null> {
-  const res = await db.query<{ key: string; value: string }>(
-    `SELECT key, value FROM _meta WHERE key IN ($1, $2)`,
-    [META_SALT, META_WRAPPED_DEK],
+type VaultQuery = Pick<AppDB, 'query'>;
+
+/** Older vaults used only the two key-material rows. Their wrapped DEK is a stable identity. */
+export async function readVaultMeta(db: VaultQuery): Promise<VaultMeta | null> {
+  const { rows } = await db.query<{ key: string; value: string }>(
+    "SELECT key, value FROM _meta WHERE key IN ('salt', 'wrapped_dek', 'vault_generation')",
   );
+  if (rows.length === 0) return null;
+  const meta = new Map(rows.map(row => [row.key, row.value]));
+  const salt = meta.get(META_SALT);
+  const wrappedDek = meta.get(META_WRAPPED_DEK);
+  if (!salt || !wrappedDek) throw new Error('Vault key material is incomplete. Restore from a backup.');
+  return { salt, wrappedDek, generation: meta.get('vault_generation') ?? wrappedDek };
+}
 
-  let salt: string | undefined;
-  let wrappedDek: string | undefined;
-  for (const row of res.rows) {
-    if (row.key === META_SALT) salt = row.value;
-    if (row.key === META_WRAPPED_DEK) wrappedDek = row.value;
-  }
-
-  if (!salt || !wrappedDek) return null;
-  return { salt, wrappedDek };
+export async function requireGeneration(tx: VaultQuery, expected: string | null): Promise<void> {
+  const meta = await readVaultMeta(tx);
+  if (!expected || meta?.generation !== expected) throw new Error('Vault changed. Unlock the current vault and retry.');
 }
 
 export async function vaultExists(db: AppDB): Promise<boolean> {
   return (await readVaultMeta(db)) !== null;
 }
 
-/**
- * Creates a new vault: the worker generates and keeps the DEK, the sealed
- * material is persisted here. Only ciphertext touches the database.
- */
+/** Serialize destructive transitions across tabs before touching the transfer staging tree. */
+export async function withCurrentVault<T>(db: AppDB, generation: string, action: () => Promise<T>): Promise<T> {
+  const run = async () => {
+    await requireGeneration(db, generation);
+    if ((await vaultService.call('vault.status')).generation !== generation) {
+      throw new Error('Vault locked. Unlock the current vault and retry.');
+    }
+    return action();
+  };
+  return navigator.locks ? navigator.locks.request('galiot-vault-replacement', run) : run();
+}
+
 export async function createVault(db: AppDB, passphrase: string): Promise<void> {
-  const sealed = await vaultService.call('vault.create', { passphrase });
-  await db.query(
-    `INSERT INTO _meta (key, value) VALUES ($1, $2), ($3, $4)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-    [META_SALT, sealed.salt, META_WRAPPED_DEK, sealed.wrappedDek],
-  );
+  const generation = crypto.randomUUID();
+  let generated = false;
+  try {
+    await db.transaction(async tx => {
+      if (await readVaultMeta(tx)) throw new Error('A vault already exists. Unlock it to continue.');
+      const sealed = await vaultService.call('vault.create', { passphrase, generation });
+      generated = true;
+      await tx.query(
+        "INSERT INTO _meta (key, value) VALUES ('salt', $1), ('wrapped_dek', $2), ('vault_generation', $3)",
+        [sealed.salt, sealed.wrappedDek, generation],
+      );
+    });
+  } catch (error) {
+    if (generated) await vaultService.call('vault.invalidate', { generation });
+    throw error;
+  }
 }
 
 export async function unlockVault(db: AppDB, passphrase: string): Promise<void> {
-  const meta = await readVaultMeta(db);
-  if (!meta) {
-    throw new Error('Vault not found');
-  }
-  await vaultService.call('vault.unlock', {
-    passphrase,
-    salt: meta.salt,
-    wrappedDek: meta.wrappedDek,
+  await db.transaction(async tx => {
+    const meta = await readVaultMeta(tx);
+    if (!meta) throw new Error('Vault not found');
+    await vaultService.call('vault.unlock', { passphrase, ...meta });
   });
 }
 
@@ -77,8 +96,12 @@ export async function lockVault(): Promise<void> {
  * Split from `deleteVault` so the data wipe is testable without a worker: the
  * worker only owns the DEK, never the rows.
  */
-export async function wipeVaultData(db: AppDB): Promise<void> {
+export async function wipeVaultData(db: AppDB, expectedGeneration?: string): Promise<void> {
   await db.transaction(async (tx) => {
+    if (expectedGeneration !== undefined) {
+      await requireGeneration(tx, expectedGeneration);
+      await vaultService.call('vault.invalidate', { generation: expectedGeneration });
+    }
     // Child rows first so this stays correct even if a foreign key is missing
     // in an older database file.
     await tx.exec(
@@ -103,16 +126,22 @@ export async function wipeVaultData(db: AppDB): Promise<void> {
  * Exported vault backups are unaffected — they are files the user already has.
  */
 export async function deleteVault(db: AppDB): Promise<void> {
-  // Lock first: if the worker still held the DEK, a new vault could in
-  // principle be created before the rows are gone.
-  await lockVault();
-  await wipeVaultData(db);
-  vaultService.notifyDeleted();
+  const { generation } = await vaultService.call('vault.status');
+  if (!generation) throw new Error('Unlock the vault before deleting it');
+  await withCurrentVault(db, generation, async () => {
+    await transferManager.withVaultDeletion(() => wipeVaultData(db, generation));
+    vaultService.notifyReplacement(generation, true);
+  });
 }
 
-export async function isVaultUnlocked(): Promise<boolean> {
-  const status = await vaultService.call('vault.status');
-  return status.unlocked;
+export async function readVaultState(db: AppDB): Promise<'create' | 'unlock' | 'unlocked'> {
+  return db.transaction(async tx => {
+    const meta = await readVaultMeta(tx);
+    const status = await vaultService.call('vault.status');
+    if (status.unlocked && meta && status.generation === meta.generation) return 'unlocked';
+    if (status.generation) await vaultService.call('vault.invalidate', { generation: status.generation });
+    return meta ? 'unlock' : 'create';
+  });
 }
 
 export interface ConnectionInput {
@@ -133,7 +162,8 @@ export interface ConnectionInput {
  * as a `profiles` row. The plaintext is never stored.
  */
 export async function createConnection(db: AppDB, input: ConnectionInput): Promise<string> {
-  const { payload } = await vaultService.call('creds.encrypt', {
+  assertConnectionEndpoint(input.endpoint);
+  const { payload, generation } = await vaultService.call('creds.encrypt', {
     credentials: {
       accessKeyId: input.accessKeyId,
       secretAccessKey: input.secretAccessKey,
@@ -149,31 +179,39 @@ export async function createConnection(db: AppDB, input: ConnectionInput): Promi
   // the dialog.
   const headers = assertSafeCustomHeaders(input.customHeaders);
 
-  await db.query(
-    `INSERT INTO profiles
-       (id, name, protocol, endpoint, region, bucket, path_style, network, encrypted_credentials, custom_headers, created_at, updated_at)
-     VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-    [
-      id,
-      input.name,
-      input.endpoint,
-      input.region,
-      input.bucket,
-      input.pathStyle,
-      'server',
-      JSON.stringify(payload),
-      headersColumnValue(headers),
-      now,
-      now,
-    ],
-  );
+  await db.transaction(async tx => {
+    await requireGeneration(tx, generation);
+    await tx.query(
+      `INSERT INTO profiles
+         (id, name, protocol, endpoint, region, bucket, path_style, network, encrypted_credentials, custom_headers, created_at, updated_at)
+       VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        id,
+        input.name,
+        input.endpoint,
+        input.region,
+        input.bucket,
+        input.pathStyle,
+        'server',
+        JSON.stringify(payload),
+        headersColumnValue(headers),
+        now,
+        now,
+      ],
+    );
+  });
 
   return id;
 }
 
 /** Deletes a connection; `objects_cache` rows cascade with the foreign key. */
 export async function deleteConnection(db: AppDB, id: string): Promise<void> {
-  await db.query(`DELETE FROM profiles WHERE id = $1`, [id]);
+  const { generation } = await vaultService.call('vault.status');
+  await db.transaction(async tx => {
+    await requireGeneration(tx, generation);
+    await tx.query('DELETE FROM profiles WHERE id = $1', [id]);
+  });
+  transferManager.invalidateProfile(id);
 }
 
 export interface ConnectionUpdate {
@@ -196,14 +234,14 @@ export interface ConnectionUpdate {
 }
 
 export interface ConnectionUpdateResult {
-  /** True when the cached listing was dropped because the target changed. */
+  /** True when the cached listing was dropped because credentials or the target changed. */
   clearedCache: boolean;
 }
 
 /**
  * Updates a connection in place.
  *
- * The cached listing is dropped whenever the *target* changes (endpoint,
+ * The cached listing is dropped if credentials are replaced or the target changes (endpoint,
  * region, bucket, addressing or custom headers): those rows were fetched from a
  * different bucket, or through a gateway that a header now routes differently,
  * and leaving them would let a later switch back to the old name show stale
@@ -218,49 +256,49 @@ export async function updateConnection(
   id: string,
   input: ConnectionUpdate,
 ): Promise<ConnectionUpdateResult> {
-  const existing = await db.query<{
-    endpoint: string;
-    region: string;
-    bucket: string;
-    path_style: boolean;
-    custom_headers: unknown;
-  }>('SELECT endpoint, region, bucket, path_style, custom_headers FROM profiles WHERE id = $1', [
-    id,
-  ]);
-
-  const current = existing.rows[0];
-  if (!current) throw new Error('Connection not found');
-
-  const nextNetwork = 'server';
-  const storedHeaders = parseStoredHeaders(current.custom_headers);
-  const nextHeaders =
-    input.customHeaders === undefined ? storedHeaders : assertSafeCustomHeaders(input.customHeaders);
-  const headersJson = headersColumnValue(nextHeaders);
-
-  const targetChanged =
-    current.endpoint !== input.endpoint ||
-    current.region !== input.region ||
-    current.bucket !== input.bucket ||
-    current.path_style !== input.pathStyle ||
-    headersJson !== headersColumnValue(storedHeaders);
-
+  assertConnectionEndpoint(input.endpoint);
   // Sealed in the worker, as on create; the plaintext goes no further.
-  const payload = input.credentials
-    ? (
-        await vaultService.call('creds.encrypt', {
-          credentials: {
-            accessKeyId: input.credentials.accessKeyId,
-            secretAccessKey: input.credentials.secretAccessKey,
-            sessionToken: input.credentials.sessionToken || undefined,
-          },
-        })
-      ).payload
+  const sealed = input.credentials
+    ? await vaultService.call('creds.encrypt', {
+        credentials: {
+          accessKeyId: input.credentials.accessKeyId,
+          secretAccessKey: input.credentials.secretAccessKey,
+          sessionToken: input.credentials.sessionToken || undefined,
+        },
+      })
     : null;
+  const generation = sealed?.generation ?? (await vaultService.call('vault.status')).generation;
 
   const now = new Date().toISOString();
 
-  await db.transaction(async (tx) => {
-    if (payload) {
+  const clearedCache = await db.transaction(async (tx) => {
+    await requireGeneration(tx, generation);
+    const existing = await tx.query<{
+      endpoint: string;
+      region: string;
+      bucket: string;
+      path_style: boolean;
+      custom_headers: unknown;
+    }>('SELECT endpoint, region, bucket, path_style, custom_headers FROM profiles WHERE id = $1', [
+      id,
+    ]);
+
+    const current = existing.rows[0];
+    if (!current) throw new Error('Connection not found');
+
+    const nextNetwork = 'server';
+    const storedHeaders = parseStoredHeaders(current.custom_headers);
+    const nextHeaders =
+      input.customHeaders === undefined ? storedHeaders : assertSafeCustomHeaders(input.customHeaders);
+    const headersJson = headersColumnValue(nextHeaders);
+
+    const targetChanged =
+      current.endpoint !== input.endpoint ||
+      current.region !== input.region ||
+      current.bucket !== input.bucket ||
+      current.path_style !== input.pathStyle ||
+      headersJson !== headersColumnValue(storedHeaders);
+    if (sealed) {
       await tx.query(
         `UPDATE profiles
             SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5,
@@ -273,7 +311,7 @@ export async function updateConnection(
           input.bucket,
           input.pathStyle,
           nextNetwork,
-          JSON.stringify(payload),
+          JSON.stringify(sealed.payload),
           headersJson,
           now,
           id,
@@ -299,12 +337,15 @@ export async function updateConnection(
       );
     }
 
-    if (targetChanged) {
-      await tx.query('DELETE FROM objects_cache WHERE profile_id = $1', [id]);
-    }
+    const invalidate = targetChanged || sealed !== null;
+    if (invalidate) await tx.query('DELETE FROM objects_cache WHERE profile_id = $1', [id]);
+    return invalidate;
   });
 
-  return { clearedCache: targetChanged };
+  if (clearedCache) {
+    transferManager.invalidateProfile(id);
+  }
+  return { clearedCache };
 }
 
 /**
@@ -327,11 +368,14 @@ export async function insertSealedConnections(
     encryptedCredentials: EncryptedPayload;
     storageClass: string | null;
   }[],
+  generation?: string,
 ): Promise<number> {
   if (rows.length === 0) return 0;
+  for (const row of rows) assertConnectionEndpoint(row.endpoint);
 
   const now = new Date().toISOString();
   await db.transaction(async (tx) => {
+    if (generation !== undefined) await requireGeneration(tx, generation);
     for (const row of rows) {
       await tx.query(
         `INSERT INTO profiles

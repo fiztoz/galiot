@@ -40,6 +40,8 @@ import {
   type FilterPanelState,
 } from './ExplorerFilterBar';
 import { formatBytes, formatDate } from '../lib/format';
+import { localFileExists, localFolder } from '../transfer/download';
+import { scheduleListingRefresh } from '../transfer/listingRefresh';
 import { transferManager } from '../transfer/manager';
 import { LocalPane, REMOTE_OBJECT_MIME, type RemoteDropItem } from './LocalPane';
 import { hasWritePermission } from '../localfs/localDirectory';
@@ -54,6 +56,7 @@ import { ObjectDetailsDialog } from './ObjectDetailsDialog';
 import { BucketSearchDialog } from './BucketSearchDialog';
 import { isTextualFilename, mediaKind } from '../editor/filetypes';
 import { ShareDialog } from './ShareDialog';
+import { SHARE_TARGET_QUERY, shareTargetParams, type ShareTarget } from '../s3/links';
 
 // CodeMirror and the language packages are heavy; keep them out of the
 // first-load bundle and fetch them when a file is actually opened.
@@ -121,7 +124,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
   const [editing, setEditing] = useState<ObjectRow | null>(null);
-  const [sharing, setSharing] = useState<ObjectRow | null>(null);
+  const [sharing, setSharing] = useState<{ file: ObjectRow | null; target: ShareTarget } | null>(null);
+  const shareTarget = useLiveQuery<ShareTarget>(SHARE_TARGET_QUERY, shareTargetParams(profile))?.rows[0];
   const [details, setDetails] = useState<ObjectRow | null>(null);
   const [action, setAction] = useState<{ kind: 'rename' | 'copy' | 'folder'; row: ObjectRow | null } | null>(null);
   const [bucketSearch, setBucketSearch] = useState<string | null>(null);
@@ -137,6 +141,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   // Primitive profile values — `profile` identity changes with every live
   // query refresh; depending on primitives avoids reload loops.
   const { id: profileId, bucket, endpoint, region, path_style: pathStyle } = profile;
+  const profileRevision = new Date(profile.updated_at).getTime();
 
   useEffect(() => {
     const nav = breadcrumbNavRef.current;
@@ -150,11 +155,12 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
   // Network refresh of the current folder (also runs on first mount).
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    loadListing(db, profile, prefix)
+    loadListing(db, profile, prefix, controller.signal)
       .catch(async (err: unknown) => {
         if (cancelled) return;
         // A raw `Failed to fetch` tells the user nothing; classify it so the
@@ -176,9 +182,10 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db, profileId, bucket, endpoint, region, pathStyle, prefix, reloadNonce]);
+  }, [db, profileId, bucket, endpoint, region, pathStyle, prefix, profileRevision, reloadNonce]);
 
   // Track list width for the responsive grid layout.
   useEffect(() => {
@@ -338,7 +345,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db, profileId, bucket, endpoint, region, pathStyle],
+    [db, profileId, bucket, endpoint, region, pathStyle, profileRevision],
   );
 
   const handleRowDoubleClick = useCallback(
@@ -464,7 +471,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db, profileId, bucket, endpoint, region, pathStyle, prefix],
+    [db, profileId, bucket, endpoint, region, pathStyle, prefix, profileRevision],
   );
 
   const handleFileInput = useCallback(
@@ -495,16 +502,13 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db, profileId, bucket, endpoint, region, pathStyle],
+    [db, profileId, bucket, endpoint, region, pathStyle, profileRevision],
   );
 
   // Keep the cached listing fresh when a transfer lands in this bucket.
   useEffect(
-    () =>
-      transferManager.subscribe((event) => {
-        if (event.type === 'done') setReloadNonce((n) => n + 1);
-      }),
-    [],
+    () => scheduleListingRefresh(transferManager, profileId, bucket, prefix, handleRefresh),
+    [profileId, bucket, prefix, handleRefresh],
   );
 
   const handleDelete = useCallback(async () => {
@@ -652,8 +656,9 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const expandForDownload = useCallback(
     async (
       entries: { key: string; size: number; name: string; isDir: boolean; storageClass: string | null }[],
-    ): Promise<{ files: { key: string; size: number; name: string }[]; archived: number }> => {
+    ) => {
       const files: { key: string; size: number; name: string }[] = [];
+      const directories = new Set<string>();
       let archived = 0;
       const sealed = await getSealedCredentials(db, profile.id);
       const config = profileConfig(profile);
@@ -669,6 +674,10 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
           prefix: entry.key,
         });
         for (const object of tree.objects) {
+          if (object.key.endsWith('/') && object.size === 0) {
+            directories.add(underFolder(entry.name, object.key, entry.key).replace(/\/$/, ''));
+            continue;
+          }
           if (isArchiveClass(object.storageClass)) archived += 1;
           files.push({
             key: object.key,
@@ -677,10 +686,10 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
           });
         }
       }
-      return { files, archived };
+      return { files, directories, archived };
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db, profileId, bucket, endpoint, region, pathStyle],
+    [db, profileId, bucket, endpoint, region, pathStyle, profileRevision],
   );
 
   /** Payload for dragging remote objects onto the local pane. */
@@ -713,7 +722,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       }
 
       try {
-        const { files, archived } = await expandForDownload(
+        const { files, directories, archived } = await expandForDownload(
           items.map((item) => ({
             key: item.key,
             size: item.size,
@@ -722,12 +731,21 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             storageClass: item.storage_class ?? null,
           })),
         );
+        for (const directory of directories) await localFolder(handle, directory, true);
+        const collisions = new Set<string>();
+        const names = new Set<string>();
+        for (const file of files) {
+          if (names.has(file.name)) throw new Error(`Multiple objects have the local name ${file.name}. Download them separately.`);
+          names.add(file.name);
+          if (await localFileExists(handle, file.name)) collisions.add(file.name);
+        }
+        if (collisions.size && !window.confirm(`Replace ${collisions.size} existing file(s) in this download folder?`)) return;
         for (const file of files) {
           await transferManager.enqueueDownload(
             profile,
             file.key,
             file.size,
-            { kind: 'directory', handle, filename: file.name },
+            { kind: 'directory', handle, filename: file.name, replace: collisions.has(file.name) },
             file.name,
           );
         }
@@ -742,7 +760,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db, profileId, bucket, endpoint, region, pathStyle],
+    [db, profileId, bucket, endpoint, region, pathStyle, profileRevision],
   );
 
 
@@ -808,6 +826,16 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             ))}
           </nav>
 
+          <button
+            type="button"
+            disabled={!shareTarget}
+            onClick={() => shareTarget && setSharing({ file: null, target: shareTarget })}
+            className="flex-none p-2 rounded-lg text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            aria-label="Connection link history"
+            title="Connection link history"
+          >
+            <Link2 size={15} />
+          </button>
           <button
             type="button"
             onClick={handleRefresh}
@@ -1327,7 +1355,13 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
             <button
               type="button"
-              onClick={() => selectedRows[0] && setSharing(selectedRows[0])}
+              disabled={!shareTarget || shareTarget.bucket !== selectedRows[0]?.bucket}
+              onClick={() => {
+                const file = selectedRows[0];
+                if (file && shareTarget && file.profile_id === shareTarget.profile_id && file.bucket === shareTarget.bucket) {
+                  setSharing({ file, target: shareTarget });
+                }
+              }}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-white dark:bg-zinc-900 border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/40 font-medium transition-colors"
             >
               <Link2 size={13} />
@@ -1445,7 +1479,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
     </div>
 
     {sharing && (
-      <ShareDialog db={db} profile={profile} file={sharing} onClose={() => setSharing(null)} />
+      <ShareDialog db={db} target={sharing.target} file={sharing.file}
+        currentIdentity={shareTarget?.target_identity} onClose={() => setSharing(null)} />
     )}
 
     {details && (

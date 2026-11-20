@@ -1,9 +1,13 @@
 import { timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
+import { readBoundedText } from '../lib/boundedBody';
+import { assertConnectionEndpoint } from '../s3/endpoint';
 import { AwsClient } from '../lib/aws4fetch';
 import { parseStoredHeaders } from '../s3/customHeaders';
 import { presignGetUrl, presignPutBucketCors, presignPutUrl } from '../s3/presign';
-import { buildS3Url } from '../s3/url';
+import { assertSafeObjectKey, buildS3Url } from '../s3/url';
 import { S3RequestError, type CorsConfiguration, type PartInfo, type ProbeResult } from '../s3/client';
+import { isStrongETag } from '../s3/clientHeaders';
 import { xmlBlocks, xmlFirst } from '../s3/xml';
 import { clientForSession } from './engine';
 import {
@@ -14,7 +18,7 @@ import {
 } from './protocol';
 import { SessionStore, type SessionView } from './sessions';
 import { BlockedProxyTargetError, resolveProxyAddresses, type ProxyLookup } from './target';
-import { checkProxyTarget } from './proxy';
+import { checkProxyTarget, isLoopbackHost } from './proxy';
 import { forwardRequest } from './upstream';
 
 const JSON_LIMIT = 1_000_000;
@@ -30,6 +34,10 @@ const UPLOAD_CAP_MAX = 1024 * 1024 * 1024;
 
 export interface AppApiOptions {
   expectedToken: string | null;
+  open?: boolean;
+  listenerPort?: number;
+  listenerHost?: string;
+  publicOrigins?: readonly string[];
   lookup?: ProxyLookup;
   forward?: typeof forwardRequest;
   sessions?: SessionStore;
@@ -68,6 +76,32 @@ function authorized(request: Request, expected: string | null): boolean {
   return tokenMatches(presentedToken(request), expected);
 }
 
+/** Browser control calls without a gate must originate at this listener. */
+function trustedControlRequest(request: Request, options: AppApiOptions): boolean {
+  if (options.expectedToken) return authorized(request, options.expectedToken);
+  const url = new URL(request.url);
+  const host = request.headers.get('host');
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+  if (host !== null && host.toLowerCase() !== url.host && host.toLowerCase() !== url.hostname + ':' + port) {
+    return false;
+  }
+  if (request.headers.get('sec-fetch-site') === 'cross-site') return false;
+  const origin = request.headers.get('origin');
+  // A TLS-terminating proxy must preserve Host. Forwarded headers cannot add
+  // an authority to this operator-configured list.
+  const publicMatch = options.publicOrigins?.some(allowed => {
+    const external = new URL(allowed);
+    return (external.host === url.host || external.host === host?.toLowerCase()) &&
+      (origin === null || origin === allowed);
+  });
+  if (publicMatch) return true;
+  const literal = isIP(url.hostname.replace(/^\[|\]$/g, '')) !== 0;
+  const onListener = !options.listenerPort || options.listenerPort === Number(port);
+  const knownHost = isLoopbackHost(url.hostname) ||
+    (options.open && (literal || url.hostname === options.listenerHost?.toLowerCase()));
+  return Boolean(knownHost && (onListener || (options.open && literal)) && (origin === null || origin === url.origin));
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -84,13 +118,21 @@ function requireString(value: unknown, name: string, max = 2048): string {
   return text;
 }
 
-async function readJson(request: Request): Promise<Record<string, unknown>> {
-  const declared = request.headers.get('content-length');
-  if (declared && (!/^(0|[1-9]\d*)$/.test(declared) || Number(declared) > JSON_LIMIT)) {
-    throw new Error('Request body is too large.');
+function grantKey(value: unknown): string {
+  const key = requireString(value, 'key', 1024);
+  try {
+    assertSafeObjectKey(key);
+  } catch {
+    throw new BadRequestError('This object key cannot be represented exactly by the S3 transport.');
   }
-  const text = await request.text();
-  if (text.length > JSON_LIMIT) throw new Error('Request body is too large.');
+  return key;
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown>> {
+  if (request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+    throw new BadRequestError('Control requests require application/json.');
+  }
+  const text = await readBoundedText(request, JSON_LIMIT);
   if (!text) return {};
   const parsed = JSON.parse(text) as unknown;
   return asRecord(parsed);
@@ -137,20 +179,38 @@ function uploadLength(request: Request): { ok: true; length: string } | { ok: fa
   return { ok: true, length };
 }
 
-function relay(upstream: Response, method: string): Response {
-  const headers = new Headers();
-  upstream.headers.forEach((value, name) => {
-    const lower = name.toLowerCase();
-    if (lower === 'connection' || lower === 'transfer-encoding' || lower === 'keep-alive') return;
-    if (lower.startsWith('access-control-')) return;
-    headers.set(name, value);
+function relay(upstream: Response, method: string, key?: string, destination?: string | null, raw = false): Response {
+  const headers = new Headers({
+    'cache-control': 'no-store',
+    'content-security-policy': "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'",
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
   });
-  headers.set('cache-control', 'no-store');
-  headers.delete('cdn-cache-control');
-  headers.delete('surrogate-control');
+  for (const name of ['accept-ranges', 'content-range', 'content-length', 'content-encoding', 'etag', 'last-modified', 'x-amz-version-id']) {
+    const value = upstream.headers.get(name);
+    if (value !== null) headers.set(name, value);
+  }
+  const originalType = upstream.headers.get('content-type') || 'application/octet-stream';
+  const mime = originalType.split(';')[0]?.trim().toLowerCase() ?? '';
+  const inline = !raw && (INLINE_TYPES.has(mime) || (mime === 'image/svg+xml' && destination === 'image'));
+  if (raw) headers.delete('content-encoding');
+  headers.set('x-galiot-object-type', originalType);
+  headers.set('content-type', inline ? mime : 'application/octet-stream');
+  if (!inline || upstream.headers.get('content-disposition')?.toLowerCase().startsWith('attachment')) {
+    const filename = key?.split('/').pop();
+    const encoded = filename && encodeURIComponent(filename).replace(/['()*]/g, ch => '%' + ch.charCodeAt(0).toString(16));
+    headers.set('content-disposition', encoded ? "attachment; filename*=UTF-8''" + encoded : 'attachment');
+  }
   const empty = method === 'HEAD' || upstream.status === 204 || upstream.status === 205 || upstream.status === 304;
   return new Response(empty ? null : upstream.body, { status: upstream.status, headers });
 }
+
+const INLINE_TYPES = new Set([
+  'application/pdf', 'text/plain', 'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'image/avif', 'image/bmp', 'image/x-icon', 'audio/mpeg', 'audio/mp4', 'audio/wav',
+  'audio/ogg', 'audio/flac', 'audio/aac', 'audio/webm', 'video/mp4', 'video/webm',
+  'video/ogg', 'video/quicktime',
+]);
 
 function client(session: SessionView, options: AppApiOptions) {
   return clientForSession(session, options.lookup, options.forward ?? forwardRequest);
@@ -234,12 +294,19 @@ async function handleCall(
           }),
         }, 200);
       case 'delete': {
-        const keys = Array.isArray(body.keys) ? body.keys.filter((key): key is string => typeof key === 'string' && key.length <= 1024).slice(0, 1000) : [];
+        const keys = body.keys;
+        if (!Array.isArray(keys) || !keys.every((key): key is string =>
+          typeof key === 'string' && key.length > 0 && new TextEncoder().encode(key).length <= 1024)) {
+          throw new BadRequestError('Every delete entry must be a valid object key.');
+        }
         return json({ ok: true, result: await s3.deleteObjects(keys) }, 200);
       }
       case 'putText': {
         const key = requireString(body.key, 'key', 1024);
-        const text = requireString(body.body, 'body', TEXT_LIMIT);
+        const text = asString(body.body, TEXT_LIMIT);
+        if (text === undefined || new TextEncoder().encode(text).byteLength > TEXT_LIMIT) {
+          throw new BadRequestError('Text must be at most 2 MiB in UTF-8.');
+        }
         return json({ ok: true, result: await s3.putObject(key, text, asString(body.contentType, 256)) }, 200);
       }
       case 'createMultipart':
@@ -266,10 +333,10 @@ async function handleCall(
         const uploadId = requireString(body.uploadId, 'uploadId');
         const res = await s3.send(s3.objectUrl(key, { uploadId }));
         if (!res.ok) {
-          const text = await res.text();
+          const text = await readBoundedText(res, 64 * 1024);
           return json({ ok: false, error: text || res.statusText, status: res.status, code: xmlFirst(text, 'Code') ?? `HTTP ${res.status}` }, 200);
         }
-        const text = await res.text();
+        const text = await readBoundedText(res, 8 * 1024 * 1024);
         const parts = xmlBlocks(text, 'Part').map((block) => ({
           partNumber: parseInt(xmlFirst(block, 'PartNumber') ?? '0', 10),
           eTag: xmlFirst(block, 'ETag') ?? '',
@@ -279,6 +346,8 @@ async function handleCall(
       }
       case 'head':
         return json({ ok: true, result: await s3.headObject(requireString(body.key, 'key', 1024)) }, 200);
+      case 'editorWriteSupport':
+        return json({ ok: true, result: { conditionalPut: s3.supportsCondition('put') } }, 200);
       case 'listVersions':
         return json({ ok: true, result: await s3.listVersions(requireString(body.key, 'key', 1024)) }, 200);
       case 'deleteVersion':
@@ -318,28 +387,39 @@ async function handleCall(
           requireString(body.sourceKey, 'sourceKey', 1024),
           requireString(body.destKey, 'destKey', 1024),
         );
-        return json({ ok: true, result: { copied: result.count } }, 200);
+        return json({ ok: true, result: { copied: result.length } }, 200);
       }
       case 'rename': {
         const sourceKey = requireString(body.sourceKey, 'sourceKey', 1024);
         const destKey = requireString(body.destKey, 'destKey', 1024);
-        if (sourceKey === destKey) throw new BadRequestError('Source and destination are the same.');
-        if (destKey.startsWith(sourceKey) && sourceKey.endsWith('/')) {
-          throw new BadRequestError('A folder cannot be moved inside itself.');
+        const copied = await copyTree(s3, sourceKey, destKey, true);
+        if (copied.some(source => source.versioned)) {
+          return json({ ok: false, error: `Copied ${copied.length} objects. All sources were retained. ` +
+            'A versioned source can acquire a newer version with the same ETag. Review its version history before removing it.' }, 200);
         }
-        const result = await copyTree(s3, sourceKey, destKey);
-        await deleteInBatches(s3, result.keys);
-        return json({ ok: true, result: { moved: result.count } }, 200);
+        const failures: string[] = [];
+        for (const { key, eTag } of copied) {
+          try {
+            await s3.deleteObject(key, eTag);
+          } catch (error) {
+            const message = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+            failures.push(`${key}: ${message}`);
+          }
+        }
+        const moved = copied.length - failures.length;
+        if (failures.length) return json({ ok: false, error:
+          `Copied ${copied.length} objects. Confirmed removal of ${moved} sources. Unconfirmed: ${failures.join('; ')}` }, 200);
+        return json({ ok: true, result: { moved } }, 200);
       }
       case 'share': {
-        const key = requireString(body.key, 'key', 1024);
+        const key = grantKey(body.key);
         const expiresIn = Math.min(SHARE_MAX_SECONDS, Math.max(SHARE_MIN_SECONDS, numberOr(body.expiresIn, 3600)));
         const token = sessions.mintMedia(sessionId, key, { ttlMs: expiresIn * 1000 });
         if (!token) return json({ ok: false, error: 'S3 session expired or unknown.' }, 404);
         return json({ ok: true, result: { url: `/api/s3/media/${token}`, expiresIn } }, 200);
       }
       case 'shareWrite': {
-        const key = requireString(body.key, 'key', 1024);
+        const key = grantKey(body.key);
         const expiresIn = Math.min(SHARE_MAX_SECONDS, Math.max(SHARE_MIN_SECONDS, numberOr(body.expiresIn, 3600)));
         const maxBytes = Math.min(UPLOAD_CAP_MAX, Math.max(1, numberOr(body.maxBytes, UPLOAD_CAP_DEFAULT)));
         const token = sessions.mintMedia(sessionId, key, { ttlMs: expiresIn * 1000, kind: 'write', maxBytes });
@@ -361,7 +441,7 @@ async function handleCall(
               signer(session),
               targetOf(session),
               requireString(body.key, 'key', 1024),
-              asString(body.contentType, 256),
+              body.contentType === undefined ? undefined : requireString(body.contentType, 'contentType', 256),
               numberOr(body.expiresIn, 3600),
             ),
           },
@@ -382,7 +462,7 @@ async function handleCall(
           result: { url: await presignPutBucketCors(signer(session), targetOf(session), 'application/xml', numberOr(body.expiresIn, 3600)) },
         }, 200);
       case 'media': {
-        const key = requireString(body.key, 'key', 1024);
+        const key = grantKey(body.key);
         const token = sessions.mintMedia(sessionId, key, { versionId: asString(body.versionId, 1024) });
         if (!token) return json({ ok: false, error: 'S3 session expired or unknown.' }, 404);
         return json({ ok: true, result: { url: `/api/s3/media/${token}` } }, 200);
@@ -409,6 +489,7 @@ async function listTreeObjects(
   prefix: string,
 ): Promise<{ key: string; size: number; storageClass: string | null }[]> {
   const objects: { key: string; size: number; storageClass: string | null }[] = [];
+  const seenTokens = new Set<string>();
   let continuationToken: string | undefined;
   do {
     const page = await s3.listObjects(prefix, { maxKeys: 1000, continuationToken });
@@ -419,58 +500,94 @@ async function listTreeObjects(
       }
     }
     continuationToken = page.isTruncated ? page.nextContinuationToken : undefined;
+    if (page.isTruncated) {
+      if (!continuationToken || seenTokens.has(continuationToken) || seenTokens.size >= MAX_TREE_ENTRIES) {
+        throw new BadRequestError('The provider did not return a complete folder listing.');
+      }
+      seenTokens.add(continuationToken);
+    }
   } while (continuationToken);
   return objects;
 }
 
-async function listTreeKeys(s3: ReturnType<typeof client>, prefix: string): Promise<string[]> {
-  return (await listTreeObjects(s3, prefix)).map((object) => object.key);
-}
-
 /** One object, copied inside S3. Large objects use multipart copy, never the browser. */
-async function copyOne(s3: ReturnType<typeof client>, sourceKey: string, destKey: string): Promise<void> {
+async function copyOne(s3: ReturnType<typeof client>, sourceKey: string, destKey: string, moving: boolean) {
   const meta = await s3.headObject(sourceKey);
-  if (meta.contentLength <= COPY_SINGLE_LIMIT) {
-    await s3.copyObject(sourceKey, destKey);
-    return;
+  const eTag = isStrongETag(meta.eTag) ? meta.eTag : undefined;
+  const versionId = meta.versionId || undefined;
+  const source = { key: sourceKey, eTag: meta.eTag, versioned: meta.versionId !== null };
+  const immutableVersion = versionId !== undefined && versionId !== 'null';
+  if (!Number.isSafeInteger(meta.contentLength) || meta.contentLength < 0 || meta.contentLength > 10000 * COPY_SINGLE_LIMIT) {
+    throw new BadRequestError('Invalid object size for S3 copy.');
+  }
+  const multipart = meta.contentLength > COPY_SINGLE_LIMIT;
+  if (!eTag && (moving || (multipart && !immutableVersion))) {
+    throw new BadRequestError(`Cannot safely copy ${sourceKey}: the provider did not return a strong ETag.`);
+  }
+  if (!multipart) {
+    await s3.copyObject(sourceKey, destKey, versionId, eTag);
+    return source;
+  }
+  if (!immutableVersion && !s3.supportsCondition('copy')) {
+    throw new BadRequestError('A multipart copy requires a pinned version or verified copy-source preconditions.');
   }
   const uploadId = await s3.createMultipartUpload(destKey, meta.contentType);
   const parts: PartInfo[] = [];
-  let partNumber = 1;
-  for (let start = 0; start < meta.contentLength; start += COPY_PART_SIZE) {
-    const end = Math.min(start + COPY_PART_SIZE, meta.contentLength) - 1;
-    const eTag = await s3.copyPart(sourceKey, destKey, uploadId, partNumber, start, end);
-    parts.push({ PartNumber: partNumber, ETag: eTag });
-    partNumber += 1;
+  try {
+    const partSize = Math.max(COPY_PART_SIZE, Math.ceil(meta.contentLength / 10000));
+    for (let start = 0; start < meta.contentLength; start += partSize) {
+      const end = Math.min(start + partSize, meta.contentLength) - 1;
+      const partNumber = parts.length + 1;
+      const partTag = await s3.copyPart(sourceKey, destKey, uploadId, partNumber, start, end, eTag, versionId);
+      parts.push({ PartNumber: partNumber, ETag: partTag });
+    }
+    await s3.completeMultipartUpload(destKey, uploadId, parts);
+  } catch (error) {
+    await s3.abortMultipartUpload(destKey, uploadId).catch(() => {});
+    throw error;
   }
-  await s3.completeMultipartUpload(destKey, uploadId, parts);
+  return source;
 }
 
 async function copyTree(
   s3: ReturnType<typeof client>,
   sourceKey: string,
   destKey: string,
-): Promise<{ count: number; keys: string[] }> {
-  if (!sourceKey.endsWith('/')) {
-    await copyOne(s3, sourceKey, destKey);
-    return { count: 1, keys: [sourceKey] };
+  moving = false,
+): Promise<{ key: string; eTag: string; versioned: boolean }[]> {
+  const folder = sourceKey.endsWith('/');
+  if (sourceKey === destKey || (folder && destKey.startsWith(sourceKey))) {
+    throw new BadRequestError('Source and destination overlap.');
   }
-  const keys = await listTreeKeys(s3, sourceKey);
-  for (const key of keys) {
-    await copyOne(s3, key, destKey + key.slice(sourceKey.length));
+  if (moving && !s3.supportsCondition('move')) {
+    throw new BadRequestError('Conditional moves have not been verified for this bucket. Use Copy to retain the source.');
   }
-  return { count: keys.length, keys };
-}
-
-async function deleteInBatches(s3: ReturnType<typeof client>, keys: string[]): Promise<void> {
-  for (let i = 0; i < keys.length; i += 1000) {
-    await s3.deleteObjects(keys.slice(i, i + 1000));
+  const keys = folder ? (await listTreeObjects(s3, sourceKey)).map(row => row.key) : [sourceKey];
+  const sources = new Set(keys);
+  const mapping = keys.map(key => {
+    if (!key.startsWith(sourceKey)) throw new BadRequestError('The provider listed a key outside the source prefix.');
+    const destination = destKey + key.slice(sourceKey.length);
+    if (sources.has(destination)) throw new BadRequestError('Source and destination object keys overlap.');
+    // Validate every request path before the first mutation.
+    s3.objectUrl(key);
+    s3.objectUrl(destination);
+    return { key, destination };
+  });
+  const copied = [];
+  for (const { key, destination } of mapping) {
+    copied.push(await copyOne(s3, key, destination, moving));
   }
+  return copied;
 }
 
 function sessionMaterial(body: Record<string, unknown>): { ok: true; material: Parameters<SessionStore['create']>[0] } | { ok: false; detail: string } {
   const endpoint = asString(body.endpoint, 2048);
   if (!endpoint) return { ok: false, detail: 'Endpoint is required.' };
+  try {
+    assertConnectionEndpoint(endpoint);
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : 'Invalid endpoint.' };
+  }
   const checked = checkProxyTarget(endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
   if (!checked.ok) return checked;
   const bucket = asString(body.bucket, 255);
@@ -501,6 +618,7 @@ async function streamObject(
   key: string,
   options: AppApiOptions,
   versionId?: string,
+  raw = false,
 ): Promise<Response> {
   const s3 = client(session, options);
   const headers: Record<string, string> = {};
@@ -508,7 +626,7 @@ async function streamObject(
   if (range && /^bytes=\d+-\d*$/.test(range)) headers.range = range;
   const url = s3.objectUrl(key, versionId ? { versionId } : undefined);
   const upstream = await s3.send(url, { method: request.method, headers, signal: request.signal });
-  return relay(upstream, request.method);
+  return relay(upstream, request.method, key, request.headers.get('sec-fetch-dest'), raw);
 }
 
 /**
@@ -539,7 +657,7 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
     // Revoking needs the operator gate, not the bearer token: anyone holding
     // the link can read it, but only the operator can cut it off early.
     if (request.method === 'DELETE') {
-      if (!authorized(request, options.expectedToken)) {
+      if (!trustedControlRequest(request, options)) {
         return json({ ok: false, error: 'Missing or incorrect server access token.', reason: 'bad-token' }, 403);
       }
       return json({ ok: true, result: { revoked: sessions.revokeMedia(token) } }, 200);
@@ -561,7 +679,7 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
   if (upload) {
     const token = upload[1] ?? '';
     if (request.method === 'DELETE') {
-      if (!authorized(request, options.expectedToken)) {
+      if (!trustedControlRequest(request, options)) {
         return json({ ok: false, error: 'Missing or incorrect server access token.', reason: 'bad-token' }, 403);
       }
       return json({ ok: true, result: { revoked: sessions.revokeMedia(token) } }, 200);
@@ -582,8 +700,11 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
     if (Number(length.length) > cap) {
       return json({ ok: false, error: `This link accepts at most ${cap} bytes.` }, 413);
     }
-    if (!request.body) return json({ ok: false, error: 'Upload body is empty.' }, 400);
-    const counted = countedBody(request.body, cap);
+    if (!request.body && length.length !== '0') return json({ ok: false, error: 'Upload body is empty.' }, 400);
+    // All local checks passed. Claim synchronously before dispatch: the outcome
+    // of a disconnected PUT cannot safely be retried with the same authority.
+    sessions.revokeMedia(token);
+    const counted = request.body ? countedBody(request.body, cap) : null;
     const headers: Record<string, string> = {
       'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
       'content-length': length.length,
@@ -595,19 +716,19 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
       const upstream = await s3.send(s3.objectUrl(grant.key), {
         method: 'PUT',
         headers,
-        body: counted.body,
+        body: counted?.body,
         signal: request.signal,
         duplex: 'half',
       } as RequestInit);
       return relay(upstream, 'PUT');
     } catch (err) {
-      if (counted.exceeded()) return json({ ok: false, error: `This link accepts at most ${cap} bytes.` }, 413);
+      if (counted?.exceeded()) return json({ ok: false, error: `This link accepts at most ${cap} bytes.` }, 413);
       if (err instanceof BlockedProxyTargetError) return json({ ok: false, error: err.message, reason: 'bad-target' }, 400);
       return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 502);
     }
   }
 
-  if (!authorized(request, options.expectedToken)) {
+  if (!trustedControlRequest(request, options)) {
     return json({ ok: false, error: 'Missing or incorrect server access token.', reason: 'bad-token' }, 403);
   }
 
@@ -620,6 +741,11 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
       const secretAccessKey = asString(body.secretAccessKey, 256);
       if (!endpoint || !region || !accessKeyId || !secretAccessKey) {
         return json({ ok: false, error: 'Endpoint, region, and credentials are required.' }, 400);
+      }
+      try {
+        assertConnectionEndpoint(endpoint);
+      } catch {
+        return json({ ok: false, error: 'Invalid S3 endpoint.', reason: 'bad-target' }, 400);
       }
       const checked = checkProxyTarget(endpoint.endsWith('/') ? endpoint : `${endpoint}/`);
       if (!checked.ok) return json({ ok: false, error: checked.detail, reason: 'bad-target' }, 400);
@@ -690,6 +816,12 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
         const type = request.headers.get('content-type');
         if (type) headers['content-type'] = type;
         const s3 = client(session, options);
+        const ifMatch = request.headers.get('if-match');
+        if (ifMatch !== null) {
+          if (!isStrongETag(ifMatch)) return json({ ok: false, error: 'A single strong ETag is required.' }, 400);
+          if (!s3.supportsCondition('put')) return json({ ok: false, error: 'Conditional writes are unverified for this bucket.' }, 501);
+          headers['if-match'] = ifMatch;
+        }
         const upstream = await s3.send(s3.objectUrl(key), {
           method: 'PUT',
           headers,
@@ -700,7 +832,7 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
         return relay(upstream, 'PUT');
       }
       const versionId = url.searchParams.get('versionId') ?? undefined;
-      return await streamObject(request, session, key, options, versionId);
+      return await streamObject(request, session, key, options, versionId, url.searchParams.get('raw') === '1');
     }
     if (rest === '/part' && request.method === 'PUT') {
       const key = url.searchParams.get('key');

@@ -90,6 +90,9 @@ export function newCapabilityId(): string {
 export class SessionStore {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly media = new Map<string, MediaGrant>();
+  private readonly issuer = newCapabilityId();
+  private expiryTimer?: ReturnType<typeof setTimeout>;
+  private nextExpiry = Infinity;
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -101,6 +104,7 @@ export class SessionStore {
       this.destroy(oldest);
     }
     const id = newCapabilityId();
+    const expiresAt = this.now() + ttlMs;
     this.sessions.set(id, {
       id,
       endpoint: material.endpoint,
@@ -111,8 +115,9 @@ export class SessionStore {
       accessKeyId: encode(material.accessKeyId),
       secretAccessKey: encode(material.secretAccessKey),
       sessionToken: material.sessionToken ? encode(material.sessionToken) : undefined,
-      expiresAt: this.now() + ttlMs,
+      expiresAt,
     });
+    this.scheduleExpiry(expiresAt);
     return id;
   }
 
@@ -124,6 +129,7 @@ export class SessionStore {
       return null;
     }
     record.expiresAt = this.now() + ttlMs;
+    this.scheduleExpiry(record.expiresAt);
     return {
       endpoint: record.endpoint,
       region: record.region,
@@ -158,7 +164,8 @@ export class SessionStore {
       if (!oldest) break;
       this.revokeMedia(oldest);
     }
-    const token = newCapabilityId();
+    const token = this.issuer + '_' + newCapabilityId();
+    const expiresAt = this.now() + ttlMs;
     this.media.set(token, {
       endpoint: session.endpoint,
       region: session.region,
@@ -172,14 +179,17 @@ export class SessionStore {
       versionId: opts.versionId,
       kind: opts.kind ?? 'read',
       maxBytes: opts.maxBytes,
-      expiresAt: this.now() + ttlMs,
+      expiresAt,
     });
+    this.scheduleExpiry(expiresAt);
     return token;
   }
 
   revokeMedia(token: string): boolean {
     const grant = this.media.get(token);
-    if (!grant) return false;
+    // Only this process can confirm that a previously consumed or revoked
+    // capability it issued is already inactive.
+    if (!grant) return token.startsWith(this.issuer + '_');
     wipe(grant.accessKeyId);
     wipe(grant.secretAccessKey);
     wipe(grant.sessionToken);
@@ -211,13 +221,26 @@ export class SessionStore {
     };
   }
 
+  private scheduleExpiry(at: number): void {
+    if (at >= this.nextExpiry) return;
+    clearTimeout(this.expiryTimer);
+    this.nextExpiry = at;
+    this.expiryTimer = setTimeout(() => {
+      this.nextExpiry = Infinity;
+      this.sweep();
+    }, Math.max(0, at - this.now()));
+    this.expiryTimer.unref();
+  }
+
   private sweep(): void {
     const now = this.now();
     for (const [id, record] of this.sessions) {
       if (record.expiresAt <= now) this.destroy(id);
+      else this.scheduleExpiry(record.expiresAt);
     }
     for (const [token, grant] of this.media) {
-      if (grant.expiresAt <= now) this.media.delete(token);
+      if (grant.expiresAt <= now) this.revokeMedia(token);
+      else this.scheduleExpiry(grant.expiresAt);
     }
   }
 }

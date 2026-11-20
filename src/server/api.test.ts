@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { handleAppRequest } from './api';
 import { SessionStore } from './sessions';
+import { publicOrigins } from './proxy';
 import type { ProxyAddress } from './target';
 
 const GATE = 'alpha-gate';
@@ -57,6 +58,101 @@ function callRequest(sessionId: string, body: Record<string, unknown>): Request 
 
 const LOOKUP = async () => [{ address: '10.0.0.5', family: 4 }] as ProxyAddress[];
 
+describe('browser control and share boundaries', () => {
+  test('gate-free controls accept local clients and reject foreign origins, hosts and plain-text requests', async () => {
+    const options = { expectedToken: null, sessions: new SessionStore(), lookup: LOOKUP, listenerPort: 8788 };
+    const submit = (host: string, origin: string, type = 'application/json') => handleAppRequest(
+      new Request(`http://${host}/api/s3/sessions`, {
+        method: 'POST', headers: { origin, 'content-type': type }, body: sessionBody(),
+      }), options,
+    );
+    expect((await submit('localhost:8788', 'http://localhost:8788')).status).toBe(200);
+    expect((await submit('localhost:8788', 'https://example.com')).status).toBe(403);
+    expect((await submit('example.com:8788', 'http://example.com:8788')).status).toBe(403);
+    expect((await submit('localhost:8080', 'http://localhost:8080')).status).toBe(403);
+    expect((await submit('localhost:8788', 'http://localhost:8788', 'text/plain')).status).toBe(400);
+  });
+
+  test('open listeners allow configured TLS authorities and literal addresses', async () => {
+    const origins = publicOrigins({ GALIOT_PUBLIC_ORIGINS: ' https://galiot.example.com , https://galiot.example.com:8443' });
+    const options = { expectedToken: null, open: true, listenerPort: 8788, publicOrigins: origins, sessions: new SessionStore(), lookup: LOOKUP };
+    const submit = (host: string, origin: string) => handleAppRequest(new Request('http://' + host + '/api/s3/sessions', {
+      method: 'POST', headers: { host, origin, 'content-type': 'application/json' }, body: sessionBody(),
+    }), options);
+    expect((await submit('galiot.example.com', origins[0]!)).status).toBe(200);
+    expect((await submit('galiot.example.com:8443', origins[1]!)).status).toBe(200);
+    expect((await submit('10.0.0.5:8899', 'http://10.0.0.5:8899')).status).toBe(200);
+    expect((await submit('example.com:8788', 'http://example.com:8788')).status).toBe(403);
+    expect((await submit('galiot.example.com', 'https://example.com')).status).toBe(403);
+    expect((await submit('galiot.example.com:444', 'https://galiot.example.com:444')).status).toBe(403);
+    expect(() => publicOrigins({ GALIOT_PUBLIC_ORIGINS: 'https://example.com/path' })).toThrow('GALIOT_PUBLIC_ORIGINS');
+  });
+
+  test('object downloads sandbox the response and retain only safe media headers', async () => {
+    const { forward } = scripted([
+      { body: 'document', headers: { 'content-type': 'text/html', 'set-cookie': 'fixture=1', location: '/other' } },
+      { body: 'part', status: 206, headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 0-3/8', 'x-amz-version-id': 'video-version' } },
+    ]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const created = await open(options);
+    const { result: { sessionId } } = await created.json() as { result: { sessionId: string } };
+    const shared = await handleAppRequest(callRequest(sessionId, { op: 'share', key: 'file.pdf' }), options);
+    const { result: { url } } = await shared.json() as { result: { url: string } };
+    const read = () => new Request('http://127.0.0.1' + url);
+    const document = await handleAppRequest(read(), options);
+    expect(document.headers.get('content-type')).toBe('application/octet-stream');
+    expect(document.headers.get('content-disposition')).toStartWith('attachment');
+    expect(document.headers.get('content-security-policy')).toContain('sandbox');
+    expect(document.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(document.headers.has('set-cookie')).toBe(false);
+    expect(document.headers.has('location')).toBe(false);
+    const media = await handleAppRequest(read(), options);
+    expect(media.status).toBe(206);
+    expect(media.headers.get('content-type')).toBe('video/mp4');
+    expect(media.headers.get('content-range')).toBe('bytes 0-3/8');
+    expect(media.headers.get('x-amz-version-id')).toBe('video-version');
+  });
+
+  test('transfer reads transmit the stored bytes of encoded S3 objects', async () => {
+    const metadata = { 'content-type': 'text/plain', 'content-encoding': 'gzip', 'etag': '"stored"' };
+    const { forward } = scripted([{ headers: metadata, body: 'stored bytes' }]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result: { sessionId } } = await (await open(options)).json() as { result: { sessionId: string } };
+    const response = await handleAppRequest(new Request(`http://localhost/api/s3/sessions/${sessionId}/object?key=test&raw=1`, {
+      headers: { 'x-galiot-access-token': GATE },
+    }), options);
+    expect(response.headers.has('content-encoding')).toBe(false);
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('etag')).toBe('"stored"');
+    expect(await response.text()).toBe('stored bytes');
+  });
+
+  test('a different store cannot confirm revocation of an issued link', async () => {
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP };
+    const { result: { sessionId } } = await (await open(options)).json() as { result: { sessionId: string } };
+    const token = options.sessions.mintMedia(sessionId, 'one.txt')!;
+    expect(new SessionStore().revokeMedia(token)).toBe(false);
+    expect(options.sessions.revokeMedia(token)).toBe(true);
+    expect(options.sessions.revokeMedia(token)).toBe(true);
+  });
+
+  test('idle credential cleanup runs without a subsequent request', async () => {
+    const store = new SessionStore();
+    const id = store.create(JSON.parse(sessionBody()));
+    const grant = store.mintMedia(id, 'sample.txt', { ttlMs: 10 });
+    const wiped: string[] = [];
+    const revoked: string[] = [];
+    const destroy = store.destroy.bind(store);
+    const revoke = store.revokeMedia.bind(store);
+    store.destroy = session => { wiped.push(session); destroy(session); };
+    store.revokeMedia = token => { revoked.push(token); return revoke(token); };
+    store.use(id, 10);
+    await Bun.sleep(40);
+    expect(wiped).toContain(id);
+    expect(revoked).toContain(grant!);
+  });
+});
+
 const LIST_TWO =
   '<ListBucketResult><IsTruncated>false</IsTruncated>' +
   '<Contents><Key>a/x.txt</Key><Size>1</Size></Contents>' +
@@ -64,6 +160,27 @@ const LIST_TWO =
   '</ListBucketResult>';
 
 describe('server-side file operations', () => {
+  let previousConditions: string | undefined;
+  beforeEach(() => {
+    previousConditions = process.env.GALIOT_S3_CONDITIONS;
+    process.env.GALIOT_S3_CONDITIONS = JSON.stringify({ 'https://s3.example.com/archive/': ['put', 'move'] });
+  });
+  afterEach(() => {
+    if (previousConditions === undefined) delete process.env.GALIOT_S3_CONDITIONS;
+    else process.env.GALIOT_S3_CONDITIONS = previousConditions;
+  });
+
+  test('uncertified buckets offer read-only editing and retain move sources without an upstream operation', async () => {
+    process.env.GALIOT_S3_CONDITIONS = JSON.stringify({ 'https://s3.example.com/other/': ['put', 'move'] });
+    const { calls, forward } = scripted([]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result } = await (await open(options)).json() as { result: { sessionId: string } };
+    const support = await handleAppRequest(callRequest(result.sessionId, { op: 'editorWriteSupport' }), options);
+    expect(await support.json()).toMatchObject({ ok: true, result: { conditionalPut: false } });
+    const rename = await handleAppRequest(callRequest(result.sessionId, { op: 'rename', sourceKey: 'a', destKey: 'b' }), options);
+    expect(rename.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
   test('copy signs a copy-source header and never moves bytes through the caller', async () => {
     const sessions = new SessionStore();
     const { calls, forward } = scripted([
@@ -83,15 +200,15 @@ describe('server-side file operations', () => {
     expect(calls[1]?.url).toBe('https://s3.example.com/archive/b.txt');
   });
 
-  test('rename of a folder copies every key then deletes the sources in one batch', async () => {
+  test('rename copies every key before conditionally deleting the observed sources', async () => {
     const sessions = new SessionStore();
     const { calls, forward } = scripted([
       { body: LIST_TWO },
-      { headers: { 'content-length': '1' } },
+      { headers: { 'content-length': '1', etag: '"source-x"' } },
       { body: '<CopyObjectResult><ETag>"x"</ETag></CopyObjectResult>' },
-      { headers: { 'content-length': '2' } },
+      { headers: { 'content-length': '2', etag: '"source-y"' } },
       { body: '<CopyObjectResult><ETag>"y"</ETag></CopyObjectResult>' },
-      { body: '<DeleteResult><Deleted><Key>a/x.txt</Key></Deleted><Deleted><Key>a/y.txt</Key></Deleted></DeleteResult>' },
+      {}, {},
     ]);
     const options = { expectedToken: GATE, sessions, lookup: LOOKUP, forward };
     const created = await open(options);
@@ -99,10 +216,112 @@ describe('server-side file operations', () => {
 
     const response = await handleAppRequest(callRequest(sessionId, { op: 'rename', sourceKey: 'a/', destKey: 'b/' }), options);
     expect(((await response.json()) as { result: { moved: number } }).result.moved).toBe(2);
-    expect(calls.map((c) => c.method)).toEqual(['GET', 'HEAD', 'PUT', 'HEAD', 'PUT', 'POST']);
+    expect(calls.map((c) => c.method)).toEqual(['GET', 'HEAD', 'PUT', 'HEAD', 'PUT', 'DELETE', 'DELETE']);
     expect(calls[2]?.headers['x-amz-copy-source']).toBe('/archive/a/x.txt');
     expect(calls[4]?.headers['x-amz-copy-source']).toBe('/archive/a/y.txt');
-    expect(calls[5]?.url).toContain('delete=');
+    expect(calls[2]?.headers['x-amz-copy-source-if-match']).toBe('"source-x"');
+    expect(calls[5]?.headers['if-match']).toBe('"source-x"');
+    expect(calls[6]?.headers['if-match']).toBe('"source-y"');
+  });
+
+  test('an overlapping ancestor move stops before copying', async () => {
+    // Moving p/a/ to p/ maps the nested a/y onto the source p/a/y.
+    const listing = LIST_TWO.replace('a/y.txt', 'p/a/y.txt').replace('a/x.txt', 'p/a/a/y.txt');
+    const { calls, forward } = scripted([{ body: listing }]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result } = await (await open(options)).json() as { result: { sessionId: string } };
+    const res = await handleAppRequest(callRequest(result.sessionId, { op: 'rename', sourceKey: 'p/a/', destKey: 'p/' }), options);
+    expect(res.status).toBe(400);
+    expect(calls.map(call => call.method)).toEqual(['GET']);
+  });
+
+  test('a provider error inside HTTP 200 keeps the source', async () => {
+    const { calls, forward } = scripted([
+      { headers: { etag: '"source"', 'content-length': '12' } },
+      { body: '<Error><Code>InternalError</Code></Error>' },
+    ]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result } = await (await open(options)).json() as { result: { sessionId: string } };
+    const res = await handleAppRequest(callRequest(result.sessionId, { op: 'rename', sourceKey: 'a.txt', destKey: 'b.txt' }), options);
+    expect(await res.json()).toMatchObject({ ok: false, code: 'InternalError' });
+    expect(calls.map(call => call.method)).toEqual(['HEAD', 'PUT']);
+  });
+
+  test('multipart move pins every part and aborts a failed completion while retaining the source', async () => {
+    const { calls, forward } = scripted([
+      { headers: { etag: '"source"', 'x-amz-version-id': 'observed', 'content-length': String(5 * 1024 ** 3 + 1) } },
+      { body: '<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>' },
+      ...Array.from({ length: 11 }, () => ({ body: '<CopyPartResult><ETag>"part"</ETag></CopyPartResult>' })),
+      { body: '<Error><Code>InvalidPart</Code></Error>' }, {},
+    ]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result } = await (await open(options)).json() as { result: { sessionId: string } };
+    const res = await handleAppRequest(callRequest(result.sessionId, { op: 'rename', sourceKey: 'a', destKey: 'b' }), options);
+    expect(await res.json()).toMatchObject({ ok: false, code: 'InvalidPart' });
+    const parts = calls.filter(call => call.method === 'PUT');
+    expect(parts).toHaveLength(11);
+    for (const part of parts) {
+      expect(part.headers['x-amz-copy-source-if-match']).toBe('"source"');
+      expect(part.headers['x-amz-copy-source']).toBe('/archive/a?versionId=observed');
+    }
+    const deletes = calls.filter(call => call.method === 'DELETE');
+    expect(deletes.map(call => new URL(call.url).pathname)).toEqual(['/archive/b']);
+    expect(new URL(deletes[0]!.url).searchParams.get('uploadId')).toBe('upload');
+  });
+
+  test('an unverified gateway cannot assemble a multipart copy from mutable source revisions', async () => {
+    delete process.env.GALIOT_S3_CONDITIONS;
+    const { calls, forward } = scripted([
+      { headers: { etag: '"mutable"', 'content-length': String(5 * 1024 ** 3 + 1), 'x-amz-version-id': 'null' } },
+    ]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result } = await (await open(options)).json() as { result: { sessionId: string } };
+    const res = await handleAppRequest(callRequest(result.sessionId, { op: 'copy', sourceKey: 'a', destKey: 'b' }), options);
+    expect(res.status).toBe(400);
+    expect(calls.map(c => c.method)).toEqual(['HEAD']);
+  });
+
+  test('streamed editor writes forward the strong read ETag, MIME, length and provider conflict', async () => {
+    const { calls, forward } = scripted([{ status: 412 }]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result } = await (await open(options)).json() as { result: { sessionId: string } };
+    const req = new Request('http://127.0.0.1/api/s3/sessions/' + result.sessionId + '/object?key=a', {
+      method: 'PUT', body: '',
+      headers: { 'x-galiot-access-token': GATE, 'content-length': '0', 'if-match': '"observed"', 'content-type': 'application/json' },
+    });
+    expect((await handleAppRequest(req, options)).status).toBe(412);
+    expect(calls[0]?.headers['if-match']).toBe('"observed"');
+    expect(calls[0]?.headers['content-type']).toBe('application/json');
+    expect(calls[0]?.headers['content-length']).toBe('0');
+  });
+
+  test('a conditional cleanup refusal reports the key without retrying an unconditional deletion', async () => {
+    const { calls, forward } = scripted([
+      { headers: { etag: '"source"', 'content-length': '12' } },
+      { body: '<CopyObjectResult><ETag>"dest"</ETag></CopyObjectResult>' },
+      { status: 412, body: '<Error><Code>PreconditionFailed</Code></Error>' },
+    ]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result } = await (await open(options)).json() as { result: { sessionId: string } };
+    const res = await handleAppRequest(callRequest(result.sessionId, { op: 'rename', sourceKey: 'a.txt', destKey: 'b.txt' }), options);
+    expect(await res.json()).toMatchObject({ ok: false, error: expect.stringContaining('a.txt') });
+    expect(calls.map(call => call.method)).toEqual(['HEAD', 'PUT', 'DELETE']);
+    expect(calls[2]?.headers['if-match']).toBe('"source"');
+  });
+
+  test('a version-pinned copy retains the source, including the null version on suspended buckets', async () => {
+    for (const versionId of ['v1', 'null']) {
+      const { calls, forward } = scripted([
+        { headers: { etag: '"same-bytes"', 'x-amz-version-id': versionId, 'content-length': '4' } },
+        { body: '<CopyObjectResult><ETag>"same-bytes"</ETag></CopyObjectResult>' },
+      ]);
+      const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+      const { result } = await (await open(options)).json() as { result: { sessionId: string } };
+      const res = await handleAppRequest(callRequest(result.sessionId, { op: 'rename', sourceKey: 'a', destKey: 'b' }), options);
+      expect(await res.json()).toMatchObject({ ok: false, error: expect.stringContaining('All sources were retained') });
+      expect(calls.map(c => c.method)).toEqual(['HEAD', 'PUT']);
+      expect(calls[1]?.headers['x-amz-copy-source']).toBe('/archive/a?versionId=' + versionId);
+    }
   });
 
   test('a folder cannot be moved inside itself', async () => {
@@ -288,6 +507,16 @@ describe('server-side file operations', () => {
     expect(result.legalHold).toBe('ON');
   });
 
+  test('multipart cancellation reports the provider status and error code', async () => {
+    const { forward } = scripted([{ status: 403, body: '<Error><Code>AccessDenied</Code><Message>Denied</Message></Error>' }]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result: { sessionId } } = await (await open(options)).json() as { result: { sessionId: string } };
+    const response = await handleAppRequest(callRequest(sessionId, {
+      op: 'abortMultipart', key: 'sample.bin', uploadId: 'fixture',
+    }), options);
+    expect(await response.json()).toMatchObject({ ok: false, operation: 'abortMultipart', status: 403, code: 'AccessDenied' });
+  });
+
   test('restore on a provider without archive tiers reports unsupported, not denied', async () => {
     const sessions = new SessionStore();
     const { forward } = scripted([{ status: 501, body: '<Error><Code>NotImplemented</Code></Error>' }]);
@@ -314,16 +543,6 @@ describe('server-side file operations', () => {
     expect(grant.url.startsWith('/api/s3/upload/')).toBe(true);
     expect(grant.maxBytes).toBe(16);
 
-    const put = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, {
-      method: 'PUT',
-      headers: { 'content-length': '5', 'content-type': 'application/octet-stream' },
-      body: 'hello',
-    }), options);
-    expect(put.status).toBe(200);
-    expect(calls[0]?.method).toBe('PUT');
-    expect(calls[0]?.url).toBe('https://s3.example.com/archive/inbox/a.bin');
-    expect(calls[0]?.headers['content-length']).toBe('5');
-
     const tooBig = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, {
       method: 'PUT',
       headers: { 'content-length': '17' },
@@ -343,6 +562,18 @@ describe('server-side file operations', () => {
     } as RequestInit), options);
     expect(noLength.status).toBe(411);
 
+    const put = () => handleAppRequest(new Request(`http://127.0.0.1${grant.url}`, {
+      method: 'PUT',
+      headers: { 'content-length': '5', 'content-type': 'application/octet-stream' },
+      body: 'hello',
+    }), options);
+    const results = await Promise.all([put(), put()]);
+    expect(results.map(result => result.status).sort()).toEqual([200, 404]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe('PUT');
+    expect(calls[0]?.url).toBe('https://s3.example.com/archive/inbox/a.bin');
+    expect(calls[0]?.headers['content-length']).toBe('5');
+
     const wrongMethod = await handleAppRequest(new Request(`http://127.0.0.1${grant.url}`), options);
     expect(wrongMethod.status).toBe(405);
 
@@ -359,6 +590,20 @@ describe('server-side file operations', () => {
       body: 'hello',
     }), options);
     expect(after.status).toBe(404);
+  });
+
+  test('a dispatched empty upload uses its one attempt even if S3 fails', async () => {
+    const sessions = new SessionStore();
+    const { calls, forward } = scripted([{ status: 503 }]);
+    const options = { expectedToken: GATE, sessions, lookup: LOOKUP, forward };
+    const { result: { sessionId } } = await (await open(options)).json() as { result: { sessionId: string } };
+    const token = sessions.mintMedia(sessionId, 'empty.txt', { kind: 'write', maxBytes: 16 });
+    const put = () => handleAppRequest(new Request('http://localhost/api/s3/upload/' + token, {
+      method: 'PUT', headers: { 'content-length': '0' },
+    }), options);
+    expect((await put()).status).toBe(503);
+    expect((await put()).status).toBe(404);
+    expect(calls).toHaveLength(1);
   });
 
   test('a read grant cannot be used to upload', async () => {

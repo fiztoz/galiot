@@ -2,6 +2,9 @@ import type { AppDB, ConnectionRow } from '../db/client';
 import { profileConfig } from '../db/objects';
 import { getSealedCredentials } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
+import { sessionCacheKey, transferTargetIdentity } from './session';
+import type { EncryptedPayload } from '../vault/crypto';
+import { removeStaging, TRANSFER_LOCK } from './checkpoint';
 import { DEFAULT_PART_SIZE, clampConcurrency } from './planner';
 import type {
   CompletedPart,
@@ -23,6 +26,8 @@ export interface TransferTaskRow {
   status: 'queued' | 'transferring' | 'paused' | 'completed' | 'failed';
   speed_bytes_sec: number;
   upload_id: string | null;
+  upload_fingerprint?: string | null;
+  part_size?: number | null;
   error_message: string | null;
   created_at: Date | string;
   updated_at: Date | string;
@@ -43,7 +48,7 @@ type Listener = (event: TransferEvent) => void;
 /** Progress writes are throttled so the DB is not hammered by chunk events. */
 const PROGRESS_WRITE_MS = 400;
 
-function triggerFileDownload(file: File, filename: string): void {
+function triggerFileDownload(file: File, filename: string, release: () => void): () => void {
   const url = URL.createObjectURL(file);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -52,7 +57,29 @@ function triggerFileDownload(file: File, filename: string): void {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  const revoke = () => URL.revokeObjectURL(url);
+  const timer = setTimeout(() => {
+    revoke();
+    release();
+  }, 30_000);
+  return () => { clearTimeout(timer); revoke(); };
+}
+
+/** Authorize both a fresh dispatch and a resume against the immutable ledger entry and live profile. */
+export async function matchesStoredTarget(db: AppDB, job: DownloadJob | UploadJob): Promise<boolean> {
+  const result = await db.query<ConnectionRow & { target_identity: string | null; encrypted_credentials: EncryptedPayload | string }>(
+    `SELECT p.*, t.target_identity FROM transfer_tasks t JOIN profiles p ON p.id = t.profile_id
+     WHERE t.id = $1 AND p.id = $2 AND t.remote_key = $3 AND t.direction = $4`,
+    [job.taskId, job.profileId, job.key, 'file' in job ? 'upload' : 'download'],
+  );
+  const row = result.rows[0];
+  if (!row?.target_identity || row.protocol !== 's3') return false;
+  const credentials: EncryptedPayload = typeof row.encrypted_credentials === 'string'
+    ? JSON.parse(row.encrypted_credentials) : row.encrypted_credentials;
+  const live = { ...profileConfig(row), profileId: row.id, credentials };
+  const proposed = { ...job.target, profileId: job.profileId, credentials: job.credentials };
+  return sessionCacheKey(live) === sessionCacheKey(proposed) &&
+    row.target_identity === await transferTargetIdentity(proposed);
 }
 
 /**
@@ -69,17 +96,87 @@ class TransferManager {
   private lastProgressWrite = new Map<string, number>();
   private initPromise: Promise<void> | null = null;
 
+  private channel: BroadcastChannel | null = null;
+  private generation = 0;
+  private deleting = false;
+  private profileChanges = new Map<string, number>();
+  private events: Promise<void> = Promise.resolve();
+  private directoryTargets = new Map<string, DownloadDestination>();
+  private browserDownloads = new Map<string, () => void>();
+
+  private broadcast(message: { type: 'stop' } | { type: 'invalidate-profile'; profileId: string }): void {
+    if (this.channel) {
+      this.channel.postMessage(message);
+    } else if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('galiot-transfer-control');
+      channel.postMessage(message);
+      channel.close();
+    }
+  }
+
+  private stop(): void {
+    ++this.generation;
+    this.worker?.terminate();
+    this.worker = null;
+    this.initPromise = null;
+    this.lastProgressWrite.clear();
+    this.profileChanges.clear();
+    this.directoryTargets.clear();
+    for (const revoke of this.browserDownloads.values()) revoke();
+    this.browserDownloads.clear();
+  }
+
+  /** Stop writers in all tabs, take exclusive ownership of staging, then perform the vault wipe. */
+  async withVaultDeletion<T>(wipe: () => Promise<T>): Promise<T> {
+    this.deleting = true;
+    this.stop();
+    this.broadcast({ type: 'stop' });
+    try {
+      const run = async () => {
+        await this.events;
+        await removeStaging();
+        return wipe();
+      };
+      const locks = globalThis.navigator?.locks;
+      return await (locks ? locks.request(TRANSFER_LOCK, run) : run());
+    } finally {
+      this.deleting = false;
+    }
+  }
+
+  invalidateProfile(profileId: string): void {
+    const command = { type: 'invalidate-profile', profileId } as const;
+    this.profileChanged(profileId);
+    this.broadcast(command);
+  }
+
+  private profileChanged(profileId: string): void {
+    this.profileChanges.set(profileId, (this.profileChanges.get(profileId) ?? 0) + 1);
+    this.worker?.postMessage({ type: 'invalidate-profile', profileId } satisfies TransferCommand);
+  }
+
   /** Spawns the transfer worker and wires the worker↔worker signing port. */
   init(db: AppDB): Promise<void> {
     if (this.initPromise) return this.initPromise;
 
     this.db = db;
+    if (this.deleting) return Promise.reject(new Error('The vault is being deleted.'));
+    if (!this.channel && typeof BroadcastChannel !== 'undefined') {
+      this.channel = new BroadcastChannel('galiot-transfer-control');
+      this.channel.onmessage = ({ data }) => {
+        if (data?.type === 'stop') this.stop();
+        if (data?.type === 'invalidate-profile' && typeof data.profileId === 'string') this.profileChanged(data.profileId);
+      };
+    }
+    const generation = this.generation;
     this.initPromise = (async () => {
       const worker = new Worker(new URL('../workers/transfer.worker.ts', import.meta.url), {
         type: 'module',
       });
       worker.addEventListener('message', (event: MessageEvent<TransferEvent>) => {
-        void this.handleEvent(event.data);
+        this.events = this.events.then(async () => {
+          if (generation === this.generation) await this.handleEvent(event.data);
+        }).catch(error => console.error('Could not persist transfer state:', error));
       });
       worker.addEventListener('error', (event) => {
         console.error('Transfer worker error:', event.message);
@@ -94,15 +191,19 @@ class TransferManager {
 
       // Worker state does not survive a reload: park unfinished transfers so
       // the user can resume them (uploads need the File re-picked).
+      if (generation !== this.generation) return;
+      const locks = await globalThis.navigator?.locks?.query();
+      const active = (locks?.held ?? []).flatMap(lock =>
+        lock.name?.startsWith('galiot-task-') ? [lock.name.slice('galiot-task-'.length)] : []);
       await db.query(
         `UPDATE transfer_tasks
             SET status = 'paused', speed_bytes_sec = 0, updated_at = NOW()
-          WHERE status IN ('queued', 'transferring')`,
+          WHERE status IN ('queued', 'transferring') AND NOT (id::text = ANY($1::text[]))`, [active],
       );
     })();
 
     this.initPromise.catch(() => {
-      this.initPromise = null;
+      if (generation === this.generation) this.initPromise = null;
     });
     return this.initPromise;
   }
@@ -117,8 +218,21 @@ class TransferManager {
     return this.db;
   }
 
-  private post(command: TransferCommand): void {
-    this.worker?.postMessage(command);
+  private post(command: TransferCommand, generation = this.generation): void {
+    if (this.deleting || generation !== this.generation || !this.worker) throw new Error('Transfer worker stopped.');
+    this.worker.postMessage(command);
+  }
+
+  private async dispatch(job: DownloadJob | UploadJob, generation: number) {
+    const revision = this.profileChanges.get(job.profileId);
+    const authorized = await matchesStoredTarget(this.requireDb(), job);
+    if (!authorized || revision !== this.profileChanges.get(job.profileId)) {
+      const message = 'This task’s original connection cannot be verified. Queue a new transfer for the intended destination.';
+      await this.handleEvent({ type: 'error', taskId: job.taskId, message });
+      throw new Error(message);
+    }
+    if ('file' in job) this.post({ type: 'upload', job }, generation);
+    else this.post({ type: 'download', job }, generation);
   }
 
   /** Queues local files for upload into `prefix` of the given connection. */
@@ -129,8 +243,12 @@ class TransferManager {
     options: UploadOptions = {},
   ): Promise<string[]> {
     if (files.length === 0) return [];
+    const generation = this.generation;
     const db = this.requireDb();
+    await this.init(db);
     const credentials = await getSealedCredentials(db, profile.id);
+    const target = profileConfig(profile);
+    const identity = await transferTargetIdentity({ ...target, profileId: profile.id, credentials });
     const taskIds: string[] = [];
 
     for (let i = 0; i < files.length; i += 1) {
@@ -141,22 +259,23 @@ class TransferManager {
 
       await db.query(
         `INSERT INTO transfer_tasks
-           (id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred, status)
-         VALUES ($1, $2, 'upload', $3, $4, $5, 0, 'queued')`,
-        [taskId, profile.id, key, relative, file.size],
+           (id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred, status, target_identity)
+         VALUES ($1, $2, 'upload', $3, $4, $5, 0, 'queued', $6)`,
+        [taskId, profile.id, key, relative, file.size, identity],
       );
 
       const job: UploadJob = {
         taskId,
         profileId: profile.id,
-        target: profileConfig(profile),
+        target,
         credentials,
         key,
+        prefix,
         file,
         partSize: options.partSize ?? DEFAULT_PART_SIZE,
         concurrency: clampConcurrency(options.concurrency ?? 4),
       };
-      this.post({ type: 'upload', job });
+      await this.dispatch(job, generation);
       taskIds.push(taskId);
     }
 
@@ -175,44 +294,47 @@ class TransferManager {
     destination: DownloadDestination = { kind: 'staged' },
     localPath: string | null = null,
   ): Promise<string> {
+    const generation = this.generation;
     const db = this.requireDb();
+    await this.init(db);
     const credentials = await getSealedCredentials(db, profile.id);
     const taskId = crypto.randomUUID();
+    const target = profileConfig(profile);
+    const identity = await transferTargetIdentity({ ...target, profileId: profile.id, credentials });
 
     await db.query(
       `INSERT INTO transfer_tasks
-         (id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred, status)
-       VALUES ($1, $2, 'download', $3, $4, $5, 0, 'queued')`,
-      [taskId, profile.id, key, localPath, size ?? 0],
+         (id, profile_id, direction, remote_key, local_path, file_size, bytes_transferred, status, target_identity)
+       VALUES ($1, $2, 'download', $3, $4, $5, 0, 'queued', $6)`,
+      [taskId, profile.id, key, localPath, size ?? 0, identity],
     );
 
     const job: DownloadJob = {
       taskId,
       profileId: profile.id,
-      target: profileConfig(profile),
+      target,
       credentials,
       key,
       expectedSize: size,
       destination,
     };
-    this.post({ type: 'download', job });
+    if (destination.kind === 'directory') this.directoryTargets.set(taskId, destination);
+    await this.dispatch(job, generation);
     return taskId;
   }
 
   /**
    * Resumes a paused multipart upload. Browsers cannot retain File handles
-   * across reloads, so the user re-picks the file; we verify the size before
-   * reusing the existing upload id and part ledger.
+   * across reloads. The worker verifies the reselected file's content before reusing parts.
    */
   async resumeUpload(profile: ConnectionRow, task: TransferTaskRow, file: File): Promise<void> {
+    const generation = this.generation;
     const db = this.requireDb();
+    await this.init(db);
     if (file.size !== Number(task.file_size)) {
       throw new Error(
         `File size mismatch: task expects ${task.file_size} bytes, picked ${file.size}`,
       );
-    }
-    if (!task.upload_id) {
-      throw new Error('This transfer has no resumable upload id');
     }
 
     const credentials = await getSealedCredentials(db, profile.id);
@@ -247,9 +369,10 @@ class TransferManager {
       credentials,
       key: task.remote_key,
       file,
-      partSize: DEFAULT_PART_SIZE,
+      partSize: Number(task.part_size) || DEFAULT_PART_SIZE,
       concurrency: 4,
-      uploadId: task.upload_id,
+      uploadId: task.upload_id ?? undefined,
+      uploadFingerprint: task.upload_fingerprint,
       completedParts,
     };
 
@@ -258,16 +381,17 @@ class TransferManager {
         WHERE id = $1`,
       [task.id],
     );
-    this.post({ type: 'upload', job });
+    await this.dispatch(job, generation);
   }
 
   /**
-   * Restarts a paused download; the worker resumes from the target's current
-   * byte offset. Resumes from the drawer always target OPFS staging, since the
-   * local-folder handle from a previous session is not retained.
+   * Reuses revision-bound staging. After a reload the local folder handle is gone,
+   * so the browser download picker receives the finished file.
    */
   async resumeDownload(profile: ConnectionRow, task: TransferTaskRow): Promise<void> {
+    const generation = this.generation;
     const db = this.requireDb();
+    await this.init(db);
     const credentials = await getSealedCredentials(db, profile.id);
 
     const job: DownloadJob = {
@@ -277,7 +401,7 @@ class TransferManager {
       credentials,
       key: task.remote_key,
       expectedSize: Number(task.file_size) || null,
-      destination: { kind: 'staged' },
+      destination: this.directoryTargets.get(task.id) ?? { kind: 'staged' },
     };
 
     await db.query(
@@ -285,7 +409,7 @@ class TransferManager {
         WHERE id = $1`,
       [task.id],
     );
-    this.post({ type: 'download', job });
+    await this.dispatch(job, generation);
   }
 
   pause(taskId: string): void {
@@ -299,17 +423,23 @@ class TransferManager {
   async removeTask(taskId: string): Promise<void> {
     const db = this.requireDb();
     await db.query(`DELETE FROM transfer_tasks WHERE id = $1`, [taskId]);
-    this.post({ type: 'cleanup-staging', taskId });
+    this.directoryTargets.delete(taskId);
+    if (!this.browserDownloads.has(taskId)) await removeStaging(taskId);
   }
 
   async clearFinished(): Promise<void> {
     const db = this.requireDb();
-    await db.query(
-      `DELETE FROM transfer_tasks WHERE status IN ('completed', 'failed')`,
+    const removed = await db.query<{ id: string }>(
+      `DELETE FROM transfer_tasks WHERE status IN ('completed', 'failed') RETURNING id`,
     );
+    for (const row of removed.rows) {
+      this.directoryTargets.delete(row.id);
+      if (!this.browserDownloads.has(row.id)) await removeStaging(row.id);
+    }
   }
 
   private async handleEvent(event: TransferEvent): Promise<void> {
+    const generation = this.generation;
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -319,12 +449,14 @@ class TransferManager {
 
     switch (event.type) {
       case 'upload-created':
-        await db.query(
-          `UPDATE transfer_tasks
-              SET upload_id = $2, status = 'transferring', updated_at = NOW()
-            WHERE id = $1`,
-          [event.taskId, event.uploadId],
-        );
+        await db.transaction(async tx => {
+          await tx.query('DELETE FROM transfer_parts WHERE task_id = $1', [event.taskId]);
+          await tx.query(
+            `UPDATE transfer_tasks SET upload_id = $2, upload_fingerprint = $3, part_size = $4,
+                bytes_transferred = 0, status = 'transferring', updated_at = NOW() WHERE id = $1`,
+            [event.taskId, event.uploadId, event.fingerprint, event.partSize],
+          );
+        });
         break;
 
       case 'part-complete':
@@ -368,6 +500,7 @@ class TransferManager {
         break;
 
       case 'done': {
+        this.directoryTargets.delete(event.taskId);
         await db.query(
           `UPDATE transfer_tasks
               SET status = 'completed', bytes_transferred = $2, speed_bytes_sec = 0,
@@ -375,15 +508,19 @@ class TransferManager {
             WHERE id = $1`,
           [event.taskId, event.totalBytes],
         );
-        if (event.stagedFile) {
-          triggerFileDownload(event.stagedFile, event.stagedFile.name);
-          this.post({ type: 'cleanup-staging', taskId: event.taskId });
+        if (event.stagedFile && generation === this.generation) {
+          const revoke = triggerFileDownload(event.stagedFile, event.filename ?? 'download', () => {
+            this.browserDownloads.delete(event.taskId);
+            void removeStaging(event.taskId).catch(error => console.error('Could not release staged download:', error));
+          });
+          this.browserDownloads.set(event.taskId, revoke);
         }
         this.lastProgressWrite.delete(event.taskId);
         break;
       }
 
       case 'canceled':
+        this.directoryTargets.delete(event.taskId);
         await db.query(
           `UPDATE transfer_tasks
               SET status = 'failed', speed_bytes_sec = 0,

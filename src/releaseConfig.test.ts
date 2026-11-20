@@ -85,4 +85,40 @@ describe('release configuration', () => {
     expect(ci).toContain('/api/health');
     expect(ci).not.toMatch(/wrangler|vercel|netlify|pages deploy/);
   });
+
+  test('image publishing checks out the source without persisting credentials', () => {
+    const release = Bun.YAML.parse(read('.github', 'workflows', 'release.yml')) as {
+      jobs: { image: { steps: { uses?: string; with?: Record<string, unknown> }[] } };
+    };
+    const checkout = release.jobs.image.steps.find(step => step.uses?.startsWith('actions/checkout@'));
+    expect(checkout?.with?.['persist-credentials']).toBe(false);
+  });
+
+  test('the Docker context denies unlisted files, including private files under public/', () => {
+    const rules = read('.dockerignore').split(/\r?\n/).map(line => line.trim())
+      .filter(line => line && !line.startsWith('#'));
+    expect(rules[0]).toBe('**');
+    const exceptions = rules.filter(rule => rule.startsWith('!')).map(rule => new Bun.Glob(rule.slice(1)));
+    for (const path of ['.git/config', '.env.local', '.npmrc', 'node_modules/local.txt',
+      'src/.env', 'public/.env', 'public/private.txt', 'scripts/local.ts', 'dist/index.html']) {
+      // An exception for a parent directory can bring in all of its children.
+      const parts = path.split('/');
+      for (let length = 1; length <= parts.length; length++) {
+        const prefix = parts.slice(0, length).join('/');
+        expect(exceptions.some(pattern => pattern.match(prefix)), prefix).toBe(false);
+      }
+    }
+  });
+
+  test('the final image copies only the built SPA, bundled server and license', () => {
+    const dockerfile = read('Dockerfile');
+    expect(dockerfile).not.toMatch(/^\s*(?:COPY|ADD)\s+\.\s/m);
+    const runtime = dockerfile.slice(dockerfile.lastIndexOf('\nFROM '));
+    expect(runtime.startsWith('\nFROM base\n')).toBe(true);
+    expect(runtime.match(/^(?:COPY|ADD) .+$/gm)).toEqual([
+      'COPY --from=build /app/dist ./dist',
+      'COPY --from=build /app/server.js ./scripts/server.js',
+      'COPY LICENSE ./',
+    ]);
+  });
 });
