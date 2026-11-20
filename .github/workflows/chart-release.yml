@@ -1,0 +1,55 @@
+name: Chart Release
+
+# Publishes the Helm chart to GHCR as an OCI artifact on chart-v* tags.
+# Chart-only releases do not rebuild the container image (release.yml owns
+# v* tags); Chart.yaml appVersion pins which image the chart deploys.
+on:
+  push:
+    tags: ["chart-v*"]
+
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Pinned to commit SHAs, not mutable tags (same policy as CI).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Tools pinned by version AND sha256 — same supply-chain policy as the
+      # SHA-pinned actions above.
+      - name: Install Helm and kubeconform (pinned)
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/helm.tar.gz https://get.helm.sh/helm-v4.3.2-linux-amd64.tar.gz
+          echo "d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983  /tmp/helm.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/helm.tar.gz -C /tmp linux-amd64/helm
+          sudo install /tmp/linux-amd64/helm /usr/local/bin/helm
+          curl -fsSL --retry 3 -o /tmp/kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          echo "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  /tmp/kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install /tmp/kubeconform /usr/local/bin/kubeconform
+
+      - name: Tag must match Chart.yaml version
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#chart-v}"
+          chart_version="$(helm show chart deploy/helm/galiot | awk '$1 == "version:" { print $2 }')"
+          if [ "$tag_version" != "$chart_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Chart.yaml version $chart_version"
+            exit 1
+          fi
+
+      - name: Verify the chart (lint + render matrix + schemas)
+        run: bash scripts/helm-check.sh
+
+      - name: Package and push to GHCR (OCI)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          helm package deploy/helm/galiot -d /tmp/chart
+          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          helm push /tmp/chart/galiot-*.tgz oci://ghcr.io/fiztoz/charts
