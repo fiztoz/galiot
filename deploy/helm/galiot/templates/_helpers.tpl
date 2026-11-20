@@ -95,6 +95,16 @@ server's own refusal to start. Called from deployment.yaml and the test pod. */}
 {{- if or (lt $port 1024) (gt $port 65535) -}}
 {{- fail (printf "service.port must be 1024-65535: the container runs as non-root uid 1000 and cannot bind privileged ports (got %v)." .Values.service.port) -}}
 {{- end -}}
+{{- $b := .Values.branding -}}
+{{- if and $b.logo.svg $b.logo.existingConfigMap -}}
+{{- fail "Set only one of branding.logo.svg or branding.logo.existingConfigMap." -}}
+{{- end -}}
+{{- if and $b.logo.existingConfigMap (not ($b.logo.key | toString | trim)) -}}
+{{- fail "branding.logo.key must not be empty when branding.logo.existingConfigMap is set." -}}
+{{- end -}}
+{{- if gt (len ($b.name | toString)) 64 -}}
+{{- fail "branding.name is too long (max 64 characters)." -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Gate environment for the server container AND the helm-test pod — one
@@ -109,5 +119,41 @@ source of truth so the two can never disagree. Emits a YAML list fragment. */}}
     secretKeyRef:
       name: {{ include "galiot.gateSecretName" . }}
       key: {{ include "galiot.gateSecretKey" . }}
+{{- end }}
+{{- end }}
+
+{{/* Branding: mount path, ConfigMap name/key, and env fragment. */}}
+{{- define "galiot.brandingMountPath" -}}
+/etc/galiot/branding
+{{- end }}
+
+{{- define "galiot.brandingConfigMapName" -}}
+{{- if .Values.branding.logo.existingConfigMap -}}
+{{- .Values.branding.logo.existingConfigMap -}}
+{{- else -}}
+{{- printf "%s-branding" (include "galiot.fullname" .) -}}
+{{- end -}}
+{{- end }}
+
+{{- define "galiot.brandingLogoKey" -}}
+{{- if .Values.branding.logo.existingConfigMap -}}
+{{- .Values.branding.logo.key | default "logo.svg" -}}
+{{- else -}}
+logo.svg
+{{- end -}}
+{{- end }}
+
+{{- define "galiot.brandingEnv" -}}
+{{- if .Values.branding.name }}
+- name: GALIOT_BRAND_NAME
+  value: {{ .Values.branding.name | quote }}
+{{- end }}
+{{- if .Values.branding.tagline }}
+- name: GALIOT_BRAND_TAGLINE
+  value: {{ .Values.branding.tagline | quote }}
+{{- end }}
+{{- if or .Values.branding.logo.svg .Values.branding.logo.existingConfigMap }}
+- name: GALIOT_BRAND_LOGO
+  value: "{{ include "galiot.brandingMountPath" . }}/{{ include "galiot.brandingLogoKey" . }}"
 {{- end }}
 {{- end }}

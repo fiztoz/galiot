@@ -1,0 +1,11 @@
+{{- if and .Values.branding.logo.svg (not .Values.branding.logo.existingConfigMap) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "galiot.brandingConfigMapName" . }}
+  labels:
+    {{- include "galiot.labels" . | nindent 4 }}
+data:
+  logo.svg: |
+    {{- .Values.branding.logo.svg | nindent 4 }}
+{{- end }}

@@ -8,6 +8,7 @@ import { TransferDrawer } from './components/TransferDrawer';
 import { transferManager } from './transfer/manager';
 import { purgeExpiredLinks } from './s3/links';
 import { lockVault } from './vault/repository';
+import { BRAND } from './branding';
 
 function Splash({ label }: { label: string }) {
   return (
@@ -26,7 +27,7 @@ function FatalError({ message }: { message: string }) {
           <AlertTriangle size={24} className="text-red-500" />
         </div>
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50 mb-2">
-          Galiot failed to start
+          {BRAND.name} failed to start
         </h2>
         <p className="text-sm text-zinc-600 dark:text-zinc-300 leading-relaxed">
           This browser could not open local storage, so your connections cannot be kept here. Try a regular window, not private browsing.
@@ -67,12 +68,16 @@ function Shell({ db }: { db: AppDB }) {
     <div className="h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col font-sans">
       <header className="flex-none border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="bg-teal-600 p-2 rounded-lg text-white">
-            <Sailboat size={20} className="stroke-[2.5]" />
-          </div>
+          {BRAND.customLogo ? (
+            <img src={BRAND.logoUrl} alt="" className="h-9 w-9 rounded-lg object-contain" />
+          ) : (
+            <div className="bg-teal-600 p-2 rounded-lg text-white">
+              <Sailboat size={20} className="stroke-[2.5]" />
+            </div>
+          )}
           <div>
             <h1 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50 leading-tight">
-              Galiot
+              {BRAND.name}
             </h1>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-tight hidden sm:block">
               S3 file browser
@@ -128,7 +133,7 @@ export function App() {
   }, []);
 
   if (error) return <FatalError message={error} />;
-  if (!db) return <Splash label="Starting Galiot…" />;
+  if (!db) return <Splash label={`Starting ${BRAND.name}…`} />;
 
   return (
     <PGliteProvider db={db}>

@@ -16,6 +16,12 @@ services:
       # Required for a non-loopback bind; the server refuses to start without it.
       # This gate protects the Galiot API. It is NOT an S3 key.
       GALIOT_GATE: ${GALIOT_GATE:?set GALIOT_GATE to a random secret, e.g. openssl rand -hex 24}
+      # Optional white-label branding — see docs/OPERATIONS.md:
+      # GALIOT_BRAND_NAME: "Acme Explorer"
+      # GALIOT_BRAND_TAGLINE: "Company object storage"
+      # GALIOT_BRAND_LOGO: /etc/galiot/logo.svg
+    # volumes:
+    #   - ./logo.svg:/etc/galiot/logo.svg:ro
     restart: unless-stopped
     # No volumes: Galiot keeps no server-side state. Credentials live in each
     # user's browser vault; server sessions are memory-only.

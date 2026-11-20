@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { BRAND } from '../branding';
 import { Eye, EyeOff, Lock, ArrowRight, Check, Loader2, ShieldCheck } from 'lucide-react';
 import type { AppDB } from '../db/client';
 import { createVault, unlockVault, vaultExists, isVaultUnlocked } from '../vault/repository';
@@ -182,7 +183,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
           </h2>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
             {isCreate
-              ? 'This password seals your S3 keys in this browser. While a bucket is open, your Galiot server uses those keys in memory. It does not store them.'
+              ? `This password seals your S3 keys in this browser. While a bucket is open, your ${BRAND.name} server uses those keys in memory. It does not store them.`
               : 'Enter your password to open your S3 connections.'}
           </p>
         </div>

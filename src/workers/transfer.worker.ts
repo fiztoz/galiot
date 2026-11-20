@@ -268,7 +268,7 @@ class TransferEngine {
       } catch (error) {
         if (options.signal?.aborted) throw error;
         throw new Error(
-          'Cannot reach the Galiot server. Run `bun run dev` or `bun run server`. S3 is called from that process, so the machine running Galiot must be able to reach the bucket.',
+          'Cannot reach the application server. Run `bun run dev` or `bun run server`. S3 is called from that process, so the machine running it must be able to reach the bucket.',
           { cause: error },
         );
       }

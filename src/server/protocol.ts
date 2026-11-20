@@ -8,6 +8,15 @@ export const S3_PROXY_PATH = '/api/s3-proxy';
 export const S3_PROXY_TARGET_HEADER = 'x-galiot-s3-target';
 export const S3_PROXY_DEFAULT_PORT = 8788;
 
+/** Deployment branding (white-label). The server injects these into the shell. */
+export const BRANDING_META_NAME = 'galiot-branding';
+export const BRANDING_LOGO_PATH = '/branding/logo';
+export const DEFAULT_BRAND_NAME = 'Galiot';
+export const DEFAULT_BRAND_TAGLINE = 'The Agile Cloud Explorer';
+export const DEFAULT_LOGO_URL = '/favicon.svg';
+export const MAX_BRAND_NAME_LENGTH = 64;
+export const MAX_BRAND_TAGLINE_LENGTH = 96;
+
 export function isAppApiPath(pathname: string): boolean {
   return pathname === S3_HEALTH_PATH || pathname === S3_API_PREFIX || pathname.startsWith(`${S3_API_PREFIX}/`);
 }

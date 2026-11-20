@@ -2,6 +2,7 @@ import type { AppDB, ConnectionRow } from '../db/client';
 import { profileConfig } from '../db/objects';
 import { getSealedCredentials } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
+import { BRAND } from '../branding';
 import { getProxyToken } from '../server/session';
 import { S3_ACCESS_TOKEN_HEADER } from '../server/protocol';
 
@@ -134,10 +135,10 @@ export function isExpired(link: Pick<PresignedRecord, 'expires_at'>): boolean {
 }
 
 export const revocationHint =
-  'A presigned URL is a bearer token: it stays valid until it expires. Deleting the record here only removes it from Galiot — to truly invalidate it, rotate the access key that signed it.';
+  `A presigned URL is a bearer token: it stays valid until it expires. Deleting the record here only removes it from ${BRAND.name} — to truly invalidate it, rotate the access key that signed it.`;
 
 export const serverLinkHint =
-  'A server link streams from this Galiot host, so it works for people who cannot reach S3 themselves. Revoke it here and it stops working at once.';
+  `A server link streams from this ${BRAND.name} host, so it works for people who cannot reach S3 themselves. Revoke it here and it stops working at once.`;
 
 export const serverWriteHint =
   'An upload link accepts one PUT to exactly this key, up to the byte cap, until it expires. The recipient never sees credentials and never needs a route to S3.';

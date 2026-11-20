@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { BRAND } from '../branding';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -324,7 +325,7 @@ export function GaleonImportDialog({ db, open, onClose, onImported }: GaleonImpo
               <p className="flex items-start gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
                 <ShieldCheck size={13} className="flex-none mt-0.5" />
                 Each connection was sealed by the vault worker. The keys in the Galeon file are not
-                stored in plaintext anywhere in Galiot.
+                stored in plaintext anywhere in {BRAND.name}.
               </p>
 
               <button

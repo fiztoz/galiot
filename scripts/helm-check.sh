@@ -77,6 +77,7 @@ assert_contains "$WORK/default.yaml" 'runAsNonRoot: true' "pod runs non-root"
 assert_contains "$WORK/default.yaml" 'readOnlyRootFilesystem: true' "root filesystem read-only"
 assert_contains "$WORK/default.yaml" 'automountServiceAccountToken: false' "no API token automount"
 assert_contains "$WORK/default.yaml" 'replicas: 1' "single replica by default"
+assert_absent  "$WORK/default.yaml" 'name: GALIOT_BRAND_NAME' "no branding env by default"
 
 echo "== case 2: existingSecret =="
 tpl --set gate.existingSecret=my-gate --set gate.existingSecretKey=token > "$WORK/existing.yaml"
@@ -143,17 +144,54 @@ assert_contains "$WORK/port.yaml" 'containerPort: 9000' "containerPort follows s
 tpl --set gate.value="$GATE" --set image.digest=sha256:abc123 > "$WORK/digest.yaml"
 assert_contains "$WORK/digest.yaml" 'image: ghcr.io/fiztoz/galiot@sha256:abc123' "digest pin wins over tag"
 
+echo "== case 9: branding (name + inline SVG logo) =="
+cat > "$WORK/branding-values.yaml" <<EOF
+gate:
+  value: "$GATE"
+branding:
+  name: Acme Explorer
+  tagline: Company object storage
+  logo:
+    svg: '<svg viewBox="0 0 8 8"><rect width="8" height="8"/></svg>'
+EOF
+tpl -f "$WORK/branding-values.yaml" > "$WORK/branded.yaml"
+assert_contains "$WORK/branded.yaml" '^kind: ConfigMap' "branding ConfigMap renders"
+assert_contains "$WORK/branded.yaml" 'name: GALIOT_BRAND_NAME' "brand name env renders"
+assert_contains "$WORK/branded.yaml" 'value: "Acme Explorer"' "brand name value renders"
+assert_contains "$WORK/branded.yaml" 'name: GALIOT_BRAND_TAGLINE' "tagline env renders"
+assert_contains "$WORK/branded.yaml" 'value: "/etc/galiot/branding/logo.svg"' "logo env points at the mount"
+assert_contains "$WORK/branded.yaml" 'mountPath: /etc/galiot/branding' "logo volume is mounted"
+assert_contains "$WORK/branded.yaml" 'name: galiot-branding' "volume names the rendered ConfigMap"
+assert_contains "$WORK/branded.yaml" 'checksum/branding' "logo change rolls the pods"
+
+echo "== case 10: branding (existing ConfigMap, png key) =="
+tpl --set gate.value="$GATE" --set branding.logo.existingConfigMap=acme-logo --set branding.logo.key=logo.png > "$WORK/branded-existing.yaml"
+assert_absent  "$WORK/branded-existing.yaml" '^kind: ConfigMap' "no chart ConfigMap for existingConfigMap"
+assert_contains "$WORK/branded-existing.yaml" 'value: "/etc/galiot/branding/logo.png"' "logo env follows the custom key"
+assert_contains "$WORK/branded-existing.yaml" 'name: acme-logo' "volume names the existing ConfigMap"
+assert_contains "$WORK/branded-existing.yaml" 'key: logo.png' "volume items select the custom key"
+
 echo "== negative renders (must fail) =="
 assert_render_fails "no gate configured"
 assert_render_fails "gate.value + gate.existingSecret" --set gate.value="$GATE" --set gate.existingSecret=my-gate
 assert_render_fails "gate.open + gate.value" --set gate.open=true --set gate.value="$GATE"
 assert_render_fails "privileged port 80" --set gate.value="$GATE" --set service.port=80
 assert_render_fails "empty existingSecretKey" --set gate.existingSecret=my-gate --set gate.existingSecretKey=""
+cat > "$WORK/branding-both-values.yaml" <<EOF
+gate:
+  value: "$GATE"
+branding:
+  logo:
+    svg: '<svg viewBox="0 0 8 8"/>'
+    existingConfigMap: acme-logo
+EOF
+assert_render_fails "branding.logo.svg + existingConfigMap" -f "$WORK/branding-both-values.yaml"
+assert_render_fails "overlong branding.name" --set gate.value="$GATE" --set branding.name="$(printf 'x%.0s' $(seq 1 65))"
 
 KUBECONFORM="${KUBECONFORM:-$(command -v kubeconform || true)}"
 if [[ -n "$KUBECONFORM" ]]; then
   echo "== kubeconform schema validation =="
-  for f in default existing ingress netpol pdb pdb2 open r3 r0 port digest; do
+  for f in default existing ingress netpol pdb pdb2 open r3 r0 port digest branded branded-existing; do
     "$KUBECONFORM" -strict -summary -kubernetes-version 1.31.0 "$WORK/$f.yaml"
   done
   ok "schema validation"

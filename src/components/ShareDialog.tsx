@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { BRAND } from '../branding';
 import { useLiveQuery } from '@electric-sql/pglite-react';
 import {
   Link2,
@@ -208,8 +209,8 @@ export function ShareDialog({ db, profile, file, onClose }: ShareDialogProps) {
               <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
                 {via === 'server'
                   ? permission === 'read'
-                    ? 'Streams from this Galiot host. Works for people who cannot reach S3, and can be revoked here.'
-                    : 'Accepts one bounded PUT through this Galiot host. Works for people who cannot reach S3, and can be revoked here.'
+                    ? `Streams from this ${BRAND.name} host. Works for people who cannot reach S3, and can be revoked here.`
+                    : `Accepts one bounded PUT through this ${BRAND.name} host. Works for people who cannot reach S3, and can be revoked here.`
                   : permission === 'read'
                     ? 'A presigned S3 URL. The recipient must be able to reach the bucket themselves.'
                     : 'A presigned S3 PUT signed with Content-Type: application/octet-stream — the uploader must reach S3 and send exactly that header.'}

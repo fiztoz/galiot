@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { BRAND } from '../branding';
 import { Download, History, Info, Loader2, Lock, RotateCcw, Snowflake, Trash2, X } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
 import { isArchiveClass, isRestored, type ObjectMeta, type ObjectVersion } from '../s3/client';
@@ -253,7 +254,7 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
               </dl>
               <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
                 While retention or a legal hold is active, the provider refuses overwrites and
-                deletes. Galiot checks this before single-object rename, copy-over, and delete.
+                deletes. {BRAND.name} checks this before single-object rename, copy-over, and delete.
               </p>
             </div>
           )}

@@ -28,6 +28,8 @@
  * header into the request.
  */
 
+import { BRAND } from '../branding';
+
 /** Hard caps, so a pasted blob cannot bloat the row or the request. */
 export const MAX_CUSTOM_HEADERS = 20;
 export const MAX_HEADER_NAME_LENGTH = 128;
@@ -157,8 +159,8 @@ export function rejectReason(name: string, value: string): HeaderRejection | nul
 
 const REJECTION_TEXT: Record<HeaderRejection['kind'], string> = {
   'browser-forbidden': 'browsers refuse to send this header, so it would be saved and then silently ignored',
-  'signing-input': 'Galiot computes this header per request and signs it; overriding it breaks the SigV4 signature',
-  'app-owned': 'Galiot sets this header itself (resumable ranges, upload content type, integrity checks)',
+  'signing-input': `${BRAND.name} computes this header per request and signs it; overriding it breaks the SigV4 signature`,
+  'app-owned': `${BRAND.name} sets this header itself (resumable ranges, upload content type, integrity checks)`,
   'credential-looking':
     'custom headers are stored unencrypted, so a name like this would keep a secret in readable browser storage',
   'invalid-name': 'not a valid HTTP header name',

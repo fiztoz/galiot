@@ -51,6 +51,27 @@ gate:
   # requests with credentials they supply. Only for isolated test networks.
   open: false
 
+# White-label: custom name and logo, applied at runtime — no image rebuild.
+# The server injects the brand into the page title, favicon, PWA manifest and
+# the UI. Changes require a pod restart (helm upgrade rolls them).
+branding:
+  # -- Display name (GALIOT_BRAND_NAME), max 64 chars. Empty keeps "Galiot".
+  name: ""
+  # -- Tagline (GALIOT_BRAND_TAGLINE) after the em dash in the browser title,
+  # max 96 chars. Empty keeps "The Agile Cloud Explorer". To remove the
+  # tagline entirely, use extraEnv with an empty GALIOT_BRAND_TAGLINE value.
+  tagline: ""
+  logo:
+    # -- Inline SVG markup. The chart creates a ConfigMap and mounts it.
+    # Example: '<svg viewBox="0 0 32 32">…</svg>'
+    svg: ""
+    # -- Or mount an existing ConfigMap holding the logo file (svg, png, jpg,
+    # jpeg, webp, gif or ico; ≤1 MiB). Create it with:
+    #   kubectl create configmap acme-logo --from-file=logo.png=./logo.png
+    existingConfigMap: ""
+    # -- Key inside existingConfigMap. The extension sets the content type.
+    key: "logo.svg"
+
 serviceAccount:
   create: true
   # -- Name override. Defaults to the release fullname.

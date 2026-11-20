@@ -25,7 +25,7 @@ helm install galiot deploy/helm/galiot \
 Released charts are published to GHCR as OCI artifacts (`chart-v*` tags):
 
 ```bash
-helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version 0.1.1 \
+helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version 0.2.0 \
   --set gate.value="$(openssl rand -hex 24)"
 ```
 
@@ -52,6 +52,25 @@ TTL, 1-hour share grants). With more replicas:
 
 There is no shared session store, so this chart ships no HPA. Scale vertically
 (`resources`) instead.
+
+## Custom name and logo (white-label)
+
+```yaml
+branding:
+  name: Acme Explorer
+  tagline: Company object storage
+  logo:
+    svg: '<svg viewBox="0 0 32 32">…</svg>'   # inline SVG, chart-managed ConfigMap
+    # — or —
+    existingConfigMap: acme-logo               # kubectl create configmap acme-logo --from-file=logo.png=./logo.png
+    key: logo.png
+```
+
+The server injects the brand into the title, favicon, PWA manifest and UI at
+startup — no image rebuild. Logo files: svg/png/jpg/jpeg/webp/gif/ico, ≤1 MiB;
+bad files refuse startup. A pod restart applies changes (`helm upgrade` rolls
+them; chart-managed logos roll automatically via checksum). See
+`docs/OPERATIONS.md` for the plain-env form.
 
 ## Ingress
 
@@ -123,6 +142,8 @@ restrict `networkPolicy.ingressFrom`, allow that pod too or the test is blocked.
 | `gate.value` | `""` | Chart-managed gate Secret |
 | `gate.existingSecret` / `gate.existingSecretKey` | `""` / `gate` | Bring-your-own gate Secret |
 | `gate.open` | `false` | DANGER: unauthenticated bind |
+| `branding.name` / `branding.tagline` | `""` | White-label name and title tagline |
+| `branding.logo.svg` / `branding.logo.existingConfigMap` / `branding.logo.key` | `""` / `""` / `logo.svg` | Custom logo: inline SVG or mounted ConfigMap |
 | `service.port` | `8788` | Service + container listen port (≥1024) |
 | `ingress.enabled` | `false` | Ingress with hosts/TLS |
 | `networkPolicy.enabled` | `false` | Ingress restriction; egress open |

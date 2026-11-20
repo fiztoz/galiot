@@ -38,9 +38,45 @@ browser vault; server sessions are memory-only.
 | `GALIOT_PORT` | Listen port. Default `8788`. |
 | `GALIOT_PROXY_TOKEN` / `GALIOT_GATE` | Access gate for a non-loopback bind. Not an S3 key. |
 | `GALIOT_PROXY_OPEN` / `GALIOT_GATE_OPEN` | Set to `1` to accept an unauthenticated public bind. Only if you understand what that exposes. |
+| `GALIOT_BRAND_NAME` | White-label display name, max 64 characters. Default `Galiot`. |
+| `GALIOT_BRAND_TAGLINE` | Browser-title tagline, max 96 characters. Unset keeps `The Agile Cloud Explorer`; an empty string removes it. |
+| `GALIOT_BRAND_LOGO` | Path to a logo image file (svg, png, jpg, jpeg, webp, gif, ico; ≤1 MiB), served same-origin at `/branding/logo`. |
 
 A non-loopback bind refuses to start without a gate. On loopback no gate is
 needed, because only this machine can reach the listener.
+
+### Custom name and logo (white-label)
+
+A deployment can carry its own name and logo without rebuilding the image.
+The server injects the brand into the page title, favicon, PWA manifest and
+UI at startup. Restart the process (or roll the pods) to apply changes.
+
+```bash
+GALIOT_BRAND_NAME="Acme Explorer" \
+GALIOT_BRAND_TAGLINE="Company object storage" \
+GALIOT_BRAND_LOGO=/etc/galiot/logo.svg \
+bun run server
+```
+
+With Helm, set `branding.name`, `branding.tagline`, and either an inline
+`branding.logo.svg` or `branding.logo.existingConfigMap`:
+
+```bash
+kubectl create configmap acme-logo --from-file=logo.png=./logo.png
+helm install galiot deploy/helm/galiot \
+  --set gate.value="$(openssl rand -hex 24)" \
+  --set branding.name="Acme Explorer" \
+  --set branding.logo.existingConfigMap=acme-logo \
+  --set branding.logo.key=logo.png
+```
+
+- Nothing set means the default Galiot look, unchanged.
+- An unreadable, empty, oversized, or wrong-type logo file refuses startup —
+  a typo surfaces immediately instead of serving a broken brand.
+- An operator-supplied SVG is served with a sandbox CSP, so opening it
+  directly as a page cannot run scripts.
+- The dev server (`bun run dev`) always shows the default brand; branding is
+  applied by the self-hosted server.
 
 ### Kubernetes (Helm)
 
@@ -65,7 +101,7 @@ Released charts are published to GHCR as OCI artifacts (`chart-v*` tags), so
 you can also install without cloning the repo:
 
 ```bash
-helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version 0.1.1 \
+helm install galiot oci://ghcr.io/fiztoz/charts/galiot --version 0.2.0 \
   --set gate.value="$(openssl rand -hex 24)"
 ```
 

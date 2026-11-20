@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { BRAND } from '../branding';
 import { useLiveQuery } from '@electric-sql/pglite-react';
 import {
   Plus,
@@ -127,7 +128,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
               type="button"
               onClick={() => connectionFileRef.current?.click()}
               className="inline-flex items-center gap-2 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-              title="Import a shared Galiot connection file (no keys included)"
+              title={`Import a shared ${BRAND.name} connection file (no keys included)`}
             >
               <FileUp size={15} />
               <span className="hidden sm:inline">Import connection</span>
@@ -149,7 +150,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
               type="file"
               accept=".json,application/json"
               className="hidden"
-              aria-label="Choose a Galiot connection file"
+              aria-label={`Choose a ${BRAND.name} connection file`}
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) void handleConnectionFile(file);
@@ -184,7 +185,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
             </div>
             <h3 className="text-xl font-semibold mb-2">No buckets yet</h3>
             <p className="text-zinc-600 dark:text-zinc-300 mb-8 max-w-md">
-              Add an S3 bucket. Galiot's server connects to it, so the machine running Galiot must be able to reach the endpoint.
+              Add an S3 bucket. {BRAND.name}'s server connects to it, so the machine running {BRAND.name} must be able to reach the endpoint.
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button

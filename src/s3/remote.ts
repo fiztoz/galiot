@@ -1,6 +1,7 @@
 import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
 import type { BucketSearchResult, CorsConfiguration, ListObjectsResult, ObjectMeta, ProbeResult, VersionListResult } from './client';
 import { S3_ACCESS_TOKEN_HEADER, S3_PROXY_TOKEN_HEADER } from '../server/protocol';
+import { BRAND } from '../branding';
 
 /**
  * Browser-side client for the self-hosted S3 API.
@@ -46,7 +47,7 @@ function gateHeaders(token: string | undefined, json = false): Headers {
 function serverDown(error: unknown): Error {
   if (error instanceof Error && error.name === 'AbortError') return error;
   return new Error(
-    'Cannot reach the Galiot server. Run it with `bun run dev` or `bun run server`. S3 is called from that process, so the machine running Galiot must be able to reach the bucket.',
+    `Cannot reach the ${BRAND.name} server. Run it with \`bun run dev\` or \`bun run server\`. S3 is called from that process, so the machine running ${BRAND.name} must be able to reach the bucket.`,
     { cause: error },
   );
 }
@@ -59,7 +60,7 @@ async function readCall<T>(response: Response, operation: string): Promise<T> {
     body = {};
   }
   if (!response.ok || body.ok === false) {
-    const message = body.error || response.statusText || 'The Galiot server rejected the request.';
+    const message = body.error || response.statusText || `The ${BRAND.name} server rejected the request.`;
     if (typeof body.status === 'number') {
       throw new RemoteS3Error(operation, body.status, body.code || `HTTP ${body.status}`, message);
     }
@@ -94,7 +95,7 @@ export async function openServerSession(
     throw serverDown(error);
   }
   const result = await readCall<{ sessionId: string }>(response, 'OpenSession');
-  if (!result?.sessionId) throw new Error('The Galiot server did not open an S3 session.');
+  if (!result?.sessionId) throw new Error(`The ${BRAND.name} server did not open an S3 session.`);
   return result.sessionId;
 }
 

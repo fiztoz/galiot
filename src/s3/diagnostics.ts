@@ -13,6 +13,7 @@
  */
 
 import { canUseVirtualHosting } from './url';
+import { BRAND } from '../branding';
 
 export type CorsVerdictReason =
   | 'ok'
@@ -126,7 +127,7 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
     return {
       reachable: true,
       reason: 'ok',
-      detail: 'The bucket answered through the Galiot server, which signed the request and called S3. Bucket CORS was not required.',
+      detail: `The bucket answered through the ${BRAND.name} server, which signed the request and called S3. Bucket CORS was not required.`,
       probedUrl: probeUrl,
     };
   }
@@ -138,10 +139,10 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
         reachable: !transportFailure,
         reason: transportFailure ? 'host-unreachable' : 'request-rejected',
         detail: transportFailure
-          ? 'The Galiot server could not reach the endpoint. Bucket CORS is not involved, because the browser does not call S3.'
+          ? `The ${BRAND.name} server could not reach the endpoint. Bucket CORS is not involved, because the browser does not call S3.`
           : `The server route returned an error${requestError ? `: ${requestError}` : ''}. Bucket CORS is not involved.`,
         hint: transportFailure
-          ? 'The machine running Galiot must be able to reach the endpoint, including DNS, the port, and whether it needs http:// instead of https://.'
+          ? `The machine running ${BRAND.name} must be able to reach the endpoint, including DNS, the port, and whether it needs http:// instead of https://.`
           : 'Check the server gate, S3 credentials, bucket name, and permissions for this request.',
         probedUrl: probeUrl,
       };
@@ -149,7 +150,7 @@ export function diagnoseCors(input: DiagnoseInput, reachable: boolean): CorsDiag
     return {
       reachable: false,
       reason: 'unknown',
-      detail: 'No signed request has been attempted through the Galiot server yet.',
+      detail: `No signed request has been attempted through the ${BRAND.name} server yet.`,
       hint: 'Run "Test connection" to check the server route and credentials.',
       probedUrl: probeUrl,
     };

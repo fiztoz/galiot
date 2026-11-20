@@ -1,5 +1,6 @@
 import type { ConnectionRow } from '../db/client';
 import { parseStoredHeaders } from '../s3/customHeaders';
+import { BRAND } from '../branding';
 
 /**
  * Share one connection without its secrets.
@@ -52,14 +53,14 @@ export function parseConnectionShare(text: string): ConnectionShare {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error('This is not JSON. Paste the contents of a Galiot connection file.');
+    throw new Error(`This is not JSON. Paste the contents of a ${BRAND.name} connection file.`);
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('This is not a Galiot connection file.');
+    throw new Error(`This is not a ${BRAND.name} connection file.`);
   }
   const row = parsed as Record<string, unknown>;
   if (row.kind !== CONNECTION_SHARE_KIND || row.version !== 1) {
-    throw new Error('This is not a Galiot connection file (wrong kind or version).');
+    throw new Error(`This is not a ${BRAND.name} connection file (wrong kind or version).`);
   }
   for (const forbidden of ['accessKeyId', 'secretAccessKey', 'sessionToken', 'encrypted_credentials', 'credentials']) {
     if (forbidden in row) {

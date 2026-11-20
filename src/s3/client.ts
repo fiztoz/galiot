@@ -2,6 +2,7 @@ import { AwsClient, type AwsSignOptions } from '../lib/aws4fetch';
 import { buildS3Url, encodeKey } from './url';
 import { md5Base64 } from '../transfer/integrity';
 import { withCustomHeaders } from './customHeaders';
+import { BRAND } from '../branding';
 import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
 import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
 
@@ -359,7 +360,7 @@ export class S3Client {
     }
     if (this.direct) return this.awsClient.fetch(url, requestInit);
     throw new Error(
-      'This process does not call S3. The self-hosted Galiot server signs and connects. The machine running it must be able to reach the bucket.',
+      `This process does not call S3. The self-hosted ${BRAND.name} server signs and connects. The machine running it must be able to reach the bucket.`,
     );
   }
 
