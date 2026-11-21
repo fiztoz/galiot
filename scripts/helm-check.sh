@@ -72,6 +72,12 @@ assert_absent  "$WORK/default.yaml" '^kind: PodDisruptionBudget' "no PDB by defa
 assert_contains "$WORK/default.yaml" 'name: galiot-gate' "secretKeyRef names the rendered Secret"
 assert_contains "$WORK/default.yaml" 'key: gate' "secretKeyRef key matches the Secret"
 assert_absent  "$WORK/default.yaml" 'name: GALIOT_GATE_OPEN' "boolean false keeps the token gate"
+assert_contains "$WORK/default.yaml" 'checksum/gate:' "chart-managed gate rotation rolls pods"
+tpl --set gate.open=false --set gate.value="$GATE-rotated" > "$WORK/rotated.yaml"
+if [ "$(grep -o 'checksum/gate: .*' "$WORK/default.yaml")" = "$(grep -o 'checksum/gate: .*' "$WORK/rotated.yaml")" ]; then
+  echo "FAIL: rotating gate.value does not change the pod checksum"; exit 1
+fi
+echo "ok: rotating gate.value changes the pod checksum"
 assert_contains "$WORK/default.yaml" 'value: "http://galiot:8788"' "test pod targets the rendered Service"
 assert_contains "$WORK/default.yaml" 'path: /api/health' "probes use /api/health"
 assert_contains "$WORK/default.yaml" 'runAsNonRoot: true' "pod runs non-root"
@@ -336,7 +342,7 @@ if [[ -n "$KUBECONFORM" ]]; then
   for f in gateway gateway-local; do
     "$KUBECONFORM" -strict -summary -kubernetes-version 1.31.0 \
       -schema-location default \
-      -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+      -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/784ec895547a36e548e6810b41f27baade3a0890/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
       "$WORK/$f.yaml"
   done
   ok "schema validation"

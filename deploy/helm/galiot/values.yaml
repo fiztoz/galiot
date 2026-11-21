@@ -39,7 +39,9 @@ gate:
   # -- Gate token rendered into a chart-managed Secret. Stored in the Helm
   # release record; fine for trials, prefer existingSecret for production.
   value: ""
-  # -- Name of a pre-existing Secret holding the gate token.
+  # -- Name of a pre-existing Secret holding the gate token. Its content is
+  # unknown to the chart, so rotating it cannot roll pods automatically:
+  # run `kubectl rollout restart deployment/<release>-galiot` after rotation.
   existingSecret: ""
   # -- Key inside gate.existingSecret.
   existingSecretKey: "gate"

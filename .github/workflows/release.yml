@@ -56,11 +56,35 @@ jobs:
             # Pre-release tags (v1.2.0-rc.1) must not move :latest.
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
+      # Load first, smoke-test, then publish: a tag must pass the same
+      # container checks main CI enforces before any image becomes public.
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
-          push: true
+          push: false
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Smoke-test the loaded image
+        run: |
+          set -euo pipefail
+          image="$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | head -1)"
+          test "$(docker run --rm --entrypoint id "$image" -u)" != "0" || { echo "::error::image runs as root"; exit 1; }
+          docker run -d --name galiot-release -e GALIOT_HOST=127.0.0.1 --network host "$image"
+          trap 'docker rm -f galiot-release >/dev/null' EXIT
+          for _ in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8788/api/health >/dev/null && break
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:8788/api/health >/dev/null || { docker logs galiot-release; echo "::error::container did not answer /api/health"; exit 1; }
+          headers=$(curl -sI http://127.0.0.1:8788/)
+          echo "$headers" | grep -qi 'content-security-policy' || { echo "::error::missing CSP header"; exit 1; }
+          echo "$headers" | grep -qi 'x-content-type-options' || { echo "::error::missing nosniff header"; exit 1; }
+      - name: Publish the smoked image
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${{ steps.meta.outputs.tags }}" | while read -r tag; do
+            [ -n "$tag" ] && docker push "$tag"
+          done

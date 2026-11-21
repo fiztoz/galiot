@@ -46,6 +46,17 @@ jobs:
       - name: Verify the chart (lint + render matrix + schemas)
         run: bash scripts/helm-check.sh
 
+      # A chart whose appVersion image was never published deploys broken pods.
+      - name: appVersion image must already exist
+        run: |
+          set -euo pipefail
+          app_version="$(helm show chart deploy/helm/galiot | awk '$1 == "appVersion:" { print $2 }' | tr -d '"')"
+          token="$(curl -sf 'https://ghcr.io/token?scope=repository:fiztoz/galiot:pull' | jq -r .token)"
+          curl -sf -o /dev/null -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/fiztoz/galiot/manifests/${app_version}" \
+            || { echo "::error::image ghcr.io/fiztoz/galiot:${app_version} is not published yet"; exit 1; }
+
       - name: Package and push to GHCR (OCI)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
