@@ -79,11 +79,14 @@ export async function createLink(
       ? JSON.parse(profile.encrypted_credentials) as EncryptedPayload : profile.encrypted_credentials;
     const common = { profile: profileConfig(profile), credentials: { sealed }, key, expiresIn };
     let url: string;
+    // The server clamps a grant's lifetime; record the one it applied.
+    let lifetime = expiresIn;
     if (via === 'server') {
       const grant = permission === 'read'
         ? await vaultService.call('s3.shareLink', common)
         : await vaultService.call('s3.shareWrite', { ...common, maxBytes });
       url = `${window.location.origin}${grant.url}`;
+      lifetime = grant.expiresIn;
     } else if (permission === 'read') {
       url = (await vaultService.call('s3.presignGet', common)).url;
     } else {
@@ -93,7 +96,7 @@ export async function createLink(
       `INSERT INTO presigned_history (id, profile_id, bucket, target_identity, key, url, permission, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [crypto.randomUUID(), profile.id, profile.bucket, target.target_identity, key, url, permission,
-        new Date(Date.now() + expiresIn * 1000).toISOString()],
+        new Date(Date.now() + lifetime * 1000).toISOString()],
     );
     return inserted.rows[0]!;
   });

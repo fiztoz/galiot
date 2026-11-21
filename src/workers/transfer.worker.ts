@@ -348,7 +348,7 @@ export class TransferEngine {
     const file = job.file;
 
     if (file.size === 0) {
-      await this.putObject(rt, job, file, 'text/plain');
+      await this.putObject(rt, job, file, file.type || 'application/octet-stream');
       return;
     }
 

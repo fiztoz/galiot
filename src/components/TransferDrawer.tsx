@@ -77,13 +77,19 @@ export function TransferDrawer(_props: TransferDrawerProps) {
   useEffect(
     () =>
       transferManager.subscribe((event) => {
-        if (event.type === 'progress' || event.type === 'done' || event.type === 'paused') {
-          const bytes =
-            event.type === 'progress'
-              ? event.bytesTransferred
-              : event.type === 'paused'
-                ? event.bytesTransferred
-                : event.totalBytes;
+        // The sparkline shows only while a task is active; drop its series
+        // when the task ends so a long session does not keep every one.
+        if (event.type === 'done' || event.type === 'error' || event.type === 'canceled') {
+          setGraphs((prev) => {
+            if (!prev.has(event.taskId)) return prev;
+            const next = new Map(prev);
+            next.delete(event.taskId);
+            return next;
+          });
+          return;
+        }
+        if (event.type === 'progress' || event.type === 'paused') {
+          const bytes = event.bytesTransferred;
           setGraphs((prev) => {
             const next = new Map(prev);
             const series = [...(next.get(event.taskId) ?? []), bytes];
