@@ -4,9 +4,9 @@ import { readBoundedText } from '../lib/boundedBody';
 import { assertConnectionEndpoint } from '../s3/endpoint';
 import { AwsClient } from '../lib/aws4fetch';
 import { parseStoredHeaders } from '../s3/customHeaders';
-import { presignGetUrl, presignPutBucketCors, presignPutUrl } from '../s3/presign';
+import { presignGetUrl, presignPutUrl } from '../s3/presign';
 import { assertSafeObjectKey, buildS3Url } from '../s3/url';
-import { S3RequestError, type CorsConfiguration, type PartInfo, type ProbeResult } from '../s3/client';
+import { S3RequestError, type PartInfo, type ProbeResult } from '../s3/client';
 import { isStrongETag } from '../s3/clientHeaders';
 import { xmlBlocks, xmlFirst } from '../s3/xml';
 import { clientForSession } from './engine';
@@ -479,21 +479,6 @@ async function handleCall(
               presignExpiry(body.expiresIn),
             ),
           },
-        }, 200);
-      case 'corsGet':
-        return json({ ok: true, result: await s3.getBucketCors() }, 200);
-      case 'corsPut': {
-        if (!body.config || typeof body.config !== 'object') throw new BadRequestError('CORS configuration is required.');
-        await s3.putBucketCors(body.config as CorsConfiguration);
-        return json({ ok: true, result: { applied: true } }, 200);
-      }
-      case 'corsDelete':
-        await s3.deleteBucketCors();
-        return json({ ok: true, result: { deleted: true } }, 200);
-      case 'corsPresign':
-        return json({
-          ok: true,
-          result: { url: await presignPutBucketCors(signer(session), targetOf(session), 'application/xml', presignExpiry(body.expiresIn)) },
         }, 200);
       case 'media': {
         const key = grantKey(body.key);

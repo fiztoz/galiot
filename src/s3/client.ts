@@ -4,7 +4,7 @@ import { md5Base64 } from '../transfer/integrity';
 import { withCustomHeaders } from './customHeaders';
 import { BRAND } from '../branding';
 import { readBoundedText } from '../lib/boundedBody';
-import { xmlBlocks, xmlFirst, xmlTextValues } from './xml';
+import { xmlBlocks, xmlFirst } from './xml';
 import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
 
 export interface S3ClientOptions {
@@ -143,23 +143,6 @@ export interface PartInfo {
   ETag: string;
 }
 
-export interface CorsCheckResult {
-  allowed: boolean;
-  methods: string[];
-}
-
-export interface CorsRule {
-  allowedOrigins: string[];
-  allowedMethods: string[];
-  allowedHeaders: string[];
-  exposeHeaders: string[];
-  maxAgeSeconds: number;
-}
-
-export interface CorsConfiguration {
-  rules: CorsRule[];
-}
-
 const XML_ESCAPES: Record<string, string> = {
   '&': '&amp;',
   '<': '&lt;',
@@ -179,22 +162,6 @@ const MAX_S3_ERROR_BYTES = 64 * 1024;
 const V1_MARKER_PREFIX = 'v1:';
 const readXml = (res: Response) => readBoundedText(res, MAX_S3_XML_BYTES);
 
-function serializeCorsRule(rule: CorsRule): string {
-  const values = (items: string[], tag: string): string =>
-    items.map((item) => `<${tag}>${escapeXml(item)}</${tag}>`).join('');
-
-  return (
-    '<CORSRule>' +
-    `<ID>${escapeXml(`galiot-${rule.maxAgeSeconds}s`)}</ID>` +
-    values(rule.allowedOrigins, 'AllowedOrigin') +
-    values(rule.allowedMethods, 'AllowedMethod') +
-    values(rule.allowedHeaders, 'AllowedHeader') +
-    values(rule.exposeHeaders, 'ExposeHeader') +
-    `<MaxAgeSeconds>${rule.maxAgeSeconds}</MaxAgeSeconds>` +
-    '</CORSRule>'
-  );
-}
-
 /**
  * Query parameters for ListObjectsV2, with empty values omitted.
  *
@@ -204,7 +171,7 @@ function serializeCorsRule(rule: CorsRule): string {
  * every listing, that one empty parameter made every bucket unlistable on MinIO
  * — a failure no mock server reproduced, because mocks happily accept it.
  *
- * Subresource parameters such as `?cors=` or `?uploads=` are the opposite case
+ * Subresource parameters such as `?uploads=` or `?versions=` are the opposite case
  * and must keep their empty value; that is how S3 identifies them.
  */
 export function listObjectsQuery(
@@ -239,9 +206,7 @@ export interface ProbeResult {
  *
  * The code is what makes the difference between "you lack permission" and
  * "this server does not implement that API at all", and the UI cannot tell them
- * apart from a status line alone. MinIO answers `501 NotImplemented` for
- * PutBucketCors (and for `mc cors set`), so treating that as a permissions
- * problem sends the user after a policy change that cannot help.
+ * apart from a status line alone.
  */
 export class S3RequestError extends Error {
   constructor(
@@ -833,131 +798,4 @@ export class S3Client {
   }
 
 
-  /** Reads the bucket's current CORS configuration. */
-  public async getBucketCors(): Promise<CorsConfiguration> {
-    const url = this.buildUrl(undefined, { cors: '' });
-    const res = await this.request(url, { method: 'GET' });
-
-    // No CORSConfiguration element is the documented "not configured" case.
-    if (res.status === 404) return { rules: [] };
-    if (!res.ok) await throwS3Error(res, 'GetBucketCors');
-
-    const text = await readXml(res);
-    const rules: CorsRule[] = xmlBlocks(text, 'CORSRule').map((block) => ({
-      allowedOrigins: xmlTextValues(block, 'AllowedOrigin'),
-      allowedMethods: xmlTextValues(block, 'AllowedMethod'),
-      allowedHeaders: xmlTextValues(block, 'AllowedHeader'),
-      exposeHeaders: xmlTextValues(block, 'ExposeHeader'),
-      maxAgeSeconds: parseInt(xmlFirst(block, 'MaxAgeSeconds') ?? '0', 10),
-    }));
-
-    return { rules };
-  }
-
-  /** Replaces the bucket's CORS configuration. */
-  public async putBucketCors(config: CorsConfiguration): Promise<void> {
-    if (config.rules.length === 0) {
-      await this.deleteBucketCors();
-      return;
-    }
-
-    const xml =
-      '<?xml version="1.0" encoding="UTF-8"?>' +
-      '<CORSConfiguration>' +
-      config.rules.map(serializeCorsRule).join('') +
-      '</CORSConfiguration>';
-
-    const url = this.buildUrl(undefined, { cors: '' });
-    const res = await this.request(url, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/xml' },
-      body: xml,
-    });
-    if (!res.ok) await throwS3Error(res, 'PutBucketCors');
-  }
-
-  /** Removes the bucket's CORS configuration. */
-  public async deleteBucketCors(): Promise<void> {
-    const url = this.buildUrl(undefined, { cors: '' });
-    const res = await this.request(url, { method: 'DELETE' });
-    // 204 is MinIO's and Ceph's success answer for removing a policy that is
-    // not there; anything else non-ok carries a code worth surfacing.
-    if (!res.ok && res.status !== 204) {
-      await throwS3Error(res, 'DeleteBucketCors');
-    }
-  }
-
-  /**
-   * Browser-compatible policy for this app: the given origin, the methods
-   * Galiot uses, ETag exposed (multipart uploads depend on reading it), and
-   * headers needed by presigned PUTs.
-   */
-  public static recommendedCorsRule(origin: string): CorsRule {
-    return {
-      allowedOrigins: [origin],
-      allowedMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE'],
-      allowedHeaders: ['*'],
-      exposeHeaders: ['ETag', 'x-amz-request-id', 'x-amz-id-2'],
-      maxAgeSeconds: 3600,
-    };
-  }
-
-  /**
-   * Probes the bucket endpoint *without* triggering CORS, so callers can tell
-   * "the host is unreachable" apart from "the browser blocked the response".
-   *
-   * The previous implementation replayed a preflight by hand, which could never
-   * succeed and therefore reported failure even for correctly configured
-   * buckets. See src/s3/diagnostics.ts for the reasoning.
-   */
-  public async probeReachable(key?: string): Promise<{ reachable: boolean; url: string; error?: string }> {
-    const url = this.buildUrl(key);
-    try {
-      // NOTE: do not add `redirect: 'manual'` here — Chrome rejects that
-      // combination with a TypeError, which would make every reachable host
-      // look unreachable (verified in a real browser against an on-premises
-      // gateway, a public site and a refused port alike).
-      await fetch(url.toString(), { method: 'GET', mode: 'no-cors' });
-      return { reachable: true, url: url.toString() };
-    } catch (err) {
-      return {
-        reachable: false,
-        url: url.toString(),
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  }
-
-  /**
-   * Probes the endpoint, and — only if that fails — the *other* addressing form.
-   *
-   * A failed probe is not evidence of a network problem. Virtual-hosted
-   * addressing dials `bucket.endpoint`, and most endpoints have no wildcard DNS
-   * for it, so the probe fails on a host that is perfectly reachable. Reporting
-   * that as "network, DNS, port or TLS" sends the user to check a network that
-   * was never broken.
-   *
-   * The two forms are the only variable here, so trying the other one is a
-   * decisive differential: if it answers, the addressing was the cause.
-   */
-  public async probeAddressing(key?: string): Promise<ProbeResult> {
-    const current = await this.probeReachable(key);
-    const alternateUrl = buildS3Url(
-      { endpoint: this.endpoint, bucket: this.bucket, pathStyle: !this.pathStyle },
-      key,
-    ).toString();
-
-    // Already answered: the addressing is fine, so do not spend a second probe.
-    if (current.reachable) {
-      return { ...current, alternateReachable: false, alternateUrl };
-    }
-
-    try {
-      await fetch(alternateUrl, { method: 'GET', mode: 'no-cors' });
-      return { ...current, alternateReachable: true, alternateUrl };
-    } catch {
-      // Neither form answered, so the host itself is the problem.
-      return { ...current, alternateReachable: false, alternateUrl };
-    }
-  }
 }

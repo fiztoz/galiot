@@ -1,6 +1,6 @@
 import type { BackupEnvelope, BackupManifest, VerifiedBackup } from './exportFormat';
 import type { EncryptedPayload } from './crypto';
-import type { BucketSearchResult, CorsConfiguration, ListObjectsResult, ObjectMeta, VersionListResult } from '../s3/client';
+import type { BucketSearchResult, ListObjectsResult, ObjectMeta, VersionListResult } from '../s3/client';
 import type { GaleonImportPrepareResult, GaleonImportPreview } from './galeonImport';
 
 /**
@@ -75,30 +75,6 @@ export interface PresignResult {
   url: string;
 }
 
-export interface CorsResult {
-  allowed: boolean;
-  methods: string[];
-}
-
-/**
- * Outcome of writing a bucket CORS policy.
- *
- * `unsupported` is the case that matters: MinIO (and other servers that expose
- * no per-bucket CORS API) answer `501 NotImplemented`, which is not a
- * permissions problem and cannot be fixed by retrying with different
- * credentials.
- */
-export interface CorsPutResult {
-  applied: boolean;
-  error?: string;
-  /** HTTP status, when the request reached the server. */
-  status?: number;
-  /** The server's own error code, e.g. NotImplemented, AccessDenied. */
-  code?: string;
-  /** True when the endpoint does not implement the bucket-CORS API. */
-  unsupported?: boolean;
-}
-
 export interface FolderStatsResult {
   /** Every directory key in the subtree (including nested levels). */
   directories: string[];
@@ -128,10 +104,6 @@ export type VaultMethod =
   | 'creds.encrypt'
   | 's3.test'
   | 's3.probe'
-  | 's3.cors.get'
-  | 's3.cors.put'
-  | 's3.cors.presign'
-  | 's3.cors.delete'
   | 's3.list'
   | 's3.delete'
   | 's3.folderStats'
@@ -178,20 +150,8 @@ export interface VaultParams {
   'vault.attachTransferPort': { port: MessagePort };
   'creds.encrypt': { credentials: CredentialPlaintext };
   's3.test': { profile: S3ProfileConfig; credentials: Credentials };
-  /** CORS-free reachability probe so failures can be classified. */
+  /** Reachability probe from the server, so failures can be classified. */
   's3.probe': { profile: S3ProfileConfig };
-  's3.cors.get': { profile: S3ProfileConfig; credentials: Credentials };
-  's3.cors.put': {
-    profile: S3ProfileConfig;
-    credentials: Credentials;
-    config: CorsConfiguration;
-  };
-  /**
-   * Presigns PutBucketCors so the user can apply the policy with curl, which
-   * needs no S3 tooling, no configuration, and is not subject to CORS.
-   */
-  's3.cors.presign': { profile: S3ProfileConfig; credentials: Credentials; expiresIn?: number };
-  's3.cors.delete': { profile: S3ProfileConfig; credentials: Credentials };
   's3.list': {
     profile: S3ProfileConfig;
     credentials: Credentials;
@@ -288,10 +248,6 @@ export type VaultResults = {
     alternateReachable?: boolean;
     alternateUrl?: string;
   };
-  's3.cors.get': CorsConfiguration;
-  's3.cors.put': CorsPutResult;
-  's3.cors.presign': { url: string; expiresIn: number };
-  's3.cors.delete': { deleted: true };
   's3.list': ListObjectsResult;
   's3.delete': { deleted: string[]; errors: { key: string; code: string; message: string }[] };
   's3.folderStats': FolderStatsResult;

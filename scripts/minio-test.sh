@@ -22,7 +22,7 @@ PORT="${GALIOT_MINIO_PORT:-9000}"
 ROOT_USER=galiotadmin
 ROOT_PASSWORD=galiotsecret123
 ENDPOINT="http://127.0.0.1:${PORT}"
-BUCKETS=(galiot-test galiot-cors)
+BUCKETS=(galiot-test galiot-protocol)
 
 cleanup() {
   echo ""
@@ -79,7 +79,7 @@ GALIOT_S3_BUCKET=galiot-test bun run test:integrity
 
 echo ""
 echo "=== real-server protocol behaviour (test:minio) ==="
-GALIOT_S3_BUCKET=galiot-cors bun run test:minio
+GALIOT_S3_BUCKET=galiot-protocol bun run test:minio
 
 echo ""
 echo "=== self-hosted server path (test:minio-server) ==="

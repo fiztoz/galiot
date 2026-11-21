@@ -1,5 +1,5 @@
 import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
-import type { BucketSearchResult, CorsConfiguration, DeleteResult, ListObjectsResult, ObjectMeta, ProbeResult, VersionListResult } from './client';
+import type { BucketSearchResult, DeleteResult, ListObjectsResult, ObjectMeta, ProbeResult, VersionListResult } from './client';
 import { isStrongETag } from './clientHeaders';
 import { S3_ACCESS_TOKEN_HEADER, S3_PROXY_TOKEN_HEADER } from '../server/protocol';
 import { BRAND } from '../branding';
@@ -303,28 +303,12 @@ export class RemoteS3 {
     return result;
   }
 
-  getBucketCors(): Promise<CorsConfiguration> {
-    return this.call('corsGet', {});
-  }
-
-  putBucketCors(config: CorsConfiguration): Promise<void> {
-    return this.call('corsPut', { config });
-  }
-
-  deleteBucketCors(): Promise<void> {
-    return this.call('corsDelete', {});
-  }
-
   presignGet(key: string, expiresIn: number): Promise<{ url: string }> {
     return this.call('presignGet', { key, expiresIn });
   }
 
   presignPut(key: string, contentType: string | undefined, expiresIn: number): Promise<{ url: string }> {
     return this.call('presignPut', { key, contentType, expiresIn });
-  }
-
-  presignCors(expiresIn: number): Promise<{ url: string }> {
-    return this.call('corsPresign', { expiresIn });
   }
 
   mediaUrl(key: string, versionId?: string): Promise<{ url: string }> {

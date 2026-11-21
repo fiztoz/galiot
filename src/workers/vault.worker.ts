@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { openManifest, sealManifest } from '../vault/exportFormat';
 import { VaultManager } from '../vault/vault';
-import { MAX_EDITOR_BYTES, RemoteS3, RemoteS3Error, closeServerSession, listBucketsFromServer, openServerSession, probeFromServer, readEditorText } from '../s3/remote';
+import { MAX_EDITOR_BYTES, RemoteS3, closeServerSession, listBucketsFromServer, openServerSession, probeFromServer, readEditorText } from '../s3/remote';
 import {
   MAX_IMPORT_FILE_BYTES,
   buildGaleonPreview,
@@ -366,48 +366,6 @@ async function dispatch<M extends VaultMethod>(
     case 's3.probe': {
       const p = params as { profile: S3ProfileConfig };
       return probeFromServer(p.profile, p.profile.proxyToken);
-    }
-
-    case 's3.cors.get': {
-      const p = params as NonNullable<VaultRequest<'s3.cors.get'>['params']>;
-      const creds = await resolveCredentials(p.credentials);
-      return (await sessionClient(p.profile, creds)).getBucketCors();
-    }
-
-    case 's3.cors.put': {
-      const p = params as NonNullable<VaultRequest<'s3.cors.put'>['params']>;
-      const creds = await resolveCredentials(p.credentials);
-      try {
-        await (await sessionClient(p.profile, creds)).putBucketCors(p.config);
-        return { applied: true as const };
-      } catch (err) {
-        // MinIO answers 501 NotImplemented. That is not a permissions problem.
-        if (err instanceof RemoteS3Error) {
-          return {
-            applied: false,
-            error: err.message,
-            status: err.status,
-            code: err.code,
-            unsupported: err.unsupported,
-          };
-        }
-        throw err;
-      }
-    }
-
-    case 's3.cors.presign': {
-      const p = params as NonNullable<VaultRequest<'s3.cors.presign'>['params']>;
-      const creds = await resolveCredentials(p.credentials);
-      const expiresIn = p.expiresIn ?? 3600;
-      const { url } = await (await sessionClient(p.profile, creds)).presignCors(expiresIn);
-      return { url, expiresIn };
-    }
-
-    case 's3.cors.delete': {
-      const p = params as NonNullable<VaultRequest<'s3.cors.delete'>['params']>;
-      const creds = await resolveCredentials(p.credentials);
-      await (await sessionClient(p.profile, creds)).deleteBucketCors();
-      return { deleted: true as const };
     }
 
     case 's3.list': {

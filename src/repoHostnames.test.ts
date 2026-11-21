@@ -51,7 +51,7 @@ const ALLOWED_BUCKET_NAMES = [
   'bench',
   'data',
   'example-bucket',
-  'galiot-cors',
+  'galiot-protocol',
   'galiot-test',
   'imported-bucket',
   'my-bucket',
@@ -226,9 +226,9 @@ describe('repository bucket names', () => {
       'example-bucket',
     ]);
     expect(bucketNamesIn(`mc cors set galiot/example-bucket`)).toEqual(['example-bucket']);
-    expect(bucketNamesIn(`BUCKETS=(galiot-test galiot-cors)`)).toEqual([
+    expect(bucketNamesIn(`BUCKETS=(galiot-test galiot-protocol)`)).toEqual([
       'galiot-test',
-      'galiot-cors',
+      'galiot-protocol',
     ]);
     expect(
       bucketNamesIn(`'https://s3.example.com/example-bucket/?cors=&X-Amz-Algorithm=AWS4-HMAC-SHA256'`),
