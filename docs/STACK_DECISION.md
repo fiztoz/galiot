@@ -1362,6 +1362,159 @@ still carry it), the `x-galiot-proxy-token` alias and `GALIOT_PROXY_TOKEN` /
 `GALIOT_PROXY_OPEN` names (existing deployments set them), and the
 `x-galiot-bridge-target` refusal in custom headers (old rows may hold it).
 
+## 36. Re-verification log — 2026-11-21 (pass 9: previews and themed controls)
+
+User report: PDFs would not preview (a grey blocked-plugin pane), extensionless
+objects downloaded instead of opening, and several controls still looked like
+raw browser widgets. Three corrections follow.
+
+### PDF preview: PDF.js replaces the sandboxed iframe
+
+`FilePreview` embedded PDFs in `<iframe sandbox="">`. An empty sandbox blocks
+the browser's built-in PDF viewer — MDN states this outright: "The sandbox
+attribute can block the browser's built-in PDF viewer" and points at its
+"Embedding PDFs" guidance
+(https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe).
+Loosening the sandbox to `allow-scripts allow-same-origin` was rejected: MDN
+warns that combination on same-origin content lets the frame strip its own
+sandbox, and the streamed object is untrusted bucket content. Browsers set to
+download PDFs instead of displaying them also refuse in-frame viewing, so any
+plugin-based embed stays fragile.
+
+Added **pdfjs-dist 6.5.438** (npm, `bun add pdfjs-dist`; vendored like every
+other dependency, no CDN). `src/editor/PdfPreview.tsx` renders pages to a
+canvas with a themed toolbar (page turn, fit-width zoom, download). The
+library and its self-contained worker load via dynamic `import()` and a
+`?url` worker asset, so the main bundle is unchanged; the build emits a
+separate ~444 kB (134 kB gzip) chunk. cMaps and standard fonts are copied from
+the npm package into `public/pdfjs/` by `scripts/copy-pdfjs-assets.ts`, which
+runs before `dev` and `build`; the output is gitignored. Verified headlessly:
+Bun + the vendored worker parse a two-page fixture and extract its text; the
+production server serves the emitted `.mjs` worker as `text/javascript`
+(module workers are MIME-checked) — `src/server/static.ts` previously lacked
+`.mjs` in its content-type and compression tables, which would have broken
+the worker only in self-hosted production.
+
+### Extensionless objects: content sniffing before the editor decides
+
+S3 listings carry no Content-Type and uploads often land as
+`application/octet-stream`, so name-based guessing dumped binary into the
+text editor or skipped the object entirely. `src/editor/sniff.ts` reads the
+first 64 KiB (Range request over the same-origin media stream, cancelled
+early when a provider ignores Range) and matches magic bytes: PDF, PNG/JPEG/
+GIF/WebP/BMP/ICO, ISO-FTYP brands (AVIF/HEIC image, M4A audio, else video),
+RIFF forms, FLAC/Ogg/ID3/AMR, Matroska/MPEG-PS. Invalid UTF-8 or control
+characters mean opaque binary, which now gets a "no preview" pane with a
+download action instead of mojibake. Text samples feed grammar hints
+(shebang, JSON/HTML/XML/YAML/diff markers) through
+`detectLanguage(filename, sample)`. `Explorer` double-click now opens
+nameless objects (`hasTypeClue` false) instead of silently downloading them.
+
+### Native widgets replaced with themed controls
+
+`window.confirm` on local-download overwrites became `ConfirmDialog`
+(focus-trapped alertdialog, Cancel focused first, Escape/backdrop cancel).
+Native `<select>` popups (filter storage class, restore days, share expiry
+and upload cap) became `Select`, a keyboard-navigable listbox; native
+checkboxes (path-style addressing, share-include-headers) became `Checkbox`,
+which keeps the native input for semantics behind a themed box. Hidden file
+inputs behind styled buttons were already correct and stay.
+
+Verification: 510 bun tests pass (new: `sniff.test.ts`, `controls.test.tsx`,
+extended `filetypes.test.ts`, `static.test.ts`, updated `renderA11y.test.tsx`
+checkbox contract); `tsc --noEmit` clean; production build and server MIME
+smoke pass. Interactive browser verification was not performed this pass
+(browser approval cancelled); canvas rasterisation rests on the typed v6
+render API plus the headless parse smoke.
+
+## 37. Re-verification log — 2026-11-21 (pass 10: audit swarm and its fixes)
+
+A five-agent read-only audit swarm (correctness, UX/a11y, security, tests/DX,
+external research; all on the session model) surveyed pass 9 and its seams.
+Every finding below was re-verified against the cited lines before fixing.
+Rejected during vetting: pdf.js render races (cancel flags already guard
+them); a "dead duplicate worker asset" (the `.js` twin is the live one-line
+`?url` wrapper chunk); and "missing rendererSrc breaks preview" (v6's
+`RendererWorker.isAvailable` gates on it, so an unset value silently falls
+back to main-thread rasterisation — a perf choice, not a breakage).
+
+### Correctness and control fixes
+
+- **Sniff boundary**: the 64 KiB sample could cut a UTF-8 codepoint, and the
+  fatal decoder then labelled plain text "binary". `decode(bytes, {stream:
+  true})` keeps the incomplete tail in the decoder buffer (WHATWG Encoding;
+  cross-checked against the MIME Sniffing standard's binary-data rules,
+  https://mimesniff.spec.whatwg.org/). `sampleStream` moved into `sniff.ts`
+  with unit tests for truncation and cancel.
+- **Sniff false positives**: `ftyp` now requires a sane box size (16..sample
+  length) and `BM` requires a zeroed BMP reserved word, so prose containing
+  those prefixes stays text.
+- **Keyboard stacking**: Select's Escape stops propagation (host panels and
+  dialogs keep their own Escape); ExplorerFilterBar also guards
+  `defaultPrevented`; Explorer's `dialogOpen` now includes the replace prompt
+  so global Enter/arrows cannot fire behind ConfirmDialog; PdfPreview's page
+  keys ignore `defaultPrevented` and focused controls, and PageUp/PageDown
+  stay with the scroll pane.
+- **Select placement**: the listbox flips up near the viewport bottom and
+  scrolls only itself, never the dialog underneath.
+- **Static symlink escape**: `resolveStaticPath` realpath-checks existing
+  paths against the real root (prefix check alone followed symlinks).
+
+### Preview-grant lifecycle (security)
+
+Preview/sniff media grants are now **session-bound** (`mintMedia(..., {bound:
+true})`): `SessionStore.destroy` wipes them with the session, so vault lock
+and idle-out no longer leave hour-long credential snapshots behind. A new
+session-authenticated `mediaRevoke` op (vault method `s3.revokeMedia`) lets
+the sniffer hand its one-shot grant back after sampling and FilePreview hand
+its grant back on unmount — no operator gate needed. Share grants stay
+unbound and persistent by design; SECURITY.md now states the distinction.
+
+### PDF preview depth
+
+- **TextLayer** over the canvas: transparent selectable text, so copy and
+  browser find-in-page work and screen readers get the page text (the
+  accessible path for a canvas render). **AnnotationLayer** with a minimal
+  `PreviewLinkService`: internal destinations turn pages in place; external
+  links are allowed only over http(s) (`javascript:`/`data:` refused).
+  Forms stay inert — `pdf.sandbox.mjs` is viewer-only in v6. Layer CSS lives
+  in `app.css` because the npm package ships no stylesheet.
+- **wasm decoders**: `wasmUrl` now points at the copied `pdfjs/wasm/`
+  (JBIG2/OpenJPEG/qcms), so scans and JPEG2000 images decode; the copy script
+  gained the directory.
+- **Memory hygiene**: `page.cleanup()` after each render; layer cancel/
+  destroy on every re-render and unmount.
+- `rendererSrc` is deliberately left unset (main-thread rasterisation, the
+  proven path); offloading to the renderer worker needs a live-browser pass
+  first. Browser floor for pdfjs-dist 6: Chrome 119+/Safari 17.4+/Firefox 121+
+  (`Promise.withResolvers`); the package's `legacy/` build is the escape hatch
+  if that floor ever needs lowering.
+
+### Tooling and tests
+
+- `@vitejs/plugin-react` 4.7.0 peer-supported Vite ≤7 and emitted the `jsx`
+  option warning under Vite 8; bumped to 6.3.0 (peers `vite ^8`).
+- The Vite 8 `configLoader: 'native'` deprecation wall is gone: relative
+  imports in the config graph carry `.ts` extensions, with
+  `allowImportingTsExtensions` + `noEmit` in tsconfig.
+- Pass-9 regression fixed: the Docker build context now includes
+  `scripts/copy-pdfjs-assets.ts` (`.dockerignore` + `COPY`), without which
+  `bun run build` inside the image failed.
+- New coverage: `sniff.test.ts` boundary/lookalike/sampleStream cases,
+  `sessions.test.ts` bound-grant lifecycle, `static.test.ts` symlink case,
+  `controls.test.tsx` stacked-Escape case, and `PdfPreview.test.tsx` — a
+  headless lifecycle suite (load, page/zoom controls, layers present, error
+  fallback, document destroy) against a mocked pdfjs module.
+
+Verification: 520 bun tests pass; `tsc --noEmit` clean; production build
+clean. Live browser (isolated, approved run): the harness PDF rendered on
+canvas with toolbar and both DOM layers mounted, and the themed Select/
+Checkbox/ConfirmDialog displayed correctly (screenshot reviewed). The
+follow-up interaction chain was cancelled at the approval layer, so click-
+through of links/zoom/dialogs rests on the headless suites, not a live pass.
+Not audited this pass: vault crypto, transfer engine, PGlite queries, CI/helm
+beyond the Docker context, LocalPane drag-drop.
+
 ---
 
 *End of stack decision. Update this file when spikes close; do not edit the
