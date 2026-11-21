@@ -44,6 +44,13 @@ let generation: string | null = null;
 let transferPort: MessagePort | null = null;
 /** Server sessions opened by this worker, closed when the vault locks. */
 const openSessions = new Map<string, string | undefined>();
+/**
+ * One reusable server session per connection target and sealed credential.
+ * Without it every call would post the secret again and leave another live
+ * copy on the server, crowding out other users' sessions.
+ */
+const sessionCache = new Map<string, { owner: VaultManager; id: Promise<string>; token: string | undefined }>();
+const MAX_CACHED_SESSIONS = 16;
 
 function emitLocked(reason: VaultLockReason): void {
   epoch++;
@@ -56,6 +63,7 @@ function emitLocked(reason: VaultLockReason): void {
 function closeSessions(): void {
   const open = [...openSessions];
   openSessions.clear();
+  sessionCache.clear();
   // The transfer worker caches session ids; tell it they are all dead.
   transferPort?.postMessage({ type: 'sessions-closed' });
   for (const [id, token] of open) void closeServerSession(id, token);
@@ -92,6 +100,8 @@ function requireUnlocked(): VaultManager {
 interface SessionCredentials {
   owner: VaultManager;
   material: CredentialPlaintext;
+  /** Sealed ciphertext identity; plain (unsaved) credentials are never cached. */
+  identity?: string;
 }
 
 function assertOwner(owner: VaultManager): void {
@@ -102,7 +112,8 @@ async function resolveCredentials(credentials: Credentials): Promise<SessionCred
   const owner = requireUnlocked();
   const material = 'plain' in credentials ? credentials.plain : await owner.decryptCredentials(credentials.sealed);
   assertOwner(owner);
-  return { material, owner };
+  const identity = 'sealed' in credentials ? `${credentials.sealed.iv}:${credentials.sealed.ciphertext}` : undefined;
+  return { material, owner, identity };
 }
 
 async function trackedSession(profile: S3ProfileConfig, creds: SessionCredentials): Promise<string> {
@@ -116,8 +127,41 @@ async function trackedSession(profile: S3ProfileConfig, creds: SessionCredential
   return id;
 }
 
+function forgetSession(id: string, token: string | undefined): void {
+  openSessions.delete(id);
+  void closeServerSession(id, token);
+}
+
+/** A cached session id, or a new one when there is none or `stale` was rejected. */
+async function cachedSession(profile: S3ProfileConfig, creds: SessionCredentials, stale?: string): Promise<string> {
+  if (!creds.identity) return trackedSession(profile, creds);
+  const key = JSON.stringify([profile.endpoint, profile.region, profile.bucket, profile.pathStyle,
+    Object.entries(profile.headers ?? {}).sort(), profile.proxyToken ?? null, creds.identity]);
+  const hit = sessionCache.get(key);
+  if (hit && hit.owner === creds.owner) {
+    const id = await hit.id.catch(() => undefined);
+    if (id !== undefined && id !== stale) return id;
+    if (sessionCache.get(key) !== hit) return cachedSession(profile, creds, stale);
+  }
+  if (hit) sessionCache.delete(key);
+  if (stale) openSessions.delete(stale);
+  const id = trackedSession(profile, creds);
+  const entry = { owner: creds.owner, id, token: profile.proxyToken };
+  sessionCache.set(key, entry);
+  id.catch(() => {
+    if (sessionCache.get(key) === entry) sessionCache.delete(key);
+  });
+  while (sessionCache.size > MAX_CACHED_SESSIONS) {
+    const [oldestKey, oldest] = sessionCache.entries().next().value!;
+    sessionCache.delete(oldestKey);
+    void oldest.id.then(evicted => forgetSession(evicted, oldest.token), () => {});
+  }
+  return id;
+}
+
 async function sessionClient(profile: S3ProfileConfig, creds: SessionCredentials): Promise<RemoteS3> {
-  return new RemoteS3(await trackedSession(profile, creds), profile.proxyToken);
+  return new RemoteS3(await cachedSession(profile, creds), profile.proxyToken,
+    stale => cachedSession(profile, creds, stale));
 }
 
 async function handleSessionRequest(request: SessionRequest): Promise<void> {

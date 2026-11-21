@@ -207,24 +207,48 @@ export function sessionPartPath(sessionId: string, key: string, uploadId: string
   return `/api/s3/sessions/${sessionId}/part?${query}`;
 }
 
+/** True only for the server's own JSON answer; an S3 NoSuchKey 404 is XML. */
+async function sessionExpired(response: Response): Promise<boolean> {
+  if (response.status !== 404 || !response.headers.get('content-type')?.includes('application/json')) return false;
+  try {
+    const body = (await response.clone().json()) as { error?: unknown };
+    return typeof body.error === 'string' && /session expired/i.test(body.error);
+  } catch {
+    return false;
+  }
+}
+
 export class RemoteS3 {
   constructor(
-    private readonly sessionId: string,
+    private sessionId: string,
     private readonly token: string | undefined,
+    /** Opens a replacement when the server forgot `stale` (idle expiry, eviction, restart). */
+    private readonly reopen?: (stale: string) => Promise<string>,
   ) {}
 
-  private async call<T>(operation: string, body: Record<string, unknown>): Promise<T> {
-    let response: Response;
-    try {
-      response = await fetch(`/api/s3/sessions/${this.sessionId}/call`, {
-        method: 'POST',
-        headers: gateHeaders(this.token, true),
-        body: JSON.stringify({ op: operation, ...body }),
-        cache: 'no-store',
-      });
-    } catch (error) {
+  /**
+   * One request against the session, retried once on a fresh session. The
+   * server answers "session expired" before touching S3, so a retry cannot
+   * repeat a mutation.
+   */
+  private async sessionFetch(path: (sessionId: string) => string, init: RequestInit): Promise<Response> {
+    const send = (sessionId: string) => fetch(path(sessionId), init).catch((error: unknown) => {
       throw serverDown(error);
-    }
+    });
+    const response = await send(this.sessionId);
+    if (!this.reopen || !(await sessionExpired(response))) return response;
+    void response.body?.cancel().catch(() => {});
+    this.sessionId = await this.reopen(this.sessionId);
+    return send(this.sessionId);
+  }
+
+  private async call<T>(operation: string, body: Record<string, unknown>): Promise<T> {
+    const response = await this.sessionFetch(sessionId => `/api/s3/sessions/${sessionId}/call`, {
+      method: 'POST',
+      headers: gateHeaders(this.token, true),
+      body: JSON.stringify({ op: operation, ...body }),
+      cache: 'no-store',
+    });
     return readCall<T>(response, operation);
   }
 
@@ -236,11 +260,9 @@ export class RemoteS3 {
   }
 
   getObject(key: string): Promise<Response> {
-    return fetch(sessionObjectPath(this.sessionId, key), {
+    return this.sessionFetch(sessionId => sessionObjectPath(sessionId, key), {
       headers: gateHeaders(this.token),
       cache: 'no-store',
-    }).catch((error: unknown) => {
-      throw serverDown(error);
     });
   }
 
@@ -256,7 +278,7 @@ export class RemoteS3 {
     const headers = gateHeaders(this.token);
     headers.set('if-match', eTag);
     headers.set('content-type', contentType ?? 'application/octet-stream');
-    const res = await fetch(sessionObjectPath(this.sessionId, key), {
+    const res = await this.sessionFetch(sessionId => sessionObjectPath(sessionId, key), {
       method: 'PUT', headers, body, cache: 'no-store', redirect: 'error',
     });
     if (res.status === 409 || res.status === 412) throw new Error('The remote object changed. Compare your draft with its latest version.');
