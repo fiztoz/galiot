@@ -3,9 +3,9 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { pipeline } from 'node:stream/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
-import { handleAppRequest } from './api';
-import { isAppApiPath } from './protocol';
-import { accessGate, assertBindAllowed, publicOrigins } from './proxy';
+import { handleAppRequest } from './api.ts';
+import { isAppApiPath } from './protocol.ts';
+import { accessGate, assertBindAllowed, publicOrigins } from './proxy.ts';
 
 /** Same proxy and bind policy for Vite dev and preview, under Bun or Node. */
 export function s3ProxyPlugin(env: NodeJS.ProcessEnv = process.env): Plugin {

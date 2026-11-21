@@ -1,11 +1,11 @@
-import { AwsClient, type AwsSignOptions } from '../lib/aws4fetch';
-import { buildS3Url, encodeKey } from './url';
-import { md5Base64 } from '../transfer/integrity';
-import { withCustomHeaders } from './customHeaders';
-import { BRAND } from '../branding';
-import { readBoundedText } from '../lib/boundedBody';
-import { xmlBlocks, xmlFirst } from './xml';
-import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
+import { AwsClient, type AwsSignOptions } from '../lib/aws4fetch.ts';
+import { buildS3Url, encodeKey } from './url.ts';
+import { md5Base64 } from '../transfer/integrity.ts';
+import { withCustomHeaders } from './customHeaders.ts';
+import { BRAND } from '../branding.ts';
+import { readBoundedText } from '../lib/boundedBody.ts';
+import { xmlBlocks, xmlFirst } from './xml.ts';
+import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol.ts';
 
 export interface S3ClientOptions {
   endpoint: string;

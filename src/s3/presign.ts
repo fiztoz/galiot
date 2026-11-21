@@ -1,5 +1,5 @@
-import { AwsClient } from '../lib/aws4fetch';
-import { assertSafeObjectKey, buildS3Url } from './url';
+import { AwsClient } from '../lib/aws4fetch.ts';
+import { assertSafeObjectKey, buildS3Url } from './url.ts';
 
 /**
  * A connection's custom headers are deliberately NOT applied here.

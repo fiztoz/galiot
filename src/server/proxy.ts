@@ -3,10 +3,10 @@
  * which access gate guards it, and which S3 endpoints it may call.
  */
 
-import { S3_PROXY_DEFAULT_PORT } from './protocol';
-import { isBlockedProxyHost } from './target';
+import { S3_PROXY_DEFAULT_PORT } from './protocol.ts';
+import { isBlockedProxyHost } from './target.ts';
 
-export { isBlockedProxyHost } from './target';
+export { isBlockedProxyHost } from './target.ts';
 
 export function isLoopbackHost(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();

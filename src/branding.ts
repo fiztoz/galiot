@@ -16,7 +16,7 @@ import {
   DEFAULT_LOGO_URL,
   MAX_BRAND_NAME_LENGTH,
   MAX_BRAND_TAGLINE_LENGTH,
-} from './server/protocol';
+} from './server/protocol.ts';
 
 export interface Brand {
   name: string;

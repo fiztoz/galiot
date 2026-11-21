@@ -28,7 +28,7 @@
  * header into the request.
  */
 
-import { BRAND } from '../branding';
+import { BRAND } from '../branding.ts';
 
 /** Hard caps, so a pasted blob cannot bloat the row or the request. */
 export const MAX_CUSTOM_HEADERS = 20;

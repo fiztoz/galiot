@@ -4,7 +4,7 @@ import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { pipeline } from 'node:stream/promises';
-import { unbracketHost, type ProxyAddress } from './target';
+import { unbracketHost, type ProxyAddress } from './target.ts';
 
 /** An endpoint that accepts the connection and then goes silent is dropped after this. */
 export const UPSTREAM_IDLE_MS = 120_000;

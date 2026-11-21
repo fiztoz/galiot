@@ -1,8 +1,8 @@
-import type { EncryptedPayload } from './crypto';
-import type { CredentialPlaintext } from './protocol';
-import { canUseVirtualHosting, normalizeEndpoint } from '../s3/url';
-import { assertConnectionEndpoint } from '../s3/endpoint';
-import { sha256Hex } from '../lib/hash';
+import type { EncryptedPayload } from './crypto.ts';
+import type { CredentialPlaintext } from './protocol.ts';
+import { canUseVirtualHosting, normalizeEndpoint } from '../s3/url.ts';
+import { assertConnectionEndpoint } from '../s3/endpoint.ts';
+import { sha256Hex } from '../lib/hash.ts';
 
 /**
  * Reading Galeon profile exports.

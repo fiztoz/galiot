@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { s3ProxyPlugin } from "./src/server/vite";
+import { s3ProxyPlugin } from "./src/server/vite.ts";
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), s3ProxyPlugin()],

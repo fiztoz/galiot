@@ -1,8 +1,8 @@
-import { s3ClientForProfile, type S3Client, type S3Dispatch } from '../s3/client';
-import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol';
-import type { SessionView } from './sessions';
-import { resolveProxyAddresses, type ProxyLookup } from './target';
-import { forwardRequest } from './upstream';
+import { s3ClientForProfile, type S3Client, type S3Dispatch } from '../s3/client.ts';
+import type { CredentialPlaintext, S3ProfileConfig } from '../vault/protocol.ts';
+import type { SessionView } from './sessions.ts';
+import { resolveProxyAddresses, type ProxyLookup } from './target.ts';
+import { forwardRequest } from './upstream.ts';
 
 /**
  * Signs in this process and connects only to addresses checked for this request.

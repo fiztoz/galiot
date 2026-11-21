@@ -1,7 +1,7 @@
-import { assertConnectionEndpoint } from '../s3/endpoint';
-import { assertSafeCustomHeaders, parseStoredHeaders } from '../s3/customHeaders';
-import type { EncryptedPayload } from './crypto';
-import { VaultManager, type SealedVault } from './vault';
+import { assertConnectionEndpoint } from '../s3/endpoint.ts';
+import { assertSafeCustomHeaders, parseStoredHeaders } from '../s3/customHeaders.ts';
+import type { EncryptedPayload } from './crypto.ts';
+import { VaultManager, type SealedVault } from './vault.ts';
 
 export interface BackupManifest extends SealedVault {
   profiles: Record<string, unknown>[];
