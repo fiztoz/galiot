@@ -59,9 +59,13 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
   const [dropActive, setDropActive] = useState(false);
   const listingInputRef = useRef<HTMLInputElement>(null);
 
+  /** Only the newest listing may land: a slow folder must not overwrite the one navigated to next. */
+  const loadSeq = useRef(0);
   const loadEntries = useCallback(
     async (nextPath: string) => {
       if (!root) return;
+      const seq = ++loadSeq.current;
+      const current = () => seq === loadSeq.current;
       setLoading(true);
       try {
         if (root.kind === 'listing') {
@@ -74,12 +78,14 @@ export function LocalPane({ onDownloadToLocal, onError }: LocalPaneProps) {
         for (const segment of nextPath.split('/').filter(Boolean)) {
           dir = await dir.getDirectoryHandle(segment);
         }
-        setEntries(await listDirectory(dir));
+        const listed = await listDirectory(dir);
+        if (current()) setEntries(listed);
       } catch (err) {
+        if (!current()) return;
         onError(err instanceof Error ? err.message : String(err));
         setEntries([]);
       } finally {
-        setLoading(false);
+        if (current()) setLoading(false);
       }
     },
     [root, onError],
