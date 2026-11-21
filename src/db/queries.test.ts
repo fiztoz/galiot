@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { Glob } from 'bun';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
@@ -318,5 +318,30 @@ describe('deletion planning', () => {
   test('a listed key outside the folder aborts the plan', async () => {
     const { mergeDeletion } = await import('./objects');
     expect(() => mergeDeletion(['photos/'], new Map([['photos/', [{ key: 'other/x', size: 1 }]]]))).toThrow('outside');
+  });
+});
+
+describe('folder stats harvest', () => {
+  test('a complete walk drops cached rows that S3 no longer has', async () => {
+    const { harvestFolderStats } = await import('./objects');
+    const { vaultService } = await import('../vault/vaultService');
+    const db = await seededDb();
+    const rpc = spyOn(vaultService, 'call').mockResolvedValue({
+      directories: [],
+      files: [{ key: 'photos/a.jpg', size: 1_000, lastModified: '2026-06-11T00:00:00.000Z', eTag: '"a"', storageClass: 'STANDARD' }],
+      truncated: false,
+      entryCount: 1,
+    } as never);
+    try {
+      const profile = (await db.query<ConnectionRow>('SELECT * FROM profiles WHERE id = $1', [PROFILE_ID])).rows[0]!;
+      await harvestFolderStats(db as unknown as AppDB, profile, 'photos/');
+      const keys = (await db.query<{ key: string }>(
+        `SELECT key FROM objects_cache WHERE starts_with(key, 'photos/') ORDER BY key`,
+      )).rows.map(r => r.key);
+      expect(keys).toEqual(['photos/', 'photos/a.jpg']);
+    } finally {
+      rpc.mockRestore();
+      await db.close();
+    }
   });
 });

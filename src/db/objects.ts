@@ -376,6 +376,17 @@ export async function harvestFolderStats(
         ],
       );
     }
+
+    // A complete walk is the truth for this subtree: rows it did not see were
+    // deleted elsewhere and must not count toward the "exact" size.
+    if (!stats.truncated) {
+      await tx.query(
+        `DELETE FROM objects_cache
+          WHERE profile_id = $1 AND bucket = $2 AND starts_with(key, $3) AND key <> $3
+            AND NOT (key = ANY($4::text[]))`,
+        [profile.id, profile.bucket, rootKey, [...stats.directories, ...stats.files.map(file => file.key)]],
+      );
+    }
   });
 
   return { truncated: stats.truncated, entryCount: stats.entryCount };
