@@ -145,6 +145,9 @@ export function PdfPreview({ url, filename }: PdfPreviewProps) {
         const pdfjs = await import('pdfjs-dist');
         const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
         pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+        // rendererSrc stays unset on purpose: v6 then rasterises on the main
+        // thread, the path verified headlessly and by screenshot. Offloading
+        // to the renderer worker needs a live-browser pass first (see §37).
         loadingTask = pdfjs.getDocument({
           url,
           cMapUrl: `${ASSET_BASE}cmaps/`,
