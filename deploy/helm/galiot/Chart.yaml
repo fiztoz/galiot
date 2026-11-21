@@ -8,8 +8,8 @@ description: >-
 type: application
 # Chart version. Bump on every chart change; appVersion tracks the released
 # container image (see .github/workflows/release.yml).
-version: 0.2.1
-appVersion: "0.2.0"
+version: 0.3.0
+appVersion: "0.3.0"
 kubeVersion: ">=1.25.0-0"
 keywords:
   - s3

@@ -1,6 +1,6 @@
 {
   "name": "galiot",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Galiot — a self-hosted S3 file browser. The Bun server signs and connects to S3; the host must be able to reach the bucket. MIT.",
