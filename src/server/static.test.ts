@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { CompressedAssets, contentTypeFor, isCompressible, pickEncoding, resolveStaticPath } from './static';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { CONTENT_SECURITY_POLICY, headersForPath } from './securityHeaders';
@@ -24,8 +26,27 @@ describe('static hosting helpers', () => {
     expect(resolveStaticPath(root, '/%2e%2e/package.json')).toBeNull();
   });
 
+  test('a symlink inside the root cannot point outside it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'galiot-static-'));
+    const outside = mkdtempSync(join(tmpdir(), 'galiot-outside-'));
+    try {
+      writeFileSync(join(root, 'real.txt'), 'ok');
+      writeFileSync(join(outside, 'secret.txt'), 'no');
+      symlinkSync(join(outside, 'secret.txt'), join(root, 'link.txt'));
+      expect(resolveStaticPath(root, '/real.txt')).toBe(join(root, 'real.txt'));
+      expect(resolveStaticPath(root, '/link.txt')).toBeNull();
+      expect(resolveStaticPath(root, '/missing.txt')).toBe(join(root, 'missing.txt'));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   test('content types cover the shipped asset kinds', () => {
     expect(contentTypeFor('/x/a.js')).toContain('javascript');
+    // Module workers (PDF.js) need a JavaScript MIME or browsers refuse them.
+    expect(contentTypeFor('/x/a.mjs')).toContain('javascript');
+    expect(isCompressible('/x/a.mjs')).toBe(true);
     expect(contentTypeFor('/x/a.wasm')).toContain('wasm');
     expect(contentTypeFor('/x/a.svg')).toContain('svg');
   });

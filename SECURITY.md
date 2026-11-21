@@ -62,9 +62,13 @@ an S3 credential and grants nothing in the bucket.
 - Upload links through the server accept one PUT to one fixed key, up to the byte
   cap chosen at creation (10 MiB / 100 MiB / 1 GiB) and refused with `413` above
   it; `Content-Length` is required.
-- A grant keeps its own expiring credential snapshot in server memory, so it
-  survives the operator locking the vault; that snapshot is delegated authority
-  for the grant's lifetime.
+- A share grant keeps its own expiring credential snapshot in server memory, so
+  it survives the operator locking the vault; that snapshot is delegated
+  authority for the grant's lifetime.
+- Preview grants (the same-origin media URLs behind image/PDF/audio/video
+  previews and type sniffing) are bound to the issuing session: they are wiped
+  when the vault locks or the session closes, and the preview hands its grant
+  back as soon as the pane closes or the sniff sample is read.
 
 **Known boundaries**
 

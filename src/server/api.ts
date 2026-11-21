@@ -1,25 +1,25 @@
 import { timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
-import { readBoundedText } from '../lib/boundedBody';
-import { assertConnectionEndpoint } from '../s3/endpoint';
-import { AwsClient } from '../lib/aws4fetch';
-import { parseStoredHeaders } from '../s3/customHeaders';
-import { presignGetUrl, presignPutUrl } from '../s3/presign';
-import { assertSafeObjectKey, buildS3Url } from '../s3/url';
-import { S3RequestError, type PartInfo, type ProbeResult } from '../s3/client';
-import { isStrongETag } from '../s3/clientHeaders';
-import { xmlBlocks, xmlFirst } from '../s3/xml';
-import { clientForSession } from './engine';
+import { readBoundedText } from '../lib/boundedBody.ts';
+import { assertConnectionEndpoint } from '../s3/endpoint.ts';
+import { AwsClient } from '../lib/aws4fetch.ts';
+import { parseStoredHeaders } from '../s3/customHeaders.ts';
+import { presignGetUrl, presignPutUrl } from '../s3/presign.ts';
+import { assertSafeObjectKey, buildS3Url } from '../s3/url.ts';
+import { S3RequestError, type PartInfo, type ProbeResult } from '../s3/client.ts';
+import { isStrongETag } from '../s3/clientHeaders.ts';
+import { xmlBlocks, xmlFirst } from '../s3/xml.ts';
+import { clientForSession } from './engine.ts';
 import {
   S3_ACCESS_TOKEN_HEADER,
   S3_API_PREFIX,
   S3_HEALTH_PATH,
   S3_PROXY_TOKEN_HEADER,
-} from './protocol';
-import { SessionStore, type SessionView } from './sessions';
-import { BlockedProxyTargetError, resolveProxyAddresses, type ProxyLookup } from './target';
-import { checkProxyTarget, isLoopbackHost } from './proxy';
-import { forwardRequest } from './upstream';
+} from './protocol.ts';
+import { SessionStore, type SessionView } from './sessions.ts';
+import { BlockedProxyTargetError, resolveProxyAddresses, type ProxyLookup } from './target.ts';
+import { checkProxyTarget, isLoopbackHost } from './proxy.ts';
+import { forwardRequest } from './upstream.ts';
 
 const JSON_LIMIT = 1_000_000;
 const TEXT_LIMIT = 2 * 1024 * 1024;
@@ -482,9 +482,15 @@ async function handleCall(
         }, 200);
       case 'media': {
         const key = grantKey(body.key);
-        const token = sessions.mintMedia(sessionId, key, { versionId: asString(body.versionId, 1024) });
+        // Preview grants are session-bound: they die with the session and can
+        // be handed back early by the preview itself (op mediaRevoke).
+        const token = sessions.mintMedia(sessionId, key, { versionId: asString(body.versionId, 1024), bound: true });
         if (!token) return json({ ok: false, error: 'S3 session expired or unknown.' }, 404);
         return json({ ok: true, result: { url: `/api/s3/media/${token}` } }, 200);
+      }
+      case 'mediaRevoke': {
+        const token = requireString(body.token, 'token', 128);
+        return json({ ok: true, result: { revoked: sessions.revokeMediaForSession(sessionId, token) } }, 200);
       }
       case 'probe':
         return json({ ok: true, result: await probe(session.endpoint, session.bucket, session.pathStyle, options) }, 200);

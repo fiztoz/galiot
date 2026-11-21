@@ -439,6 +439,11 @@ async function dispatch<M extends VaultMethod>(
       const creds = await resolveCredentials(p.credentials);
       return (await sessionClient(p.profile, creds)).mediaUrl(p.key);
     }
+    case 's3.revokeMedia': {
+      const p = params as NonNullable<VaultRequest<'s3.revokeMedia'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).revokeMedia(p.token);
+    }
 
     case 's3.head': {
       const p = params as NonNullable<VaultRequest<'s3.head'>['params']>;

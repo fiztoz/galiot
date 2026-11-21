@@ -1,7 +1,7 @@
-import type { BackupEnvelope, BackupManifest, VerifiedBackup } from './exportFormat';
-import type { EncryptedPayload } from './crypto';
-import type { BucketSearchResult, ListObjectsResult, ObjectMeta, VersionListResult } from '../s3/client';
-import type { GaleonImportPrepareResult, GaleonImportPreview } from './galeonImport';
+import type { BackupEnvelope, BackupManifest, VerifiedBackup } from './exportFormat.ts';
+import type { EncryptedPayload } from './crypto.ts';
+import type { BucketSearchResult, ListObjectsResult, ObjectMeta, VersionListResult } from '../s3/client.ts';
+import type { GaleonImportPrepareResult, GaleonImportPreview } from './galeonImport.ts';
 
 /**
  * Shared message protocol between the main thread and the vault worker.
@@ -112,6 +112,7 @@ export type VaultMethod =
   | 's3.presignGet'
   | 's3.presignPut'
   | 's3.mediaUrl'
+  | 's3.revokeMedia'
   | 's3.head'
   | 's3.createFolder'
   | 's3.copy'
@@ -197,6 +198,12 @@ export interface VaultParams {
     credentials: Credentials;
     key: string;
   };
+  /** Hands a session-bound preview grant back to the server. */
+  's3.revokeMedia': {
+    profile: S3ProfileConfig;
+    credentials: Credentials;
+    token: string;
+  };
   's3.head': { profile: S3ProfileConfig; credentials: Credentials; key: string };
   's3.createFolder': { profile: S3ProfileConfig; credentials: Credentials; key: string };
   's3.copy': { profile: S3ProfileConfig; credentials: Credentials; sourceKey: string; destKey: string };
@@ -256,6 +263,7 @@ export type VaultResults = {
   's3.presignGet': PresignResult;
   's3.presignPut': PresignResult;
   's3.mediaUrl': { url: string };
+  's3.revokeMedia': { revoked: boolean };
   's3.head': ObjectMeta;
   's3.createFolder': { created: boolean };
   's3.copy': { copied: number };

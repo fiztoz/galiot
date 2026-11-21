@@ -67,6 +67,12 @@ interface MediaGrant {
   kind: 'read' | 'write';
   maxBytes?: number;
   expiresAt: number;
+  /**
+   * Preview grants are bound to the issuing session and die with it (vault
+   * lock, idle-out, explicit close). Share grants leave this undefined: they
+   * are delegated authority that must outlive the vault by design.
+   */
+  sessionId?: string;
 }
 
 function encode(value: string): Uint8Array {
@@ -149,12 +155,24 @@ export class SessionStore {
     wipe(record.secretAccessKey);
     wipe(record.sessionToken);
     this.sessions.delete(id);
+    // Session-bound preview grants must not outlive the session that minted
+    // them; unbound share grants keep their delegated lifetime.
+    for (const [token, grant] of this.media) {
+      if (grant.sessionId === id) this.revokeMedia(token);
+    }
+  }
+
+  /** Revokes a preview grant from its own session, without the operator gate. */
+  revokeMediaForSession(sessionId: string, token: string): boolean {
+    const grant = this.media.get(token);
+    if (!grant || grant.sessionId !== sessionId) return false;
+    return this.revokeMedia(token);
   }
 
   mintMedia(
     sessionId: string,
     key: string,
-    opts: { ttlMs?: number; versionId?: string; kind?: 'read' | 'write'; maxBytes?: number } = {},
+    opts: { ttlMs?: number; versionId?: string; kind?: 'read' | 'write'; maxBytes?: number; bound?: boolean } = {},
   ): string | null {
     const session = this.use(sessionId);
     if (!session) return null;
@@ -189,6 +207,7 @@ export class SessionStore {
       kind: opts.kind ?? 'read',
       maxBytes: opts.maxBytes,
       expiresAt,
+      sessionId: opts.bound ? sessionId : undefined,
     });
     this.scheduleExpiry(expiresAt);
     return token;

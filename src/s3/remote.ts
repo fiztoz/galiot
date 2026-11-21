@@ -301,6 +301,9 @@ export class RemoteS3 {
   mediaUrl(key: string, versionId?: string): Promise<{ url: string }> {
     return this.call('media', { key, versionId });
   }
+  revokeMedia(token: string): Promise<{ revoked: boolean }> {
+    return this.call('mediaRevoke', { token });
+  }
 
   head(key: string): Promise<ObjectMeta> {
     return this.call('head', { key });

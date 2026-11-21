@@ -1,4 +1,5 @@
 import { resolve, sep } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { brotliCompress, constants as zlib, gzip } from 'node:zlib';
 
@@ -19,12 +20,23 @@ export function resolveStaticPath(root: string, pathname: string): string | null
   const rootResolved = resolve(root);
   const file = resolve(rootResolved, relative);
   if (file !== rootResolved && !file.startsWith(rootResolved + sep)) return null;
+  // A symlink inside the root must not point outside it. Missing files throw
+  // here and stay the caller's 404; only existing paths are realpath-checked.
+  try {
+    const real = realpathSync(file);
+    const realRoot = realpathSync(rootResolved);
+    if (real !== realRoot && !real.startsWith(realRoot + sep)) return null;
+  } catch {
+    // fall through: nonexistent path, nothing to disclose
+  }
   return file;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  // Module workers (PDF.js) are refused by browsers unless the MIME is JavaScript.
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.wasm': 'application/wasm',
   '.json': 'application/json; charset=utf-8',
@@ -46,7 +58,7 @@ const brotliAsync = promisify(brotliCompress);
 const gzipAsync = promisify(gzip);
 
 /** Text and WebAssembly shrink well; images and fonts are already compressed. */
-const COMPRESSIBLE = new Set(['.js', '.css', '.html', '.json', '.svg', '.wasm', '.data', '.txt', '.map']);
+const COMPRESSIBLE = new Set(['.js', '.mjs', '.css', '.html', '.json', '.svg', '.wasm', '.data', '.txt', '.map']);
 
 export type AssetEncoding = 'br' | 'gzip';
 
