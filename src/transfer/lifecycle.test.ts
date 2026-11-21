@@ -283,3 +283,38 @@ test('a permanent part failure is not retried and stops the remaining parts', as
     port.port2.close();
   }
 });
+
+test('a BadDigest part is retried, since the bytes were damaged in transit', async () => {
+  const job: UploadJob = {
+    taskId: 'digest', profileId: 'profile', key: 'big.bin',
+    target: { endpoint: 'https://s3.example.com', bucket: 'example-bucket', region: 'r', pathStyle: true },
+    credentials: { iv: 'i', ciphertext: 'c' }, file: new File([new Uint8Array(33 * 1024 ** 2)], 'big.bin'),
+    partSize: 16 * 1024 ** 2, concurrency: 1,
+  };
+  const events: TransferEvent[] = [];
+  const attempts = new Map<string, number>();
+  const engine = new TransferEngine(e => events.push(e), async (url, init) => {
+    if (String(url).includes('/part?')) {
+      const part = new URL(String(url), 'http://x').searchParams.get('partNumber')!;
+      attempts.set(part, (attempts.get(part) ?? 0) + 1);
+      expect(new Headers(init?.headers).get('content-md5')).toMatch(/==$/);
+      if (part === '1' && attempts.get(part) === 1) {
+        return new Response('<Error><Code>BadDigest</Code></Error>', { status: 400 });
+      }
+      return new Response(null, { headers: { etag: `"e${part}"` } });
+    }
+    const body = JSON.parse(String(init?.body));
+    return Response.json({ ok: true, result: body.op === 'createMultipart' ? { uploadId: 'u' } : {} });
+  });
+  const port = new MessageChannel();
+  port.port2.onmessage = ({ data }) => port.port2.postMessage({ type: 'session', id: data.id, sessionId: 's' });
+  engine.attachPort(port.port1);
+  try {
+    await engine.run(job);
+    expect(attempts.get('1')).toBe(2);
+    expect(events.some(e => e.type === 'error')).toBe(false);
+  } finally {
+    port.port1.close();
+    port.port2.close();
+  }
+});

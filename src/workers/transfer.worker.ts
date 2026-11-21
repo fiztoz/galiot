@@ -517,8 +517,12 @@ export class TransferEngine {
           // 4xx (AccessDenied, NoSuchUpload, EntityTooSmall) fails the same way
           // every time; only timeouts, throttling and 5xx are worth a retry.
           if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
-            void res.body?.cancel().catch(() => {});
-            throw Object.assign(failure, { permanent: true });
+            // S3 sends a damaged body (BadDigest) and a stalled one
+            // (RequestTimeout) as 400 too; both deserve another attempt.
+            const text = await res.text().catch(() => '');
+            if (!/<Code>(BadDigest|RequestTimeout|IncompleteBody)<\/Code>/.test(text.slice(0, 4096))) {
+              throw Object.assign(failure, { permanent: true });
+            }
           }
           throw failure;
         }
