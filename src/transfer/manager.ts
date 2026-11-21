@@ -458,6 +458,30 @@ class TransferManager {
     if (!this.browserDownloads.has(taskId)) await removeStaging(taskId);
   }
 
+  /**
+   * Before a connection is deleted (its tasks cascade away), cancel every
+   * incomplete upload it started. Best effort: returns what could not be
+   * cancelled so the caller can say so.
+   */
+  async discardProfileUploads(db: AppDB, profileId: string): Promise<string[]> {
+    this.db ??= db;
+    this.invalidateProfile(profileId);
+    const tasks = await db.query<TransferTaskRow>(
+      `SELECT * FROM transfer_tasks WHERE profile_id = $1 AND upload_id IS NOT NULL AND status <> 'completed'`,
+      [profileId],
+    );
+    const problems: string[] = [];
+    for (const task of tasks.rows) {
+      try {
+        const note = await this.abortStoredUpload(task);
+        if (note) problems.push(note);
+      } catch (error) {
+        problems.push(`${task.remote_key}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return problems;
+  }
+
   /** Removes a finished or paused task, cancelling its incomplete S3 upload first. */
   async removeTask(taskId: string): Promise<void> {
     const db = this.requireDb();

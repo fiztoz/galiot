@@ -204,14 +204,20 @@ export async function createConnection(db: AppDB, input: ConnectionInput): Promi
   return id;
 }
 
-/** Deletes a connection; `objects_cache` rows cascade with the foreign key. */
-export async function deleteConnection(db: AppDB, id: string): Promise<void> {
+/**
+ * Deletes a connection; `objects_cache` and transfer rows cascade with the
+ * foreign key. Incomplete uploads are cancelled on S3 first, while the sealed
+ * credentials still exist. Returns the uploads that could not be cancelled.
+ */
+export async function deleteConnection(db: AppDB, id: string): Promise<string[]> {
   const { generation } = await vaultService.call('vault.status');
+  const leftovers = await transferManager.discardProfileUploads(db, id);
   await db.transaction(async tx => {
     await requireGeneration(tx, generation);
     await tx.query('DELETE FROM profiles WHERE id = $1', [id]);
   });
   transferManager.invalidateProfile(id);
+  return leftovers;
 }
 
 export interface ConnectionUpdate {

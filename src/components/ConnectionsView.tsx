@@ -79,8 +79,12 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
     async (id: string) => {
       setDeleteError(null);
       try {
-        await deleteConnection(db, id);
+        const leftovers = await deleteConnection(db, id);
         setPendingDeleteId(null);
+        if (leftovers.length) {
+          setDeleteError(`Connection deleted. Some incomplete S3 uploads were not cancelled and keep their stored parts until a ` +
+            `bucket lifecycle rule removes them: ${leftovers.join(' ')}`);
+        }
       } catch (err) {
         setDeleteError(err instanceof Error ? err.message : String(err));
         setPendingDeleteId(null);
