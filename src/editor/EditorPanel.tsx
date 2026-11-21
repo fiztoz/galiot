@@ -155,6 +155,14 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   /** Media previews dock beside the table (master-detail); editing stays full-screen. */
   const [expandMedia, setExpandMedia] = useState(false);
   const docked = media !== null && !expandMedia;
+  const [panelWidth, setPanelWidth] = useState(() => {
+    const stored = typeof localStorage === 'undefined' ? NaN : Number(localStorage.getItem('galiot.previewWidth'));
+    return Number.isFinite(stored) && stored >= 320 && stored <= 720 ? stored : 560;
+  });
+  const resizingRef = useRef(false);
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') localStorage.setItem('galiot.previewWidth', String(panelWidth));
+  }, [panelWidth]);
   const [langSupport, setLangSupport] = useState<Extension | undefined>(undefined);
   /**
    * Whether language resolution has finished.
@@ -170,6 +178,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
 
   const containerRef = useRef<HTMLDivElement>(null);
   const currentTextRef = useRef('');
+
   const trapRef = useFocusTrap<HTMLDivElement>();
 
   /** Asks before discarding a draft; Escape on that prompt keeps editing. */
@@ -384,10 +393,37 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
       aria-label={filename}
       className={
         docked
-          ? 'fixed top-0 right-0 bottom-0 z-40 w-full max-w-[560px] bg-zinc-50 dark:bg-zinc-950 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl flex flex-col'
+          ? 'fixed top-0 right-0 bottom-0 z-40 w-full max-w-full bg-zinc-50 dark:bg-zinc-950 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl flex flex-col'
           : 'fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex flex-col'
       }
+      style={docked ? { width: panelWidth } : undefined}
     >
+      {docked && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize preview panel"
+          tabIndex={0}
+          onPointerDown={(event) => {
+            resizingRef.current = true;
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            if (!resizingRef.current) return;
+            setPanelWidth(Math.min(720, Math.max(320, window.innerWidth - event.clientX)));
+          }}
+          onPointerUp={() => {
+            resizingRef.current = false;
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowLeft') setPanelWidth((w) => Math.min(720, w + 40));
+            else if (event.key === 'ArrowRight') setPanelWidth((w) => Math.max(320, w - 40));
+            else return;
+            event.preventDefault();
+          }}
+          className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-teal-500/40 focus-visible:bg-teal-500/60 transition-colors"
+        />
+      )}
       <header className="flex-none flex items-center gap-3 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
         <FileText size={16} className="text-teal-500 flex-none" />
         <div className="min-w-0">
