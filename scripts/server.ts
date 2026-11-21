@@ -23,7 +23,7 @@ import { BRANDING_LOGO_PATH, isAppApiPath } from '../src/server/protocol';
 import { injectPresets, presetsFromEnv } from '../src/server/presets';
 import { proxyListenConfig, publicOrigins } from '../src/server/proxy';
 import { headersForPath } from '../src/server/securityHeaders';
-import { contentTypeFor, resolveStaticPath } from '../src/server/static';
+import { CompressedAssets, contentTypeFor, isCompressible, pickEncoding, resolveStaticPath } from '../src/server/static';
 
 const { hostname, port, gate, open } = proxyListenConfig();
 const origins = publicOrigins(process.env);
@@ -41,6 +41,8 @@ const manifestFile = Bun.file(resolve(root, 'manifest.webmanifest'));
 const manifestJson = (await manifestFile.exists())
   ? brandedManifest(await manifestFile.text(), branding)
   : null;
+
+const compressed = new CompressedAssets();
 
 const server = Bun.serve({
   hostname,
@@ -89,6 +91,18 @@ const server = Bun.serve({
     // HSTS on plain HTTP pins the browser to HTTPS for this host, including loopback.
     if (url.protocol !== 'https:' && request.headers.get('x-forwarded-proto') !== 'https') {
       headers.delete('strict-transport-security');
+    }
+    // Hashed assets (PGlite's WASM and data are ~16 MB) go out compressed.
+    // A Range request gets the plain file, whose byte offsets it names.
+    const encoding = pickEncoding(request.headers.get('accept-encoding'));
+    if (url.pathname.startsWith('/assets/') && isCompressible(filePath) && !request.headers.has('range')) {
+      headers.set('vary', 'accept-encoding');
+      if (encoding) {
+        const body = await compressed.get(filePath, encoding, () => file.arrayBuffer());
+        headers.set('content-encoding', encoding);
+        headers.set('content-length', String(body.byteLength));
+        return new Response(request.method === 'HEAD' ? null : body, { headers });
+      }
     }
     return new Response(file, { headers });
   },

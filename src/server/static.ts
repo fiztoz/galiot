@@ -1,4 +1,6 @@
 import { resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
+import { brotliCompress, constants as zlib, gzip } from 'node:zlib';
 
 /**
  * Resolves a URL path under `root`, or null when it would escape the root.
@@ -38,4 +40,51 @@ export function contentTypeFor(filePath: string): string {
   const dot = filePath.lastIndexOf('.');
   const ext = dot === -1 ? '' : filePath.slice(dot).toLowerCase();
   return CONTENT_TYPES[ext] ?? 'application/octet-stream';
+}
+
+const brotliAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+/** Text and WebAssembly shrink well; images and fonts are already compressed. */
+const COMPRESSIBLE = new Set(['.js', '.css', '.html', '.json', '.svg', '.wasm', '.data', '.txt', '.map']);
+
+export type AssetEncoding = 'br' | 'gzip';
+
+export function isCompressible(filePath: string): boolean {
+  const dot = filePath.lastIndexOf('.');
+  return dot !== -1 && COMPRESSIBLE.has(filePath.slice(dot).toLowerCase());
+}
+
+/** Brotli when the client takes it, else gzip, else none. A q=0 entry refuses. */
+export function pickEncoding(acceptEncoding: string | null): AssetEncoding | null {
+  const accepted = new Set<string>();
+  for (const part of (acceptEncoding ?? '').toLowerCase().split(',')) {
+    const [name, ...params] = part.trim().split(';').map(token => token.trim());
+    if (!name || params.some(param => /^q=0(\.0*)?$/.test(param))) continue;
+    accepted.add(name);
+  }
+  if (accepted.has('br')) return 'br';
+  if (accepted.has('gzip')) return 'gzip';
+  return null;
+}
+
+/**
+ * Compresses each hashed asset once per encoding, on first request, off the
+ * event loop. Hashed names are immutable, so the cache never goes stale.
+ */
+export class CompressedAssets {
+  private readonly cache = new Map<string, Promise<Uint8Array>>();
+
+  get(filePath: string, encoding: AssetEncoding, read: () => Promise<ArrayBuffer>): Promise<Uint8Array> {
+    const key = `${encoding}:${filePath}`;
+    let pending = this.cache.get(key);
+    if (!pending) {
+      pending = read().then(async bytes => new Uint8Array(encoding === 'br'
+        ? await brotliAsync(bytes, { params: { [zlib.BROTLI_PARAM_QUALITY]: 9, [zlib.BROTLI_PARAM_SIZE_HINT]: bytes.byteLength } })
+        : await gzipAsync(bytes, { level: 9 })));
+      pending.catch(() => this.cache.delete(key));
+      this.cache.set(key, pending);
+    }
+    return pending;
+  }
 }
