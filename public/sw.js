@@ -10,6 +10,28 @@
 const CACHE_NAME = 'galiot-v1';
 const ASSETS_CACHE_NAME = 'galiot-assets-v1';
 
+/*
+ * Hashed assets never change, but every deploy adds a new set (~18 MB with
+ * PGlite). Entries are stamped when stored and pruned after this age; one
+ * still in use is simply fetched again on its next request.
+ */
+const ASSET_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const CACHED_AT_HEADER = 'x-galiot-cached-at';
+
+function pruneAssets() {
+  return caches.open(ASSETS_CACHE_NAME).then((cache) =>
+    cache.keys().then((requests) =>
+      Promise.all(requests.map((request) =>
+        cache.match(request).then((response) => {
+          const cachedAt = Number(response && response.headers.get(CACHED_AT_HEADER));
+          if (!cachedAt || Date.now() - cachedAt > ASSET_MAX_AGE_MS) return cache.delete(request);
+          return false;
+        })
+      ))
+    )
+  );
+}
+
 const CLOUD_URL_PATTERNS = [
   /^https:\/\/[^/]+\.amazonaws\.com/,
   /^https:\/\/[^/]+\.r2\.cloudflarestorage\.com/,
@@ -34,7 +56,7 @@ self.addEventListener('activate', (event) => {
           .filter((name) => name.startsWith('galiot-') && name !== CACHE_NAME && name !== ASSETS_CACHE_NAME)
           .map((name) => caches.delete(name))
       );
-    })
+    }).then(pruneAssets)
   );
   self.clients.claim();
 });
@@ -64,10 +86,18 @@ self.addEventListener('fetch', (event) => {
         }
         return fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
-            const responseToCache = networkResponse.clone();
-            caches.open(ASSETS_CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
+            const copy = networkResponse.clone();
+            const headers = new Headers(copy.headers);
+            headers.set(CACHED_AT_HEADER, String(Date.now()));
+            // The body read back is already decoded; the wire encoding and
+            // length no longer describe it.
+            headers.delete('content-encoding');
+            headers.delete('content-length');
+            event.waitUntil(copy.blob().then((body) =>
+              caches.open(ASSETS_CACHE_NAME).then((cache) =>
+                cache.put(event.request, new Response(body, { status: copy.status, statusText: copy.statusText, headers }))
+              )
+            ));
           }
           return networkResponse;
         });
@@ -89,6 +119,7 @@ self.addEventListener('fetch', (event) => {
             caches.open(CACHE_NAME).then((cache) => {
               cache.put('/', responseToCache);
             });
+            event.waitUntil(pruneAssets());
           }
           return response;
         })
