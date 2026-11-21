@@ -1556,6 +1556,24 @@ rest on unit/a11y tests (522 pass) and type/build checks, not a rendered
 look. Renderer-worker offload (`rendererSrc`) remains deferred for the same
 reason.
 
+## 39. Re-verification log — 2026-11-21 (pass 12: second refinement batch)
+
+Continued the Impeccable Operate-mode refinement with the remaining
+research-backed items: a persisted comfortable/compact row-density preference
+(Cloudscape collection-preferences density), responsive column priority
+(Size hidden below `sm`, Modified below `md`, name column keeps the room at
+390px), a pointer- and keyboard-resizable docked preview panel (320–720px,
+persisted, `role=separator`), selection-aware command-palette ranking with
+density/shortcuts commands, and an aggregate failed-count + “Retry N” for
+failed downloads in the transfer drawer (uploads keep per-item file re-pick).
+Preferences live in `localStorage` under `galiot.density` and
+`galiot.previewWidth`, guarded for headless environments without it.
+Guards: responsive-column regression assertion in `a11y.test.ts`; the draft
+suite caught the unguarded `localStorage` read and now passes. 523 tests,
+type-check and build clean. Still not visually verified — interactive browser
+approval remains unavailable this session; the density toggle, column
+breakpoints and resize handle rest on tests and guards.
+
 ---
 
 *End of stack decision. Update this file when spikes close; do not edit the
