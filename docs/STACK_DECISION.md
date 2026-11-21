@@ -1515,6 +1515,47 @@ through of links/zoom/dialogs rests on the headless suites, not a live pass.
 Not audited this pass: vault crypto, transfer engine, PGlite queries, CI/helm
 beyond the Docker context, LocalPane drag-drop.
 
+## 38. Re-verification log — 2026-11-21 (pass 11: UX research and refinement)
+
+A second qwen4-max swarm audited the previously un-audited territory (vault
+crypto, transfer engine, PGlite layer, CI/helm) and researched UX practice.
+Vault crypto and transfer integrity came back with no High/Medium findings
+(random per-call IVs, AAD-bound exports, parameterised SQL with whitelisted
+columns, capped drop walks, permission-checked local writes). Fixed from that
+pass: `initDb` hung forever on worker-side migration failure (now races
+worker errors + a 30 s deadline); PID-1 signal drain (`SIGTERM`/`SIGINT` →
+`server.stop(false)` + 5 s window); the pdfjs asset copy refuses symlinks;
+the bun base image is digest-pinned; release tags now smoke-test the loaded
+image before publishing; chart release refuses an appVersion whose image is
+absent; CRD schemas pinned to a commit; helm-check asserts gate-rotation
+rolls pods (111 assertions).
+
+UX direction used the installed `frontend-design` skill, routed to its
+**Impeccable** guide in Operate mode (its launcher downloads a binary and was
+not approved, so the skill's documented fallback applied: read DESIGN.md and
+the craft floor directly). Verdict: **refine, not redesign** — the incumbent
+teal/zinc system in DESIGN.md is coherent; research supports evolution.
+Cited inputs: Cloudscape collection-preferences/table/split-panel interfaces
+(github.com/cloudscape-design/components), NN/g on modal context loss
+(nngroup.com/articles/modal-nonmodal-dialog/), GitHub keyboard-shortcut and
+command-palette docs, WCAG 2.2 SC 1.4.3, Material dark-theme elevation.
+
+Shipped refinements: checkbox selection column with indeterminate select-all
+(row-click and shift-range semantics preserved); visible ⌘K palette trigger
+and a `?` shortcuts sheet listing only real shortcuts; media previews dock as
+a non-modal master-detail panel beside the table with an expand toggle, while
+text editing keeps the trapped full-screen modal. Verified already compliant
+and left alone: column header outside the scroll port (fixed), transfer
+drawer per-item retry + clear-finished, dark secondary text at zinc-400
+(≥4.5:1), themed scrollbars/selection/caret/focus rings. The repo's contrast
+guard caught a light-mode zinc-400 kbd hint introduced by this pass; fixed.
+
+Not visually verified: interactive browser approval was cancelled three
+times this session, so the docked panel, checkbox column and shortcuts sheet
+rest on unit/a11y tests (522 pass) and type/build checks, not a rendered
+look. Renderer-worker offload (`rendererSrc`) remains deferred for the same
+reason.
+
 ---
 
 *End of stack decision. Update this file when spikes close; do not edit the
