@@ -49,8 +49,12 @@ export function ShareConnectionDialog({ profile, onClose }: ShareConnectionDialo
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = `${profile.name.replace(/[^\w.-]+/g, '-') || 'connection'}.galiot.json`;
+    // Attached and revoked later: Firefox and Safari can cancel a download
+    // whose detached anchor's object URL is revoked in the same task.
+    document.body.appendChild(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
   };
 
   return (

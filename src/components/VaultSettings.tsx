@@ -31,6 +31,9 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
   const [pendingRestore, setPendingRestore] = useState<PendingRestore | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deletePhrase, setDeletePhrase] = useState('');
+  /** A picked backup waiting for its passphrase (a masked field, not window.prompt). */
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restorePassphrase, setRestorePassphrase] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const run = async (action: () => Promise<string | void>) => {
@@ -61,9 +64,23 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    setError(null);
+    setSuccess(null);
+    setRestorePassphrase('');
+    setRestoreFile(file);
+  };
 
-    const passphrase = window.prompt('Passphrase for this vault backup:');
-    if (!passphrase) return;
+  const cancelRestore = () => {
+    setRestoreFile(null);
+    setRestorePassphrase('');
+  };
+
+  const handleRestoreSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const file = restoreFile;
+    const passphrase = restorePassphrase;
+    if (!file || !passphrase) return;
+    cancelRestore();
 
     void run(async () => {
       setBusy('import');
@@ -101,6 +118,36 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
         New backups encrypt and authenticate the connection list, settings and sealed credentials.
         Keep the backup and its master password for recovery.
       </p>
+      {restoreFile && (
+        <form onSubmit={handleRestoreSubmit} aria-label="Restore vault backup" className="space-y-2 rounded-lg border border-zinc-200 dark:border-zinc-800 p-3 text-xs">
+          <p className="text-zinc-600 dark:text-zinc-300 break-all">
+            Restore <span className="font-mono">{restoreFile.name}</span>. It replaces the connections in this vault.
+          </p>
+          <label htmlFor="vault-restore-passphrase" className="block font-medium text-zinc-700 dark:text-zinc-300">
+            Master password of the backup
+          </label>
+          <input
+            id="vault-restore-passphrase"
+            type="password"
+            autoComplete="current-password"
+            autoFocus
+            value={restorePassphrase}
+            onChange={(event) => setRestorePassphrase(event.target.value)}
+            className="w-full px-3 py-2 bg-zinc-50 dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 dark:text-zinc-100"
+          />
+          <div className="flex gap-2">
+            <button type="submit" disabled={!restorePassphrase || busy !== null}
+              className="px-3 py-1.5 rounded-lg font-medium bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-50">
+              Verify and restore
+            </button>
+            <button type="button" onClick={cancelRestore}
+              className="px-3 py-1.5 rounded-lg font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
       {pendingRestore && (
         <section aria-label="Review legacy backup" className="space-y-2 rounded border p-3 text-xs">
           <p>Legacy backups store connection names, endpoints, buckets and custom headers in readable form.

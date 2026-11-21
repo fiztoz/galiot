@@ -125,7 +125,15 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
         setError(err instanceof Error ? err.message : String(err));
         setPassword('');
         setConfirmPassword('');
-        setState('error');
+        // Show the form the vault now needs (another tab may have created it)
+        // instead of a dead end that only a reload leaves.
+        try {
+          const next = await readVaultState(db);
+          setState(next);
+          onUnlockChange?.(next === 'unlocked');
+        } catch {
+          setState('error');
+        }
       } finally {
         setBusy(false);
       }
