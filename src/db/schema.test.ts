@@ -45,6 +45,19 @@ describe('schema migrations', () => {
     }
   });
 
+  test('runMigrations refuses a database from a newer build', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.query(`UPDATE _meta SET value = $1 WHERE key = 'schema_version'`, [String(SCHEMA_VERSION + 1)]);
+      await expect(runMigrations(db)).rejects.toThrow(/newer than this build/);
+      const version = await db.query<{ value: string }>(`SELECT value FROM _meta WHERE key = 'schema_version'`);
+      expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION + 1));
+    } finally {
+      await db.close();
+    }
+  });
+
   test('runMigrations applies the schema and is idempotent', async () => {
     const db = await freshDb();
 

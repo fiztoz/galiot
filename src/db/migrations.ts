@@ -101,6 +101,11 @@ export async function runMigrations(db: PGlite): Promise<void> {
     // A missing or corrupt marker means "oldest shape we know", not "skip
     // everything": NaN would silently bypass every migration below.
     const current = Number.isFinite(parsed) ? parsed : 1;
+    // A newer build wrote this database (rollback, or a stale tab). Stamping it
+    // down would make the next upgrade skip migrations it has already run.
+    if (current > SCHEMA_VERSION) {
+      throw new Error(`This local database uses schema ${current}, newer than this build (${SCHEMA_VERSION}). Reload to get the current version.`);
+    }
 
     if (current < 2) await migrateToV2(tx);
     if (current < 3) await migrateToV3(tx);
