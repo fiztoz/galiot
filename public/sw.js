@@ -81,10 +81,15 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
-          const responseToCache = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
+          // Only a good shell becomes the offline copy: an error page seen
+          // during a rollout must not replace it. Keyed by '/' alone so query
+          // strings (share targets) are never stored.
+          if (response.ok && url.pathname === '/') {
+            const responseToCache = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put('/', responseToCache);
+            });
+          }
           return response;
         })
         .catch(() => {

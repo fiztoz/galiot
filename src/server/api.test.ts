@@ -771,3 +771,21 @@ describe('media grant eviction', () => {
     expect(store.useMedia(share)?.key).toBe('shared.txt');
   });
 });
+
+describe('share link failures', () => {
+  test('a link holder never sees upstream addresses in an error', async () => {
+    const forward = async (): Promise<Response> => { throw new Error('connect ECONNREFUSED 10.0.0.5:9000'); };
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result: { sessionId } } = await (await open(options)).json() as { result: { sessionId: string } };
+    const token = options.sessions.mintMedia(sessionId, 'shared.txt')!;
+    const original = console.error;
+    console.error = () => {};
+    try {
+      const response = await handleAppRequest(new Request(`http://127.0.0.1/api/s3/media/${token}`), options);
+      expect(response.status).toBe(502);
+      expect(await response.text()).not.toContain('10.0.0.5');
+    } finally {
+      console.error = original;
+    }
+  });
+});

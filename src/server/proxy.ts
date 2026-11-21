@@ -69,7 +69,13 @@ export const PROXY_OPEN_ENV = 'GALIOT_PROXY_OPEN';
 export const PROXY_HOST_ENV = 'GALIOT_HOST';
 export const PROXY_PORT_ENV = 'GALIOT_PORT';
 
+/** Below this, a gate exposed to a network is guessable; the health route answers every try. */
+export const MIN_GATE_LENGTH = 24;
+
 export function assertBindAllowed(hostname: string, token: string | null, open: boolean): void {
+  if (token && token.length < MIN_GATE_LENGTH && !isLoopbackHost(hostname)) {
+    console.warn(`The access gate is shorter than ${MIN_GATE_LENGTH} characters. Use a random value, e.g. \`openssl rand -base64 32\`.`);
+  }
   if (isLoopbackHost(hostname) || token || open) return;
   throw new Error(
     'Refusing to listen on a non-loopback address without GALIOT_PROXY_TOKEN. Set a token, or set GALIOT_PROXY_OPEN=1 only if you accept an open signed-request proxy.',

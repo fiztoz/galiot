@@ -6,6 +6,9 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { pipeline } from 'node:stream/promises';
 import { unbracketHost, type ProxyAddress } from './target';
 
+/** An endpoint that accepts the connection and then goes silent is dropped after this. */
+export const UPSTREAM_IDLE_MS = 120_000;
+
 /**
  * Connect only to validated addresses, retaining the signed Host and TLS name.
  * Raw HTTP streams preserve Content-Encoding bytes in both Bun and Node/Vite.
@@ -37,6 +40,8 @@ export function forwardRequest(
       },
       // Each request connects using the addresses validated for this request.
       agent: false,
+      // Socket idle limit, not a total: a long download keeps resetting it.
+      timeout: UPSTREAM_IDLE_MS,
     };
     const upstream = connect(options, (response) => {
       try {
@@ -58,6 +63,7 @@ export function forwardRequest(
         reject(error);
       }
     });
+    upstream.on('timeout', () => upstream.destroy(new Error(`The S3 endpoint did not respond within ${UPSTREAM_IDLE_MS / 1000} s.`)));
     upstream.on('error', reject);
     if (request.body && request.method !== 'GET' && request.method !== 'HEAD') {
       void pipeline(Readable.fromWeb(request.body as unknown as NodeReadableStream), upstream).catch(reject);

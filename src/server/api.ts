@@ -102,6 +102,16 @@ function trustedControlRequest(request: Request, options: AppApiOptions): boolea
   return Boolean(knownHost && (onListener || (options.open && literal)) && (origin === null || origin === url.origin));
 }
 
+/**
+ * Failure answer for a share or upload link. Its holder is anyone the link
+ * reached, so the upstream error (endpoint addresses, DNS names) stays in the
+ * server log.
+ */
+function linkFailure(err: unknown): Response {
+  console.error('Share link request failed:', err);
+  return json({ ok: false, error: 'The storage server could not be reached. Try again later.' }, 502);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -691,8 +701,7 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
       try {
         return await streamObject(request, grant.session, grant.key, options, grant.versionId);
       } catch (err) {
-        if (err instanceof BlockedProxyTargetError) return json({ ok: false, error: err.message, reason: 'bad-target' }, 400);
-        return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 502);
+        return linkFailure(err);
       }
     }
     return json({ ok: false, error: 'Read links accept GET only.' }, 405);
@@ -746,8 +755,7 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
       return relay(upstream, 'PUT');
     } catch (err) {
       if (counted?.exceeded()) return json({ ok: false, error: `This link accepts at most ${cap} bytes.` }, 413);
-      if (err instanceof BlockedProxyTargetError) return json({ ok: false, error: err.message, reason: 'bad-target' }, 400);
-      return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 502);
+      return linkFailure(err);
     }
   }
 
