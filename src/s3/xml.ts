@@ -14,14 +14,21 @@
  * tags are normalised (`CORSRule`, `s3:CORSRule` → same key).
  */
 
+const NAMED_ENTITIES: Record<string, string> = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
+
+/**
+ * One pass, so `&#38;amp;` stays `&amp;` (a chained replace decoded it twice).
+ * Decimal and hex references use code points: keys may hold any Unicode
+ * character, and S3 escapes control characters such as CR as `&#13;`.
+ */
 function decodeEntities(value: string): string {
-  return value
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
-    .replace(/&amp;/g, '&');
+  return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(lt|gt|quot|apos|amp));/gi, (whole, dec?: string, hex?: string, named?: string) => {
+    if (named) return NAMED_ENTITIES[named.toLowerCase()] ?? whole;
+    const code = dec !== undefined ? Number(dec) : parseInt(hex ?? '', 16);
+    return Number.isInteger(code) && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+      ? String.fromCodePoint(code)
+      : whole;
+  });
 }
 
 /**

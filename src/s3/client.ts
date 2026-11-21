@@ -623,6 +623,8 @@ export class S3Client {
         }
       }
       continuationToken = page.isTruncated ? page.nextContinuationToken : undefined;
+      // A truncated page without a token means the rest was never scanned.
+      if (page.isTruncated && !continuationToken) truncated = true;
     } while (continuationToken);
     return { objects, scanned, truncated };
   }

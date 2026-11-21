@@ -46,6 +46,12 @@ describe('xmlTextValues', () => {
     expect(xmlTextValues('<a><b>&#65;&#66;</b></a>', 'b')).toEqual(['AB']);
   });
 
+  test('decodes hex and astral references in one pass', () => {
+    expect(xmlFirst('<Key>a&#x0D;b&#128512;&#x1F600;</Key>', 'Key')).toBe('a\rb😀😀');
+    expect(xmlFirst('<Key>&#38;amp;</Key>', 'Key')).toBe('&amp;');
+    expect(xmlFirst('<Key>&#xD800;&#99999999;</Key>', 'Key')).toBe('&#xD800;&#99999999;');
+  });
+
   test('preserves surrounding whitespace, because S3 keys may contain it', () => {
     // DOMParser.textContent returned these verbatim, and a key like
     // " report.csv" is legal. Trimming here would silently rename the object.
