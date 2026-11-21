@@ -159,10 +159,19 @@ export class SessionStore {
     const session = this.use(sessionId);
     if (!session) return null;
     const ttlMs = opts.ttlMs ?? MEDIA_TTL_MS;
+    // Evict the grant closest to expiry, not the oldest: previews mint
+    // hour-long grants constantly, and must not push out a week-long share.
     while (this.media.size >= MAX_MEDIA) {
-      const oldest = this.media.keys().next().value;
-      if (!oldest) break;
-      this.revokeMedia(oldest);
+      let soonest: string | undefined;
+      let soonestAt = Infinity;
+      for (const [token, grant] of this.media) {
+        if (grant.expiresAt < soonestAt) {
+          soonest = token;
+          soonestAt = grant.expiresAt;
+        }
+      }
+      if (!soonest) break;
+      this.revokeMedia(soonest);
     }
     const token = this.issuer + '_' + newCapabilityId();
     const expiresAt = this.now() + ttlMs;

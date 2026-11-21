@@ -727,3 +727,47 @@ describe('server-side S3 API', () => {
     expect(again.status).toBe(404);
   });
 });
+
+describe('multipart bookkeeping', () => {
+  async function session(responses: ScriptedResponse[]) {
+    const { calls, forward } = scripted(responses);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result: { sessionId } } = await (await open(options)).json() as { result: { sessionId: string } };
+    return { calls, options, sessionId };
+  }
+
+  test('listParts follows NextPartNumberMarker past the first 1000 parts', async () => {
+    const part = (n: number) => `<Part><PartNumber>${n}</PartNumber><ETag>"e${n}"</ETag><Size>5</Size></Part>`;
+    const { calls, options, sessionId } = await session([
+      { body: `<ListPartsResult><IsTruncated>true</IsTruncated><NextPartNumberMarker>1</NextPartNumberMarker>${part(1)}</ListPartsResult>` },
+      { body: `<ListPartsResult><IsTruncated>false</IsTruncated>${part(2)}</ListPartsResult>` },
+    ]);
+    const response = await handleAppRequest(callRequest(sessionId, { op: 'listParts', key: 'big.bin', uploadId: 'u1' }), options);
+    const body = await response.json() as { ok: boolean; result: { parts: { partNumber: number }[] } };
+    expect(body.result.parts.map(p => p.partNumber)).toEqual([1, 2]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.url).toContain('part-number-marker=1');
+  });
+
+  test('completeMultipart rejects a malformed part instead of dropping it', async () => {
+    const { calls, options, sessionId } = await session([]);
+    const response = await handleAppRequest(callRequest(sessionId, {
+      op: 'completeMultipart',
+      key: 'big.bin',
+      uploadId: 'u1',
+      parts: [{ PartNumber: 1, ETag: '"a"' }, { PartNumber: '2', ETag: '"b"' }],
+    }), options);
+    expect(response.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('media grant eviction', () => {
+  test('a full grant table evicts the grant closest to expiry, not a long share', () => {
+    const store = new SessionStore();
+    const id = store.create(JSON.parse(sessionBody()));
+    const share = store.mintMedia(id, 'shared.txt', { ttlMs: 7 * 24 * 3600 * 1000 })!;
+    for (let i = 0; i < 600; i++) store.mintMedia(id, `preview-${i}.png`);
+    expect(store.useMedia(share)?.key).toBe('shared.txt');
+  });
+});

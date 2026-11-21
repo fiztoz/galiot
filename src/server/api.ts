@@ -315,13 +315,21 @@ async function handleCall(
           result: { uploadId: await s3.createMultipartUpload(requireString(body.key, 'key', 1024), asString(body.contentType, 256)) },
         }, 200);
       case 'completeMultipart': {
-        const parts = Array.isArray(body.parts) ? body.parts.flatMap((part): PartInfo[] => {
+        // A dropped entry would complete a silently truncated object, so any
+        // malformed part rejects the whole request.
+        if (!Array.isArray(body.parts) || body.parts.length === 0 || body.parts.length > 10_000) {
+          throw new BadRequestError('Multipart completion needs 1–10000 parts.');
+        }
+        const parts = body.parts.map((part): PartInfo => {
           const row = asRecord(part);
           const partNumber = row.PartNumber ?? row.partNumber;
           const eTag = row.ETag ?? row.eTag;
-          if (typeof partNumber !== 'number' || typeof eTag !== 'string') return [];
-          return [{ PartNumber: partNumber, ETag: eTag }];
-        }) : [];
+          if (!Number.isInteger(partNumber) || (partNumber as number) < 1 || (partNumber as number) > 10_000 ||
+              typeof eTag !== 'string' || !eTag || eTag.length > 1024) {
+            throw new BadRequestError('Every multipart part needs a part number and an ETag.');
+          }
+          return { PartNumber: partNumber as number, ETag: eTag };
+        });
         await s3.completeMultipartUpload(requireString(body.key, 'key', 1024), requireString(body.uploadId, 'uploadId'), parts);
         return json({ ok: true, result: { completed: true } }, 200);
       }
@@ -331,17 +339,27 @@ async function handleCall(
       case 'listParts': {
         const key = requireString(body.key, 'key', 1024);
         const uploadId = requireString(body.uploadId, 'uploadId');
-        const res = await s3.send(s3.objectUrl(key, { uploadId }));
-        if (!res.ok) {
-          const text = await readBoundedText(res, 64 * 1024);
-          return json({ ok: false, error: text || res.statusText, status: res.status, code: xmlFirst(text, 'Code') ?? `HTTP ${res.status}` }, 200);
+        // ListParts returns at most 1000 parts per page; an upload may have 10000.
+        const parts: { partNumber: number; eTag: string; size: number }[] = [];
+        let marker: string | undefined;
+        for (let page = 0; page < 10; page++) {
+          const res = await s3.send(s3.objectUrl(key, marker ? { uploadId, 'part-number-marker': marker } : { uploadId }));
+          if (!res.ok) {
+            const text = await readBoundedText(res, 64 * 1024);
+            return json({ ok: false, error: text || res.statusText, status: res.status, code: xmlFirst(text, 'Code') ?? `HTTP ${res.status}` }, 200);
+          }
+          const text = await readBoundedText(res, 8 * 1024 * 1024);
+          for (const block of xmlBlocks(text, 'Part')) {
+            parts.push({
+              partNumber: parseInt(xmlFirst(block, 'PartNumber') ?? '0', 10),
+              eTag: xmlFirst(block, 'ETag') ?? '',
+              size: parseInt(xmlFirst(block, 'Size') ?? '0', 10),
+            });
+          }
+          const next = xmlFirst(text, 'NextPartNumberMarker') ?? undefined;
+          if (xmlFirst(text, 'IsTruncated') !== 'true' || !next || next === marker) break;
+          marker = next;
         }
-        const text = await readBoundedText(res, 8 * 1024 * 1024);
-        const parts = xmlBlocks(text, 'Part').map((block) => ({
-          partNumber: parseInt(xmlFirst(block, 'PartNumber') ?? '0', 10),
-          eTag: xmlFirst(block, 'ETag') ?? '',
-          size: parseInt(xmlFirst(block, 'Size') ?? '0', 10),
-        }));
         return json({ ok: true, result: { parts } }, 200);
       }
       case 'head':
@@ -366,7 +384,7 @@ async function handleCall(
           result: { objects: await listTreeObjects(s3, asString(body.prefix, 1024) ?? '') },
         }, 200);
       case 'restore':
-        await s3.restoreObject(requireString(body.key, 'key', 1024), numberOr(body.days, 1));
+        await s3.restoreObject(requireString(body.key, 'key', 1024), Math.max(1, Math.trunc(numberOr(body.days, 1))));
         return json({ ok: true, result: { requested: true } }, 200);
       case 'search': {
         const needle = requireString(body.query, 'query', 256);
@@ -430,7 +448,7 @@ async function handleCall(
         return json({
           ok: true,
           result: {
-            url: await presignGetUrl(signer(session), targetOf(session), requireString(body.key, 'key', 1024), numberOr(body.expiresIn, 3600)),
+            url: await presignGetUrl(signer(session), targetOf(session), requireString(body.key, 'key', 1024), presignExpiry(body.expiresIn)),
           },
         }, 200);
       case 'presignPut':
@@ -442,14 +460,14 @@ async function handleCall(
               targetOf(session),
               requireString(body.key, 'key', 1024),
               body.contentType === undefined ? undefined : requireString(body.contentType, 'contentType', 256),
-              numberOr(body.expiresIn, 3600),
+              presignExpiry(body.expiresIn),
             ),
           },
         }, 200);
       case 'corsGet':
         return json({ ok: true, result: await s3.getBucketCors() }, 200);
       case 'corsPut': {
-        if (!body.config || typeof body.config !== 'object') throw new Error('CORS configuration is required.');
+        if (!body.config || typeof body.config !== 'object') throw new BadRequestError('CORS configuration is required.');
         await s3.putBucketCors(body.config as CorsConfiguration);
         return json({ ok: true, result: { applied: true } }, 200);
       }
@@ -459,7 +477,7 @@ async function handleCall(
       case 'corsPresign':
         return json({
           ok: true,
-          result: { url: await presignPutBucketCors(signer(session), targetOf(session), 'application/xml', numberOr(body.expiresIn, 3600)) },
+          result: { url: await presignPutBucketCors(signer(session), targetOf(session), 'application/xml', presignExpiry(body.expiresIn)) },
         }, 200);
       case 'media': {
         const key = grantKey(body.key);
@@ -481,6 +499,11 @@ async function handleCall(
 
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/** SigV4 presigned URLs accept 1 second to 7 days, in whole seconds. */
+function presignExpiry(value: unknown): number {
+  return Math.min(SHARE_MAX_SECONDS, Math.max(1, Math.trunc(numberOr(value, 3600))));
 }
 
 /** Every object under a prefix, capped so one walk cannot run away on a huge bucket. */
