@@ -295,23 +295,6 @@ export async function deleteKeys(
   return result;
 }
 
-/** Produces a short-lived presigned download URL (generated in the worker). */
-export async function presignDownload(
-  db: AppDB,
-  profile: ConnectionRow,
-  key: string,
-  expiresIn = 3600,
-): Promise<string> {
-  const sealed = await listingCredentials(db, profile);
-  const { url } = await vaultService.call('s3.presignGet', {
-    profile: profileConfig(profile),
-    credentials: { sealed },
-    key,
-    expiresIn,
-  });
-  return url;
-}
-
 /**
  * Walks a remote folder subtree (worker-side, paginated + capped) and upserts
  * every discovered directory and file into `objects_cache`, so the recursive

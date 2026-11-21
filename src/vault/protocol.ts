@@ -287,7 +287,6 @@ export type VaultEvent = {
   reason: VaultLockReason;
 };
 
-export type VaultWorkerMessage = VaultRequest | VaultResponse | VaultEvent;
 
 export function isVaultResponse(msg: unknown): msg is VaultResponse {
   return (

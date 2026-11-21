@@ -74,22 +74,6 @@ export function normalizeRelativePath(path: string): string {
     .join('/');
 }
 
-/** Resolves a relative path inside a directory handle, creating subfolders. */
-export async function resolveInDirectory(
-  root: FileSystemDirectoryHandle,
-  relativePath: string,
-): Promise<FileSystemFileHandle> {
-  const segments = normalizeRelativePath(relativePath).split('/').filter(Boolean);
-  const filename = segments.pop();
-  if (!filename) throw new Error('A file name is required');
-
-  let dir = root;
-  for (const segment of segments) {
-    dir = await dir.getDirectoryHandle(segment, { create: true });
-  }
-  return dir.getFileHandle(filename, { create: true });
-}
-
 export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
   if (!isDirectoryPickerSupported()) return null;
   try {

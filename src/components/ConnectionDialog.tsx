@@ -11,7 +11,7 @@ import {
   parseStoredHeaders,
   type HeaderDraft,
 } from '../s3/customHeaders';
-import { diagnoseCors } from '../s3/diagnostics';
+import { diagnoseConnection } from '../s3/connectionDiagnosis';
 import { normalizeEndpoint } from '../s3/url';
 import { assertConnectionEndpoint } from '../s3/endpoint';
 import { getProxyToken } from '../server/session';
@@ -36,7 +36,7 @@ type TestState =
   | { status: 'ok'; message: string }
   | { status: 'fail'; message: string };
 
-type CorsState =
+type DiagnosisState =
   | { status: 'idle' }
   | { status: 'testing' }
   | { status: 'ok'; message: string }
@@ -76,7 +76,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ status: 'idle' });
-  const [cors, setCors] = useState<CorsState>({ status: 'idle' });
+  const [diagnosis, setDiagnosis] = useState<DiagnosisState>({ status: 'idle' });
   const [saving, setSaving] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [buckets, setBuckets] = useState<string[] | null>(null);
@@ -125,7 +125,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
     );
     setError(null);
     setTest({ status: 'idle' });
-    setCors({ status: 'idle' });
+    setDiagnosis({ status: 'idle' });
     setSaving(false);
     setBuckets(null);
     setBucketsError(null);
@@ -152,7 +152,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
     setForm((prev) => ({ ...prev, [key]: value }));
     setError(null);
     setTest({ status: 'idle' });
-    setCors({ status: 'idle' });
+    setDiagnosis({ status: 'idle' });
   }, []);
 
   const buildPayload = useCallback(():
@@ -264,7 +264,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
     }
 
     setTest({ status: 'testing' });
-    setCors({ status: 'idle' });
+    setDiagnosis({ status: 'idle' });
 
     const rawEndpoint = form.endpoint.trim();
     const profile = {
@@ -326,37 +326,21 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
     }
 
     // Diagnose the request that actually ran on the server.
-    const verdict = diagnoseCors(
-      {
-        probeUrl: profile.endpoint,
-        requestSucceeded,
-        requestError: failureMessage ?? undefined,
-        endpoint: profile.endpoint,
-        rawEndpoint,
-        pathStyle: form.pathStyle,
-        network: 'server',
-      },
-      false,
-    );
-    if (verdict.reason === 'cors-blocked' || verdict.reason === 'host-unreachable') {
-      setCors({ status: 'fail', message: `${verdict.detail}${verdict.hint ? ` ${verdict.hint}` : ''}` });
-    } else if (verdict.reason === 'request-rejected') {
-      // The bucket answered and said no. Showing CORS remediation here would
-      // send the user after a policy that is not the problem.
-      setCors({
-        status: 'fail',
-        message: `${verdict.detail}${verdict.hint ? ` ${verdict.hint}` : ''}`,
-      });
+    const verdict = diagnoseConnection({
+      requestSucceeded,
+      requestError: failureMessage ?? undefined,
+      endpoint: profile.endpoint,
+      pathStyle: form.pathStyle,
+    });
+    if (verdict.reason === 'addressing-unsupported') {
+      // An IP endpoint simply cannot use virtual-hosted addressing: repair it.
+      setField('pathStyle', true);
+      setAdvancedOpen(true);
+      setDiagnosis({ status: 'fail', message: 'This endpoint needs path-style addressing. Turned it on — test again.' });
+    } else if (verdict.reason === 'host-unreachable' || verdict.reason === 'request-rejected') {
+      setDiagnosis({ status: 'fail', message: `${verdict.detail}${verdict.hint ? ` ${verdict.hint}` : ''}` });
     } else {
-      // For addressing problems, try to repair automatically: an IP endpoint
-      // simply cannot use virtual-hosted addressing.
-      if (verdict.reason === 'addressing-unsupported') {
-        setField('pathStyle', true);
-        setAdvancedOpen(true);
-        setCors({ status: 'fail', message: 'This endpoint needs path-style addressing. Turned it on — test again.' });
-      } else {
-        setCors({ status: 'idle' });
-      }
+      setDiagnosis({ status: 'idle' });
     }
   }, [buildPayload, form]);
 
@@ -661,30 +645,30 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
             </div>
           )}
 
-          {cors.status !== 'idle' && (
+          {diagnosis.status !== 'idle' && (
             <div
               className={`p-3 text-sm rounded-lg border flex items-start gap-2 ${
-                cors.status === 'ok'
+                diagnosis.status === 'ok'
                   ? 'bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
-                  : cors.status === 'fail'
+                  : diagnosis.status === 'fail'
                     ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border-amber-100 dark:border-amber-900/40'
                     : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border-zinc-100 dark:border-zinc-700'
               }`}
             >
-              {cors.status === 'testing' ? (
+              {diagnosis.status === 'testing' ? (
                 <>
                   <Loader2 size={15} className="flex-none mt-0.5 animate-spin" />
                   Checking whether this server can reach the bucket…
                 </>
-              ) : cors.status === 'ok' ? (
+              ) : diagnosis.status === 'ok' ? (
                 <>
                   <CheckCircle2 size={15} className="flex-none mt-0.5" />
-                  <span className="break-words">{cors.message}</span>
+                  <span className="break-words">{diagnosis.message}</span>
                 </>
               ) : (
                 <>
                   <AlertTriangle size={15} className="flex-none mt-0.5" />
-                  <span className="break-words">{cors.message}</span>
+                  <span className="break-words">{diagnosis.message}</span>
                 </>
               )}
             </div>

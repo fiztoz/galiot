@@ -27,14 +27,6 @@ export class RemoteS3Error extends Error {
   }
 }
 
-interface CallFailure {
-  ok: false;
-  error: string;
-  status?: number;
-  code?: string;
-  unsupported?: boolean;
-}
-
 function gateHeaders(token: string | undefined, json = false): Headers {
   const headers = new Headers();
   if (json) headers.set('content-type', 'application/json');
@@ -202,11 +194,6 @@ export function sessionObjectPath(sessionId: string, key: string): string {
   return `/api/s3/sessions/${sessionId}/object?key=${encodeURIComponent(key)}`;
 }
 
-export function sessionPartPath(sessionId: string, key: string, uploadId: string, partNumber: number): string {
-  const query = new URLSearchParams({ key, uploadId, partNumber: String(partNumber) });
-  return `/api/s3/sessions/${sessionId}/part?${query}`;
-}
-
 /** True only for the server's own JSON answer; an S3 NoSuchKey 404 is XML. */
 async function sessionExpired(response: Response): Promise<boolean> {
   if (response.status !== 404 || !response.headers.get('content-type')?.includes('application/json')) return false;
@@ -353,7 +340,6 @@ export class RemoteS3 {
     }
   }
 
-
   createFolder(key: string): Promise<{ created: boolean }> {
     return this.call('createFolder', { key });
   }
@@ -381,6 +367,3 @@ export class RemoteS3 {
   }
 }
 
-export function isRemoteFailure(body: unknown): body is CallFailure {
-  return typeof body === 'object' && body !== null && (body as CallFailure).ok === false;
-}

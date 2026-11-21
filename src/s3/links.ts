@@ -102,14 +102,6 @@ export async function createLink(
   });
 }
 
-export async function listLinks(db: AppDB, limit = 50): Promise<PresignedRecord[]> {
-  const res = await db.query<PresignedRecord>(
-    `SELECT * FROM presigned_history ORDER BY created_at DESC LIMIT $1`,
-    [limit],
-  );
-  return res.rows;
-}
-
 /**
  * Server links are cut off for real: the grant is deleted on the server, so
  * the URL stops working immediately. Presigned S3 links cannot be revoked;
