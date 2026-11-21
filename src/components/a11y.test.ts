@@ -89,6 +89,13 @@ describe('contrast and motion', () => {
 });
 
 describe('responsive layout guards (pixel-pass regressions)', () => {
+  test('object table drops low-priority columns on narrow viewports', () => {
+    const source = read('Explorer.tsx');
+    expect(source).toContain('grid-cols-[24px_1fr] sm:grid-cols-[24px_1fr_110px] md:grid-cols-[24px_1fr_110px_150px]');
+    expect(source).toContain('hidden sm:block text-right');
+    expect(source).toContain('hidden md:block text-xs tabular-nums');
+  });
+
   test('connections toolbar wraps so Add connection is never clipped at 390px', () => {
     const source = read('ConnectionsView.tsx');
     expect(source).toContain('flex flex-wrap items-center justify-between gap-3 mb-6');

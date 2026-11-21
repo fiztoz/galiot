@@ -48,7 +48,7 @@ import { scheduleListingRefresh } from '../transfer/listingRefresh';
 import { transferManager } from '../transfer/manager';
 import { LocalPane, REMOTE_OBJECT_MIME, type RemoteDropItem } from './LocalPane';
 import { hasWritePermission } from '../localfs/localDirectory';
-import { FolderOpen, PanelLeftClose, Pencil, Link2, FolderPlus, FolderUp, Files, Info, PencilLine, Snowflake, Command, Keyboard } from 'lucide-react';
+import { FolderOpen, PanelLeftClose, Pencil, Link2, FolderPlus, FolderUp, Files, Info, PencilLine, Snowflake, Command, Keyboard, Rows3 } from 'lucide-react';
 import { collectDroppedFiles } from '../localfs/dropEntries';
 import { relativeNameOf, uploadKey } from '../transfer/paths';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
@@ -133,6 +133,7 @@ function lastSegment(key: string): string {
 }
 
 const ROW_HEIGHT = 36;
+const COMPACT_ROW_HEIGHT = 28;
 const GRID_ROW_HEIGHT = 104;
 const GRID_MIN_CELL_WIDTH = 180;
 const GRID_MAX_COLUMNS = 6;
@@ -177,6 +178,13 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const [bucketSearch, setBucketSearch] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** Cloudscape-style density preference, persisted per browser. */
+  const [density, setDensity] = useState<'comfortable' | 'compact'>(() =>
+    typeof localStorage !== 'undefined' && localStorage.getItem('galiot.density') === 'compact'
+      ? 'compact'
+      : 'comfortable',
+  );
+  const rowHeight = density === 'compact' ? COMPACT_ROW_HEIGHT : ROW_HEIGHT;
 
   const anchorKeyRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -302,7 +310,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const virtualizer = useVirtualizer({
     count: virtualRowCount,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => (viewMode === 'grid' ? GRID_ROW_HEIGHT : ROW_HEIGHT),
+    estimateSize: () => (viewMode === 'grid' ? GRID_ROW_HEIGHT : rowHeight),
     overscan: 8,
   });
 
@@ -683,8 +691,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       const bottom = Math.max(origin.y, event.clientY) - rect.top + el.scrollTop;
       if (bottom <= top) return;
 
-      const first = Math.max(0, Math.floor(top / ROW_HEIGHT));
-      const last = Math.min(rows.length - 1, Math.ceil(bottom / ROW_HEIGHT) - 1);
+      const first = Math.max(0, Math.floor(top / rowHeight));
+      const last = Math.min(rows.length - 1, Math.ceil(bottom / rowHeight) - 1);
       if (last < first) return;
 
       const picked = rows.slice(first, last + 1);
@@ -710,19 +718,32 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   );
   const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.key)), [rows, selected]);
 
-  const paletteCommands = useMemo<PaletteCommand[]>(
-    () => [
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    const download: PaletteCommand = {
+      id: 'download',
+      label: 'Download selection',
+      hint: `${selectedRows.length} object${selectedRows.length === 1 ? '' : 's'}`,
+      run: () => void handleDownload(selectedRows),
+    };
+    const base: PaletteCommand[] = [
       { id: 'upload', label: 'Upload files', hint: 'into this folder', run: () => fileInputRef.current?.click() },
       { id: 'new-folder', label: 'New folder', run: () => setAction({ kind: 'folder', row: null }) },
       { id: 'search-bucket', label: 'Search whole bucket', run: () => setBucketSearch(search) },
       { id: 'refresh', label: 'Refresh listing', run: handleRefresh },
       { id: 'view', label: viewMode === 'list' ? 'Switch to grid view' : 'Switch to list view', run: () => setViewMode(viewMode === 'list' ? 'grid' : 'list') },
+      { id: 'density', label: density === 'comfortable' ? 'Compact rows' : 'Comfortable rows', run: () => setDensity((d) => (d === 'comfortable' ? 'compact' : 'comfortable')) },
       { id: 'local', label: showLocal ? 'Hide download folder' : 'Show download folder', run: () => setShowLocal((value) => !value) },
-      { id: 'download', label: 'Download selection', run: () => void handleDownload(selectedRows) },
+      { id: 'shortcuts', label: 'Keyboard shortcuts', run: () => setShortcutsOpen(true) },
       { id: 'back', label: 'Back to buckets', run: onBack },
-    ],
-    [search, handleRefresh, viewMode, showLocal, handleDownload, selectedRows, onBack],
-  );
+    ];
+    // Selection-aware actions rank first while something is selected.
+    return selectedRows.length > 0 ? [download, ...base] : [...base, download];
+  }, [search, handleRefresh, viewMode, showLocal, handleDownload, selectedRows, onBack, density]);
+
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') localStorage.setItem('galiot.density', density);
+    virtualizer.measure();
+  }, [density, virtualizer]);
   const selectedSize = selectedRows.reduce((sum, r) => (r.is_dir ? sum : sum + r.size), 0);
 
   /**
@@ -959,6 +980,20 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
           >
             <Keyboard size={15} />
           </button>
+          <button
+            type="button"
+            onClick={() => setDensity((d) => (d === 'comfortable' ? 'compact' : 'comfortable'))}
+            aria-pressed={density === 'compact'}
+            className={`flex-none p-2 rounded-lg transition-colors ${
+              density === 'compact'
+                ? 'text-teal-600 dark:text-teal-400 bg-teal-50 dark:bg-teal-950/40'
+                : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+            }`}
+            aria-label="Toggle compact rows"
+            title={density === 'compact' ? 'Comfortable rows' : 'Compact rows'}
+          >
+            <Rows3 size={15} />
+          </button>
         </div>
 
         <div className="px-3 py-2 flex flex-wrap items-center gap-2">
@@ -1130,7 +1165,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
       {/* Column header (list view only) */}
       {viewMode === 'list' && (
-        <div className="flex-none grid grid-cols-[24px_1fr_110px_150px] gap-2 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 select-none">
+        <div className="flex-none grid grid-cols-[24px_1fr] sm:grid-cols-[24px_1fr_110px] md:grid-cols-[24px_1fr_110px_150px] gap-2 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 select-none">
           <span className="flex items-center justify-center">
             <Checkbox
               checked={rows.length > 0 && selected.size >= rows.length}
@@ -1140,8 +1175,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             />
           </span>
           <span>{isSearching ? 'Path' : 'Name'}</span>
-          <span className="text-right">Size</span>
-          <span>Modified</span>
+          <span className="hidden sm:block text-right">Size</span>
+          <span className="hidden md:block">Modified</span>
         </div>
       )}
 
@@ -1281,12 +1316,12 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                     }}
                     onClick={(e) => handleRowClick(e, row, virtualRow.index)}
                     onDoubleClick={() => handleRowDoubleClick(row)}
-                    className={`absolute left-0 top-0 w-full grid grid-cols-[24px_1fr_110px_150px] gap-2 items-center px-4 cursor-default select-none transition-colors ${
+                    className={`absolute left-0 top-0 w-full grid grid-cols-[24px_1fr] sm:grid-cols-[24px_1fr_110px] md:grid-cols-[24px_1fr_110px_150px] gap-2 items-center px-4 cursor-default select-none transition-colors ${
                       isSelected
                         ? 'bg-teal-50 dark:bg-teal-950/40'
                         : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
                     } ${isLast ? '' : 'border-b border-zinc-100 dark:border-zinc-800/60'}`}
-                    style={{ height: ROW_HEIGHT, transform: `translateY(${virtualRow.start}px)` }}
+                    style={{ height: rowHeight, transform: `translateY(${virtualRow.start}px)` }}
                   >
                     <span className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
                       <Checkbox
@@ -1330,11 +1365,11 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                       )}
                     </span>
 
-                    <span className="text-right text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+                    <span className="hidden sm:block text-right text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
                       {row.is_dir ? '—' : formatBytes(row.size)}
                     </span>
 
-                    <span className="text-xs tabular-nums text-zinc-500 dark:text-zinc-400 truncate">
+                    <span className="hidden md:block text-xs tabular-nums text-zinc-500 dark:text-zinc-400 truncate">
                       {formatDate(row.last_modified)}
                     </span>
                   </div>
