@@ -181,6 +181,84 @@ export async function loadListing(
   return { total: objects.length + prefixes.size, truncated };
 }
 
+export interface DeletionPlan {
+  /** Every key to delete: selected files, each folder's marker, and everything under each folder. */
+  keys: string[];
+  /** Selected folder prefixes, each ending in `/`. */
+  folders: string[];
+  /** Objects that will be removed, folder markers excluded. */
+  files: number;
+  bytes: number;
+}
+
+/** Pure: merges selected keys with the objects listed under each selected folder. */
+export function mergeDeletion(
+  selected: string[],
+  trees: ReadonlyMap<string, readonly { key: string; size: number }[]>,
+): DeletionPlan {
+  const keys = new Set<string>();
+  const folders: string[] = [];
+  let files = 0;
+  let bytes = 0;
+  const count = (key: string, size: number) => {
+    if (keys.has(key)) return;
+    keys.add(key);
+    if (!key.endsWith('/')) {
+      files += 1;
+      bytes += size;
+    }
+  };
+  for (const key of selected) {
+    if (!key.endsWith('/')) {
+      count(key, 0);
+      continue;
+    }
+    folders.push(key);
+    // The marker may not exist as an object; S3 reports a missing key as deleted.
+    count(key, 0);
+    for (const object of trees.get(key) ?? []) {
+      if (!object.key.startsWith(key)) throw new Error('The provider listed a key outside the selected folder.');
+      count(object.key, object.size);
+    }
+  }
+  return { keys: [...keys], folders, files, bytes };
+}
+
+/**
+ * Lists everything a deletion of `selected` would remove. Folders are expanded
+ * on the server (capped at 10 000 objects per folder), so the user confirms
+ * the real count before anything is deleted.
+ */
+export async function planDeletion(
+  db: AppDB,
+  profile: ConnectionRow,
+  selected: string[],
+  sizes: ReadonlyMap<string, number> = new Map(),
+): Promise<DeletionPlan> {
+  const trees = new Map<string, { key: string; size: number }[]>();
+  const folders = selected.filter(key => key.endsWith('/'));
+  if (folders.length) {
+    const sealed = await getSealedCredentials(db, profile.id);
+    for (const prefix of folders) {
+      const tree = await vaultService.call('s3.listTree', {
+        profile: profileConfig(profile), credentials: { sealed }, prefix,
+      });
+      trees.set(prefix, tree.objects);
+    }
+  }
+  const plan = mergeDeletion(selected, trees);
+  for (const key of selected) if (!key.endsWith('/')) plan.bytes += sizes.get(key) ?? 0;
+  return plan;
+}
+
+/** Drops cached rows under a folder whose every object was confirmed deleted. */
+export async function forgetCachedFolder(db: AppDB, profile: ConnectionRow, prefix: string): Promise<void> {
+  await db.query(
+    'DELETE FROM objects_cache WHERE profile_id = $1 AND bucket = $2 AND starts_with(key, $3)',
+    [profile.id, profile.bucket, prefix],
+  );
+}
+
 /** Deletes keys from the bucket, then drops their cached rows. */
 export async function deleteKeys(
   db: AppDB,

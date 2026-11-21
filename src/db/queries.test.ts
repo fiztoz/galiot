@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { live } from '@electric-sql/pglite/live';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
-import type { AppDB } from './client';
 import { runMigrations } from './migrations';
+import type { AppDB, ConnectionRow } from './client';
 import { replaceListing } from './objects';
 import {
   buildObjectQuery,
@@ -288,5 +288,35 @@ describe('source hygiene', () => {
 
     expect(checked).toBeGreaterThan(0);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('deletion planning', () => {
+  test('a folder expands to its marker and every object beneath, counted once', async () => {
+    const { mergeDeletion } = await import('./objects');
+    const plan = mergeDeletion(['photos/', 'photos/a.jpg', 'notes.txt'], new Map([
+      ['photos/', [{ key: 'photos/', size: 0 }, { key: 'photos/a.jpg', size: 5 }, { key: 'photos/2020/', size: 0 }, { key: 'photos/2020/b.jpg', size: 7 }]],
+    ]));
+    expect(plan.folders).toEqual(['photos/']);
+    expect(plan.keys).toEqual(['photos/', 'photos/a.jpg', 'photos/2020/', 'photos/2020/b.jpg', 'notes.txt']);
+    expect(plan.files).toBe(3);
+    expect(plan.bytes).toBe(12);
+  });
+
+  test('forgetting a deleted folder drops every cached row beneath it, and nothing else', async () => {
+    const { forgetCachedFolder } = await import('./objects');
+    const db = await seededDb();
+    try {
+      await forgetCachedFolder(db as unknown as AppDB, { id: PROFILE_ID, bucket: 'my-bucket' } as ConnectionRow, 'photos/');
+      const keys = (await db.query<{ key: string }>('SELECT key FROM objects_cache ORDER BY key')).rows.map(r => r.key);
+      expect(keys).toEqual(['archive.zip', 'big.bin', 'small.txt']);
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('a listed key outside the folder aborts the plan', async () => {
+    const { mergeDeletion } = await import('./objects');
+    expect(() => mergeDeletion(['photos/'], new Map([['photos/', [{ key: 'other/x', size: 1 }]]]))).toThrow('outside');
   });
 });

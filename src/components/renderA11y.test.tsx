@@ -14,6 +14,8 @@ import { act, type ReactElement } from 'react';
 import type { Root } from 'react-dom/client';
 import type { ConnectionRow } from '../db/client';
 import { ObjectActionDialog } from './ObjectActionDialog';
+import { DeleteDialog, FOLDER_DELETE_PHRASE } from './DeleteDialog';
+import type { DeletionPlan } from '../db/objects';
 import { ShareConnectionDialog } from './ShareConnectionDialog';
 import { CommandPalette } from './CommandPalette';
 import { BucketSearchDialog } from './BucketSearchDialog';
@@ -71,6 +73,51 @@ const profile = {
   path_style: true,
   custom_headers: null,
 } as unknown as ConnectionRow;
+
+describe('delete confirmation', () => {
+  const setInputValue = (input: HTMLInputElement, value: string) => {
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value')?.set;
+    setter?.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }) as unknown as Event);
+  };
+  const deleteButton = (container: HTMLElement) =>
+    [...container.querySelectorAll('button[type="submit"]')][0] as HTMLButtonElement;
+
+  test('a folder delete stays disabled until the phrase is typed, then confirms the plan', async () => {
+    const plan: DeletionPlan = { keys: ['photos/', 'photos/a.jpg', 'photos/b.jpg'], folders: ['photos/'], files: 2, bytes: 2048 };
+    const confirmed: DeletionPlan[] = [];
+    const container = render(
+      <DeleteDialog plan={async () => plan} onConfirm={async (p) => { confirmed.push(p); }} onClose={() => {}} />,
+    );
+    await act(async () => {});
+    const dialog = container.querySelector('[role="alertdialog"]');
+    expect(dialog?.getAttribute('aria-modal')).toBe('true');
+    expect(container.textContent).toContain('2 objects');
+    expect(container.textContent).toContain('photos/a.jpg');
+    expect(deleteButton(container).disabled).toBe(true);
+    // Focus starts on Cancel, so Enter does not delete.
+    expect((document.activeElement as HTMLElement | null)?.textContent?.trim()).toBe('Cancel');
+
+    const phrase = container.querySelector('#delete-dialog-phrase') as HTMLInputElement;
+    await act(async () => setInputValue(phrase, 'permanently'));
+    expect(deleteButton(container).disabled).toBe(true);
+    await act(async () => setInputValue(phrase, FOLDER_DELETE_PHRASE));
+    expect(deleteButton(container).disabled).toBe(false);
+    await act(async () => {
+      container.querySelector('form')?.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event);
+    });
+    expect(confirmed).toEqual([plan]);
+  });
+
+  test('a file-only delete needs no phrase but still an explicit click', async () => {
+    const plan: DeletionPlan = { keys: ['a.txt'], folders: [], files: 1, bytes: 10 };
+    const container = render(<DeleteDialog plan={async () => plan} onConfirm={async () => {}} onClose={() => {}} />);
+    await act(async () => {});
+    expect(container.querySelector('#delete-dialog-phrase')).toBeNull();
+    expect(deleteButton(container).disabled).toBe(false);
+    expect(deleteButton(container).textContent).toContain('Delete 1 object');
+  });
+});
 
 describe('rendered dialog accessibility', () => {
   test('ObjectActionDialog is a labelled modal with an associated input', () => {

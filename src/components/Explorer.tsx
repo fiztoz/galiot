@@ -22,7 +22,8 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
-import { loadListing, deleteKeys, harvestFolderStats, profileConfig } from '../db/objects';
+import { loadListing, deleteKeys, forgetCachedFolder, harvestFolderStats, planDeletion, profileConfig, type DeletionPlan } from '../db/objects';
+import { DeleteDialog } from './DeleteDialog';
 import { getSealedCredentials } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 import { classifyConnectionFailure } from '../db/connectionDiagnostics';
@@ -148,7 +149,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  /** Keys snapshotted when Delete was pressed; the dialog confirms exactly these. */
+  const [deleteSelection, setDeleteSelection] = useState<string[] | null>(null);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -303,7 +305,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
     anchorKeyRef.current = null;
     lassoOriginRef.current = null;
     setLasso(null);
-    setConfirmDelete(false);
+    setDeleteSelection(null);
     setNotice(null);
   }, [prefix, debouncedSearch]);
 
@@ -427,7 +429,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
     [rows, selected, viewMode, virtualizer],
   );
 
-  const dialogOpen = paletteOpen || action !== null || details !== null || sharing !== null || bucketSearch !== null || editing !== null;
+  const dialogOpen = paletteOpen || action !== null || details !== null || sharing !== null || bucketSearch !== null || editing !== null ||
+    deleteSelection !== null;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -547,31 +550,41 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
     [profileId, bucket, prefix, handleRefresh],
   );
 
-  const handleDelete = useCallback(async () => {
+  const planSelectedDeletion = useCallback(() => {
+    const keys = deleteSelection ?? [];
+    const sizes = new Map(rows.filter(row => !row.is_dir).map(row => [row.key, Number(row.size)]));
+    return planDeletion(db, profile, keys, sizes);
+    // The snapshot, not the live rows, decides what is planned.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db, profile, deleteSelection]);
+
+  const handleDelete = useCallback(async (plan: DeletionPlan) => {
     setBusyAction('delete');
     setError(null);
     try {
-      if (selected.size === 1) {
-        const key = [...selected][0] ?? '';
-        const row = rows.find((candidate) => candidate.key === key);
-        if (row && !row.is_dir) await assertNotLocked(key);
+      const files = plan.keys.filter(key => !key.endsWith('/'));
+      if (plan.folders.length === 0 && files.length === 1) await assertNotLocked(files[0] ?? '');
+      const result = await deleteKeys(db, profile, plan.keys);
+      // Cached subfolder rows only go once nothing under that folder failed.
+      for (const folder of plan.folders) {
+        if (!result.errors.some(e => e.key.startsWith(folder))) await forgetCachedFolder(db, profile, folder);
       }
-      const result = await deleteKeys(db, profile, [...selected]);
       if (result.errors.length > 0) {
         setError(
-          `Some keys failed to delete: ${result.errors.map((e) => `${e.key} (${e.message})`).join(', ')}`,
+          `Some keys failed to delete: ${result.errors.slice(0, 20).map((e) => `${e.key} (${e.message})`).join(', ')}` +
+            (result.errors.length > 20 ? ` and ${result.errors.length - 20} more` : ''),
         );
+      } else {
+        setNotice(`Deleted ${result.deleted.filter(key => !key.endsWith('/')).length.toLocaleString()} object(s).`);
       }
       setSelected(new Set());
       anchorKeyRef.current = null;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setDeleteSelection(null);
     } finally {
       setBusyAction(null);
-      setConfirmDelete(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db, profileId, selected]);
+  }, [db, profile]);
 
   const handleCopyUri = useCallback(async () => {
     const uriList = [...selected].map((key) => `s3://${bucket}/${key}`).join('\n');
@@ -1449,27 +1462,16 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
           <button
             type="button"
-            onClick={() => {
-              if (confirmDelete) {
-                void handleDelete();
-              } else {
-                setConfirmDelete(true);
-              }
-            }}
+            onClick={() => setDeleteSelection([...selected])}
             disabled={busyAction !== null}
-            onBlur={() => setConfirmDelete(false)}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-medium transition-colors disabled:opacity-50 ${
-              confirmDelete
-                ? 'bg-red-600 hover:bg-red-700 text-white border border-red-600'
-                : 'bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40'
-            }`}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-medium transition-colors disabled:opacity-50 bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
           >
             {busyAction === 'delete' ? (
               <Loader2 size={13} className="animate-spin" />
             ) : (
               <Trash2 size={13} />
             )}
-            {confirmDelete ? `Delete ${selected.size}?` : 'Delete'}
+            Delete…
           </button>
 
           <button
@@ -1551,6 +1553,14 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
           onSubmit={runObjectAction}
           onClose={() => setAction(null)}
         />
+    )}
+
+    {deleteSelection && (
+      <DeleteDialog
+        plan={planSelectedDeletion}
+        onConfirm={handleDelete}
+        onClose={() => setDeleteSelection(null)}
+      />
     )}
 
     {editing && (
