@@ -389,14 +389,22 @@ export class TransferEngine {
 
     const queue = parts.filter((part) => !done.has(part.partNumber));
     let cursor = 0;
+    // One failed part fails the task; the other workers stop taking new parts
+    // instead of uploading the rest of a file that cannot complete.
+    let failed = false;
 
     const poolWorker = async (): Promise<void> => {
       for (;;) {
-        if (rt.pauseRequested || rt.cancelRequested) return;
+        if (rt.pauseRequested || rt.cancelRequested || failed) return;
         const part = queue[cursor];
         cursor += 1;
         if (!part) return;
-        await this.uploadPartWithRetry(rt, job, uploadId as string, part, done);
+        try {
+          await this.uploadPartWithRetry(rt, job, uploadId as string, part, done);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
       }
     };
 
@@ -490,7 +498,14 @@ export class TransferEngine {
         });
 
         if (!res.ok) {
-          throw new Error(`HTTP ${res.status} ${res.statusText}`);
+          const failure = new Error(`HTTP ${res.status} ${res.statusText}`);
+          // 4xx (AccessDenied, NoSuchUpload, EntityTooSmall) fails the same way
+          // every time; only timeouts, throttling and 5xx are worth a retry.
+          if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+            void res.body?.cancel().catch(() => {});
+            throw Object.assign(failure, { permanent: true });
+          }
+          throw failure;
         }
 
         const eTag = res.headers.get('etag');
@@ -511,9 +526,11 @@ export class TransferEngine {
         return;
       } catch (err) {
         if (rt.pauseRequested || rt.cancelRequested) return;
+        if ((err as { permanent?: boolean }).permanent) throw new Error(`Part ${part.partNumber} failed: ${errorText(err)}`);
         lastError = err;
         if (attempt < MAX_ATTEMPTS) {
-          await delay(RETRY_BASE_MS * attempt);
+          // Jitter keeps parallel part workers from retrying in lockstep.
+          await delay(RETRY_BASE_MS * attempt * (0.5 + Math.random()));
         }
       } finally {
         rt.controllers.delete(controller);
@@ -521,7 +538,7 @@ export class TransferEngine {
     }
 
     throw new Error(
-      `Part ${part.partNumber}/${Math.max(...done.keys(), 0) || '?'} failed after ${MAX_ATTEMPTS} attempts: ${errorText(lastError)}`,
+      `Part ${part.partNumber} failed after ${MAX_ATTEMPTS} attempts: ${errorText(lastError)}`,
     );
   }
 

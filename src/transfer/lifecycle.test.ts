@@ -253,3 +253,33 @@ test('only MAX_ACTIVE_TASKS transfers run at once, and a queued one can be cance
     port.port2.close();
   }
 });
+
+test('a permanent part failure is not retried and stops the remaining parts', async () => {
+  const job: UploadJob = {
+    taskId: 'denied', profileId: 'profile', key: 'big.bin',
+    target: { endpoint: 'https://s3.example.com', bucket: 'example-bucket', region: 'r', pathStyle: true },
+    credentials: { iv: 'i', ciphertext: 'c' }, file: new File([new Uint8Array(80 * 1024 ** 2)], 'big.bin'),
+    partSize: 16 * 1024 ** 2, concurrency: 1,
+  };
+  const events: TransferEvent[] = [];
+  let parts = 0;
+  const engine = new TransferEngine(e => events.push(e), async (url, init) => {
+    if (String(url).includes('/part?')) {
+      parts += 1;
+      return new Response('<Error><Code>AccessDenied</Code></Error>', { status: 403, statusText: 'Forbidden' });
+    }
+    const body = JSON.parse(String(init?.body));
+    return Response.json({ ok: true, result: body.op === 'createMultipart' ? { uploadId: 'u' } : {} });
+  });
+  const port = new MessageChannel();
+  port.port2.onmessage = ({ data }) => port.port2.postMessage({ type: 'session', id: data.id, sessionId: 's' });
+  engine.attachPort(port.port1);
+  try {
+    await engine.run(job);
+    expect(parts).toBe(1);
+    expect(events.at(-1)).toMatchObject({ type: 'error', message: expect.stringContaining('Part 1 failed: HTTP 403') });
+  } finally {
+    port.port1.close();
+    port.port2.close();
+  }
+});
