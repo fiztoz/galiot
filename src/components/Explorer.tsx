@@ -399,6 +399,9 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        // Never open the palette behind another dialog (the full-screen editor
+        // would hide it while its focus trap takes the keyboard).
+        if (dialogOpen && !paletteOpen) return;
         event.preventDefault();
         setPaletteOpen((open) => !open);
         return;
@@ -421,7 +424,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dialogOpen, moveSelection, rows, selected, handleRowDoubleClick]);
+  }, [dialogOpen, paletteOpen, moveSelection, rows, selected, handleRowDoubleClick]);
 
 
   /** Rename, copy, and new folder all run inside S3, on the server. */

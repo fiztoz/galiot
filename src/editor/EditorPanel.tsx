@@ -167,15 +167,30 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const currentTextRef = useRef('');
   const trapRef = useFocusTrap<HTMLDivElement>();
 
+  /** Asks before discarding a draft; Escape on that prompt keeps editing. */
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  const requestClose = useCallback(() => {
+    if (dirty) setConfirmingClose(true);
+    else onClose();
+  }, [dirty, onClose]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented && !saving) {
-        onClose();
+        if (confirmingClose) setConfirmingClose(false);
+        else requestClose();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose, saving]);
+  }, [requestClose, confirmingClose, saving]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
 
   const readRemote = useCallback(async () => {
     const sealed = await getSealedCredentials(db, profile.id);
@@ -382,13 +397,26 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
 
         <button
           type="button"
-          onClick={onClose}
+          onClick={requestClose}
           className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
           aria-label="Close editor"
         >
           <X size={16} />
         </button>
       </header>
+
+      {confirmingClose && (
+        <div role="alertdialog" aria-label="Discard unsaved changes?" className="flex-none flex flex-wrap items-center gap-2 px-4 py-2 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-100 dark:border-amber-900/40 text-sm text-amber-800 dark:text-amber-300">
+          <AlertTriangle size={14} className="flex-none" />
+          <span className="flex-1 min-w-0">Discard your unsaved changes to {filename}?</span>
+          <button type="button" autoFocus onClick={() => setConfirmingClose(false)} className="px-2.5 py-1 rounded-lg text-xs font-medium hover:bg-amber-100 dark:hover:bg-amber-900/40">
+            Keep editing
+          </button>
+          <button type="button" onClick={onClose} className="px-2.5 py-1 rounded-lg text-xs font-medium bg-red-600 hover:bg-red-700 text-white">
+            Discard
+          </button>
+        </div>
+      )}
 
       {(error || saveError) && (
         <div className="flex-none flex items-start gap-2 px-4 py-2 bg-red-50 dark:bg-red-950/40 border-b border-red-100 dark:border-red-900/40 text-sm text-red-700 dark:text-red-400">

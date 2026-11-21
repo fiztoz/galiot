@@ -53,3 +53,48 @@ test('Diff edits survive mode switches and a failed save, then use the reviewed 
     }
   }
 });
+
+test('closing with unsaved edits asks first; Escape keeps the draft, Discard closes', async () => {
+  const window = new Window();
+  const globals = {
+    window, document: window.document, navigator: window.navigator, MutationObserver: window.MutationObserver,
+    HTMLElement: window.HTMLElement, Node: window.Node, Window: window.Window, KeyboardEvent: window.KeyboardEvent,
+    getComputedStyle: window.getComputedStyle.bind(window), IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  Object.assign(globalThis, globals);
+  const { createRoot } = await import('react-dom/client');
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const rpc = spyOn(vaultService, 'call');
+  rpc.mockResolvedValueOnce({ text: 'one', size: 3, contentType: 'text/plain', eTag: '"read"', conditionalPut: true });
+  const db = { query: async () => ({ rows: [{ encrypted_credentials: {} }] }) } as unknown as AppDB;
+  const profile = { id: 'profile', bucket: 'archive' } as ConnectionRow;
+  const file = { key: 'doc.txt', size: 3 } as ObjectRow;
+  const button = (label: string) => [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === label);
+  const escape = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  let closed = 0;
+  try {
+    await act(async () => { root.render(<EditorPanel db={db} profile={profile} file={file} onSaved={() => {}} onClose={() => { closed += 1; }} />); });
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!;
+    await act(async () => { view.dispatch({ changes: { from: view.state.doc.length, insert: '!' } }); });
+    await act(async () => { escape(); });
+    expect(closed).toBe(0);
+    expect(button('Discard')).toBeDefined();
+    await act(async () => { escape(); });
+    expect(button('Discard')).toBeUndefined();
+    expect(view.state.sliceDoc()).toBe('one!');
+    await act(async () => { (container.querySelector('[aria-label="Close editor"]') as HTMLButtonElement).click(); });
+    await act(async () => { button('Discard')!.click(); });
+    expect(closed).toBe(1);
+  } finally {
+    act(() => root.unmount());
+    rpc.mockRestore();
+    await window.happyDOM.close();
+    for (const name of Object.keys(globals)) {
+      if (previous[name]) Object.defineProperty(globalThis, name, previous[name]);
+      else Reflect.deleteProperty(globalThis, name);
+    }
+  }
+});
