@@ -22,18 +22,24 @@ import { removeStaging, TRANSFER_LOCK, uploadFingerprint } from '../transfer/che
 import { closeServerSession } from '../s3/remote';
 import { downloadFile, publishLocal } from '../transfer/download';
 import { isSessionExpired, sessionCacheKey } from '../transfer/session';
-import { md5Base64 } from '../transfer/integrity';
+import { Md5 } from '../transfer/integrity';
 
 /**
- * Bodies up to this size carry a Content-MD5, so S3 rejects bytes damaged on
- * the way (BadDigest) instead of storing them. The digest needs the bytes in
- * memory, so very large parts skip it rather than buffer hundreds of MiB.
+ * Every part and single PUT carries a Content-MD5, so S3 rejects bytes damaged
+ * on the way (BadDigest) instead of storing them. The digest is computed by
+ * streaming the slice from disk, so a large part is never held in memory.
  */
-const CONTENT_MD5_MAX_BYTES = 32 * 1024 * 1024;
-
 async function contentMd5(body: Blob): Promise<Record<string, string>> {
-  if (body.size > CONTENT_MD5_MAX_BYTES) return {};
-  return { 'content-md5': md5Base64(new Uint8Array(await body.arrayBuffer())) };
+  const md5 = new Md5();
+  const reader = body.stream().getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    md5.update(value);
+  }
+  let binary = '';
+  for (const byte of md5.digestBytes()) binary += String.fromCharCode(byte);
+  return { 'content-md5': btoa(binary) };
 }
 
 /** Per-part retry policy for transient network failures. */
