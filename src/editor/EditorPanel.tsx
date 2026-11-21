@@ -28,7 +28,7 @@ import {
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { MergeView } from '@codemirror/merge';
-import { X, Save, Columns2, PenLine, Loader2, AlertTriangle, CheckCircle2, FileText } from 'lucide-react';
+import { X, Save, Columns2, PenLine, Loader2, AlertTriangle, CheckCircle2, FileText, Maximize2, Minimize2 } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
 import { profileConfig, listingCredentials } from '../db/objects';
 import { vaultService } from '../vault/vaultService';
@@ -152,6 +152,9 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   );
   /** Grammar chosen from content when the filename had no extension clue. */
   const [contentLang, setContentLang] = useState<EditorLanguage | null>(null);
+  /** Media previews dock beside the table (master-detail); editing stays full-screen. */
+  const [expandMedia, setExpandMedia] = useState(false);
+  const docked = media !== null && !expandMedia;
   const [langSupport, setLangSupport] = useState<Extension | undefined>(undefined);
   /**
    * Whether language resolution has finished.
@@ -375,11 +378,15 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
 
   return (
     <div
-      ref={trapRef}
+      ref={docked ? undefined : trapRef}
       role="dialog"
-      aria-modal="true"
+      aria-modal={docked ? undefined : true}
       aria-label={filename}
-      className="fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex flex-col"
+      className={
+        docked
+          ? 'fixed top-0 right-0 bottom-0 z-40 w-full max-w-[560px] bg-zinc-50 dark:bg-zinc-950 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl flex flex-col'
+          : 'fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex flex-col'
+      }
     >
       <header className="flex-none flex items-center gap-3 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
         <FileText size={16} className="text-teal-500 flex-none" />
@@ -439,6 +446,17 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
           </button>
         )}
 
+        {media !== null && (
+          <button
+            type="button"
+            onClick={() => setExpandMedia((v) => !v)}
+            className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            aria-label={docked ? 'Expand preview to full screen' : 'Dock preview beside the table'}
+            title={docked ? 'Expand to full screen' : 'Dock beside the table'}
+          >
+            {docked ? <Maximize2 size={16} /> : <Minimize2 size={16} />}
+          </button>
+        )}
         <button
           type="button"
           onClick={requestClose}

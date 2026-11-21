@@ -46,7 +46,10 @@ describe('dialog accessibility wiring', () => {
     const source = readFileSync(join(ROOT, 'editor', 'EditorPanel.tsx'), 'utf8');
     expect(source).toContain('useFocusTrap');
     expect(source).toContain('role="dialog"');
-    expect(source).toContain('aria-modal="true"');
+    // Full-screen editing is a trapped modal; docked media preview is a
+    // non-modal master-detail panel (table stays usable behind it).
+    expect(source).toContain('aria-modal={docked ? undefined : true}');
+    expect(source).toContain('ref={docked ? undefined : trapRef}');
     expect(source).toContain("event.key === 'Escape'");
     expect(source.indexOf('mediaKind(filename, file.content_type)')).toBeLessThan(
       source.indexOf("vaultService.call('s3.getText'"),
