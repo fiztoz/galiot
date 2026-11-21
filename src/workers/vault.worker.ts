@@ -295,6 +295,10 @@ async function dispatch<M extends VaultMethod>(
     case 'vault.status':
       return { unlocked: vault?.isUnlocked() ?? false, generation };
 
+    case 'vault.touch':
+      vault?.touch();
+      return { unlocked: vault?.isUnlocked() ?? false };
+
     case 'vault.export': {
       const p = params as NonNullable<VaultRequest<'vault.export'>['params']>;
       const owner = requireUnlocked();

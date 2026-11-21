@@ -8,6 +8,7 @@ import { TransferDrawer } from './components/TransferDrawer';
 import { transferManager } from './transfer/manager';
 import { purgeExpiredLinks } from './s3/links';
 import { lockVault } from './vault/repository';
+import { vaultService } from './vault/vaultService';
 import { BRAND } from './branding';
 
 function Splash({ label }: { label: string }) {
@@ -48,6 +49,8 @@ function FatalError({ message }: { message: string }) {
   );
 }
 
+const ACTIVITY_PING_MS = 60_000;
+
 function Shell({ db }: { db: AppDB }) {
   const [isUnlocked, setIsUnlocked] = useState(false);
 
@@ -63,6 +66,24 @@ function Shell({ db }: { db: AppDB }) {
     // before the table existed) must not block the UI.
     purgeExpiredLinks(db).catch(() => {});
   }, [db]);
+
+  // The vault's idle lock counts S3 calls; typing in the editor or reading a
+  // listing makes none. Report real input, at most once a minute.
+  useEffect(() => {
+    if (!isUnlocked) return;
+    let last = 0;
+    const onActivity = () => {
+      const now = Date.now();
+      if (now - last < ACTIVITY_PING_MS) return;
+      last = now;
+      vaultService.call('vault.touch').catch(() => {});
+    };
+    const events = ['pointerdown', 'keydown', 'wheel'] as const;
+    for (const name of events) window.addEventListener(name, onActivity, { capture: true, passive: true });
+    return () => {
+      for (const name of events) window.removeEventListener(name, onActivity, { capture: true });
+    };
+  }, [isUnlocked]);
 
   return (
     <div className="h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col font-sans">

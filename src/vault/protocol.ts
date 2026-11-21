@@ -121,6 +121,7 @@ export type VaultMethod =
   | 'vault.lock'
   | 'vault.invalidate'
   | 'vault.status'
+  | 'vault.touch'
   | 'vault.export'
   | 'vault.import'
   | 'vault.attachTransferPort'
@@ -170,6 +171,8 @@ export interface VaultParams {
   'vault.lock': undefined;
   'vault.invalidate': { generation: string };
   'vault.status': undefined;
+  /** User activity in the page: restarts the inactivity timer of an unlocked vault. */
+  'vault.touch': undefined;
   'vault.export': { manifest: BackupManifest; generation: string };
   'vault.import': { file: File; passphrase: string };
   'vault.attachTransferPort': { port: MessagePort };
@@ -271,6 +274,7 @@ export type VaultResults = {
   'vault.lock': { locked: true };
   'vault.invalidate': { invalidated: boolean };
   'vault.status': { unlocked: boolean; generation: string | null };
+  'vault.touch': { unlocked: boolean };
   'vault.export': BackupEnvelope;
   'vault.import': VerifiedBackup;
   'vault.attachTransferPort': { attached: true };
