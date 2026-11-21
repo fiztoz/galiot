@@ -72,7 +72,9 @@ describe('vault crypto primitives', () => {
     const wrapped = await wrapDEK(kek, dek);
     const unwrapped = await unwrapDEK(kek, wrapped);
 
-    expect(unwrapped.extractable).toBe(true);
+    // The session key is never exported; only the fresh DEK is, once, to wrap it.
+    expect(unwrapped.extractable).toBe(false);
+    expect(kek.extractable).toBe(false);
     expect(unwrapped.algorithm.name).toBe('AES-GCM');
 
     // The unwrapped key must decrypt what the original encrypted.

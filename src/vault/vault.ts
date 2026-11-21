@@ -84,6 +84,11 @@ export class VaultManager {
     }
   }
 
+  /** The user is active in the page: inactivity means no input, not only no S3 calls. */
+  public touch(): void {
+    if (this.dek) this.resetTimer();
+  }
+
   public isUnlocked(): boolean {
     return this.dek !== null;
   }
@@ -105,12 +110,15 @@ export class VaultManager {
       salt: toBase64(salt),
       wrappedDek: toBase64(new Uint8Array(wrappedDekBuf)),
     };
+    // The fresh DEK had to be extractable to be wrapped. Keep the
+    // non-extractable unwrapped copy for the session, as unlock does.
+    const sessionDek = await unwrapDEK(kek, wrappedDekBuf);
 
     zeroBuffer(salt);
     zeroBuffer(wrappedDekBuf);
 
     const vault = new VaultManager(onLock);
-    vault.dek = dek;
+    vault.dek = sessionDek;
     return { vault, sealed };
   }
 

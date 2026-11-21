@@ -46,14 +46,19 @@ export function generateIV(): Uint8Array {
  * Returns an AES-KW (Key Wrap) 256-bit key.
  */
 export async function deriveKEK(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
-  const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(passphrase),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveBits', 'deriveKey']
-  );
+  const passphraseBytes = new TextEncoder().encode(passphrase);
+  let keyMaterial: CryptoKey;
+  try {
+    keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      passphraseBytes,
+      { name: 'PBKDF2' },
+      false,
+      ['deriveBits', 'deriveKey']
+    );
+  } finally {
+    passphraseBytes.fill(0);
+  }
 
   return crypto.subtle.deriveKey(
     {
@@ -64,7 +69,8 @@ export async function deriveKEK(passphrase: string, salt: Uint8Array): Promise<C
     },
     keyMaterial,
     { name: 'AES-KW', length: 256 },
-    true,
+    // Only ever used to wrap and unwrap; its bytes never need to leave WebCrypto.
+    false,
     ['wrapKey', 'unwrapKey']
   );
 }
@@ -88,7 +94,9 @@ export async function wrapDEK(kek: CryptoKey, dek: CryptoKey): Promise<ArrayBuff
 }
 
 /**
- * Unwraps the DEK using the KEK (AES-KW).
+ * Unwraps the DEK using the KEK (AES-KW). The result is non-extractable: an
+ * unlocked vault only encrypts and decrypts, so its raw key can never be read
+ * back out of WebCrypto, even by code running in the worker.
  */
 export async function unwrapDEK(kek: CryptoKey, wrappedDek: ArrayBuffer): Promise<CryptoKey> {
   return crypto.subtle.unwrapKey(
@@ -97,7 +105,7 @@ export async function unwrapDEK(kek: CryptoKey, wrappedDek: ArrayBuffer): Promis
     kek,
     'AES-KW',
     { name: 'AES-GCM', length: 256 },
-    true,
+    false,
     ['encrypt', 'decrypt']
   );
 }
