@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { BRAND } from '../branding';
 import { useLiveQuery } from '@electric-sql/pglite-react';
 import {
@@ -54,6 +54,14 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
   const [importError, setImportError] = useState<string | null>(null);
   const connectionFileRef = useRef<HTMLInputElement>(null);
   const settingsTrapRef = useFocusTrap<HTMLDivElement>(settingsOpen);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) setSettingsOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [settingsOpen]);
 
   const connections = useLiveQuery<ConnectionRow>(
     `SELECT ${CONNECTION_COLUMNS} FROM profiles ORDER BY name ASC`,

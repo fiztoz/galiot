@@ -97,6 +97,8 @@ const EditorPanel = lazy(() =>
   ),
 );
 
+const objectOptionId = (index: number) => `object-option-${index}`;
+
 interface ExplorerProps {
   db: AppDB;
   profile: ConnectionRow;
@@ -427,6 +429,12 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
     },
     [rows, selected, viewMode, virtualizer],
   );
+
+  /** The most recently selected row, which arrow keys move from. */
+  const activeOptionIndex = useMemo(() => {
+    const last = [...selected].at(-1);
+    return last === undefined ? -1 : rows.findIndex((row) => row.key === last);
+  }, [rows, selected]);
 
   const dialogOpen = paletteOpen || action !== null || details !== null || sharing !== null || bucketSearch !== null || editing !== null ||
     deleteSelection !== null;
@@ -1180,7 +1188,12 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             role="listbox"
             aria-multiselectable="true"
             aria-label="Objects in this folder"
+            // Focusable so screen readers follow arrow-key selection through
+            // aria-activedescendant; the rows themselves stay out of the tab order.
+            tabIndex={0}
+            aria-activedescendant={activeOptionIndex >= 0 ? objectOptionId(activeOptionIndex) : undefined}
             style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
+            className="focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500"
           >
             {virtualizer.getVirtualItems().map((virtualRow) => {
               if (viewMode === 'list') {
@@ -1192,6 +1205,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                 return (
                   <div
                     key={row.key}
+                    id={objectOptionId(virtualRow.index)}
                     role="option"
                     aria-selected={isSelected}
                     aria-label={row.is_dir ? `${isSearching ? row.key : row.filename} (folder)` : (isSearching ? row.key : row.filename)}
@@ -1259,6 +1273,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                 cells.push(
                   <button
                     key={row.key}
+                    id={objectOptionId(index)}
                     type="button"
                     role="option"
                     aria-selected={isSelected}

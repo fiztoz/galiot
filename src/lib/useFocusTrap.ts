@@ -8,6 +8,9 @@ const FOCUSABLE =
  * Dialogs here are plain fixed-position divs, so without this a keyboard user
  * tabs straight out of the dialog into the page behind it.
  */
+/** Open traps, innermost last: only the top one handles Tab. */
+const openTraps: HTMLElement[] = [];
+
 export function useFocusTrap<T extends HTMLElement>(active = true) {
   const ref = useRef<T | null>(null);
 
@@ -26,12 +29,17 @@ export function useFocusTrap<T extends HTMLElement>(active = true) {
       focusables()[0]?.focus();
     }
 
+    // On the document, not the dialog: after a click on the backdrop or a
+    // removed element, focus sits on <body> and Tab would leave the dialog.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') return;
+      if (event.key !== 'Tab' || openTraps[openTraps.length - 1] !== node) return;
       const list = focusables();
       if (list.length === 0) return;
       const index = list.indexOf(document.activeElement as HTMLElement);
-      if (event.shiftKey && index <= 0) {
+      if (index === -1) {
+        event.preventDefault();
+        (event.shiftKey ? list[list.length - 1] : list[0])?.focus();
+      } else if (event.shiftKey && index === 0) {
         event.preventDefault();
         list[list.length - 1]?.focus();
       } else if (!event.shiftKey && index === list.length - 1) {
@@ -40,9 +48,11 @@ export function useFocusTrap<T extends HTMLElement>(active = true) {
       }
     };
 
-    node.addEventListener('keydown', onKeyDown);
+    openTraps.push(node);
+    document.addEventListener('keydown', onKeyDown);
     return () => {
-      node.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keydown', onKeyDown);
+      openTraps.splice(openTraps.lastIndexOf(node), 1);
       previous?.focus();
     };
   }, [active]);

@@ -131,10 +131,10 @@ export function ShareDialog({ db, target, currentIdentity, file, onClose }: Shar
           {file && !stale && <>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+              <span id="share-permission-label" className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                 Permission
-              </label>
-              <div className="flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+              </span>
+              <div role="group" aria-labelledby="share-permission-label" className="flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                 <button
                   type="button"
                   onClick={() => setPermission('read')}
@@ -187,10 +187,10 @@ export function ShareDialog({ db, target, currentIdentity, file, onClose }: Shar
           </div>
 
           <div>
-              <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+              <span id="share-route-label" className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                 Link route
-              </label>
-              <div className="flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+              </span>
+              <div role="group" aria-labelledby="share-route-label" className="flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                 <button
                   type="button"
                   onClick={() => setVia('server')}
@@ -229,14 +229,14 @@ export function ShareDialog({ db, target, currentIdentity, file, onClose }: Shar
 
           {permission === 'write' && via === 'server' && (
             <div>
-              <label className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
+              <label htmlFor="share-upload-cap" className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                 Upload cap
               </label>
               <select
+                id="share-upload-cap"
                 value={maxBytes}
                 onChange={(event) => setMaxBytes(Number(event.target.value))}
                 className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg text-zinc-700 dark:text-zinc-200"
-                aria-label="Upload cap"
               >
                 <option value={10 * 1024 * 1024}>10 MiB</option>
                 <option value={100 * 1024 * 1024}>100 MiB</option>
