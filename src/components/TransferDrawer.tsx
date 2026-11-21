@@ -64,6 +64,10 @@ export function TransferDrawer(_props: TransferDrawerProps) {
 
   const rows = tasks?.rows ?? [];
   const activeCount = rows.filter((t) => ACTIVE_STATUSES.has(t.status)).length;
+  const failedCount = rows.filter((t) => t.status === 'failed').length;
+  const retryableDownloads = rows.filter(
+    (t) => t.status === 'failed' && t.direction === 'download' && t.error_message !== 'Canceled by user',
+  );
 
   // Reveal the drawer the moment work starts.
   useEffect(() => {
@@ -196,8 +200,24 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                 {activeCount > 0 && (
                   <span className="ml-1.5 text-teal-600 dark:text-teal-400">{activeCount} active</span>
                 )}
+                {failedCount > 0 && (
+                  <span className="ml-1.5 text-amber-600 dark:text-amber-400">{failedCount} failed</span>
+                )}
               </span>
               <div className="flex items-center gap-1">
+                {retryableDownloads.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      for (const task of retryableDownloads) handleResume(task);
+                    }}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors"
+                    title="Retry all failed downloads"
+                  >
+                    <RotateCcw size={12} />
+                    Retry {retryableDownloads.length}
+                  </button>
+                )}
                 {rows.some(isFinished) && (
                   <button
                     type="button"
