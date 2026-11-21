@@ -125,3 +125,16 @@ Galiot server listening on http://${server.hostname}:${server.port}
 This process signs S3 requests and opens the connection. The machine running
 it must be able to reach the bucket. Credentials stay in memory for the session.
 `);
+
+// As PID 1 in the container, default-action signals are ignored by the kernel:
+// without handlers every pod termination waits out the grace period and then
+// SIGKILLs in-flight transfers. Drain explicitly instead.
+let stopping = false;
+function gracefulStop(): void {
+  if (stopping) return;
+  stopping = true;
+  server.stop(false); // finish in-flight requests, refuse new ones
+  setTimeout(() => process.exit(0), 5_000).unref();
+}
+process.on('SIGTERM', gracefulStop);
+process.on('SIGINT', gracefulStop);
