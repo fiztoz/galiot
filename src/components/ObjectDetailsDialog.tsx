@@ -3,8 +3,7 @@ import { BRAND } from '../branding';
 import { Download, History, Info, Loader2, Lock, RotateCcw, Snowflake, Trash2, X } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
 import { isArchiveClass, isRestored, type ObjectMeta, type ObjectVersion } from '../s3/client';
-import { profileConfig } from '../db/objects';
-import { getSealedCredentials } from '../vault/repository';
+import { profileConfig, listingCredentials } from '../db/objects';
 import { vaultService } from '../vault/vaultService';
 import { formatBytes, formatDate } from '../lib/format';
 import { useFocusTrap } from '../lib/useFocusTrap';
@@ -39,7 +38,7 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
   }, [onClose]);
 
   const loadVersions = useCallback(async () => {
-    const sealed = await getSealedCredentials(db, profile.id);
+    const sealed = await listingCredentials(db, profile);
     const result = await vaultService.call('s3.listVersions', {
       profile: profileConfig(profile),
       credentials: { sealed },
@@ -50,7 +49,7 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
   }, [db, profile, file.key]);
 
   const loadMeta = useCallback(async () => {
-    const sealed = await getSealedCredentials(db, profile.id);
+    const sealed = await listingCredentials(db, profile);
     const result = await vaultService.call('s3.head', {
       profile: profileConfig(profile),
       credentials: { sealed },
@@ -83,7 +82,7 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
     setRestoreNote(null);
     setVersionError(null);
     try {
-      const sealed = await getSealedCredentials(db, profile.id);
+      const sealed = await listingCredentials(db, profile);
       await vaultService.call('s3.restore', {
         profile: profileConfig(profile),
         credentials: { sealed },
@@ -104,7 +103,7 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
       setVersionBusy(`${action}:${version.versionId}`);
       setVersionError(null);
       try {
-        const sealed = await getSealedCredentials(db, profile.id);
+        const sealed = await listingCredentials(db, profile);
         const common = { profile: profileConfig(profile), credentials: { sealed }, key: file.key, versionId: version.versionId };
         if (action === 'download') {
           const { url } = await vaultService.call('s3.versionUrl', common);

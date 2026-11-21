@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { FolderOpen, Loader2, Search, X } from 'lucide-react';
 import type { AppDB, ConnectionRow } from '../db/client';
 import type { BucketSearchResult } from '../s3/client';
-import { profileConfig } from '../db/objects';
-import { getSealedCredentials } from '../vault/repository';
+import { profileConfig, listingCredentials } from '../db/objects';
 import { vaultService } from '../vault/vaultService';
 import { formatBytes, formatDate } from '../lib/format';
 import { useFocusTrap } from '../lib/useFocusTrap';
@@ -48,7 +47,7 @@ export function BucketSearchDialog({ db, profile, initialQuery, onNavigate, onCl
     setError(null);
     setResult(null);
     try {
-      const sealed = await getSealedCredentials(db, profile.id);
+      const sealed = await listingCredentials(db, profile);
       const found = await vaultService.call('s3.search', {
         profile: profileConfig(profile),
         credentials: { sealed },

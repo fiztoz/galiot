@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, ZoomIn, ZoomOut, Maximize2, AlertTriangle } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
-import { profileConfig } from '../db/objects';
-import { getSealedCredentials } from '../vault/repository';
+import { profileConfig, listingCredentials } from '../db/objects';
 import { vaultService } from '../vault/vaultService';
 
 interface FilePreviewProps {
@@ -14,7 +13,7 @@ interface FilePreviewProps {
 
 /** Same-origin media URL. The Galiot server streams the object, so the browser need not reach S3. */
 async function previewUrl(db: AppDB, profile: ConnectionRow, key: string): Promise<string> {
-  const sealed = await getSealedCredentials(db, profile.id);
+  const sealed = await listingCredentials(db, profile);
   const { url } = await vaultService.call('s3.mediaUrl', {
     profile: profileConfig(profile),
     credentials: { sealed },

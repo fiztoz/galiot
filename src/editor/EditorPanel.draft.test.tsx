@@ -24,7 +24,7 @@ test('Diff edits survive mode switches and a failed save, then use the reviewed 
   rpc.mockResolvedValueOnce(baseline).mockRejectedValueOnce(new Error('remote changed'))
     .mockResolvedValueOnce({ ...baseline, text: 'latest', eTag: '"reviewed"' }).mockResolvedValueOnce({ eTag: '"saved"' });
   const db = { query: async () => ({ rows: [{ encrypted_credentials: {} }] }) } as unknown as AppDB;
-  const profile = { id: 'profile', bucket: 'archive' } as ConnectionRow;
+  const profile = { id: 'profile', bucket: 'archive', updated_at: '2026-01-01T00:00:00.000Z' } as ConnectionRow;
   const file = { key: 'doc.txt', size: 8 } as ObjectRow;
   const button = (label: string) => [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === label)!;
   const draft = () => EditorView.findFromDOM(container.querySelector('[aria-label="Local edits"]')!)!;
@@ -70,7 +70,7 @@ test('closing with unsaved edits asks first; Escape keeps the draft, Discard clo
   const rpc = spyOn(vaultService, 'call');
   rpc.mockResolvedValueOnce({ text: 'one', size: 3, contentType: 'text/plain', eTag: '"read"', conditionalPut: true });
   const db = { query: async () => ({ rows: [{ encrypted_credentials: {} }] }) } as unknown as AppDB;
-  const profile = { id: 'profile', bucket: 'archive' } as ConnectionRow;
+  const profile = { id: 'profile', bucket: 'archive', updated_at: '2026-01-01T00:00:00.000Z' } as ConnectionRow;
   const file = { key: 'doc.txt', size: 3 } as ObjectRow;
   const button = (label: string) => [...container.querySelectorAll('button')].find(b => b.textContent?.trim() === label);
   const escape = () => window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));

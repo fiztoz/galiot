@@ -30,8 +30,7 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { MergeView } from '@codemirror/merge';
 import { X, Save, Columns2, PenLine, Loader2, AlertTriangle, CheckCircle2, FileText } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
-import { profileConfig } from '../db/objects';
-import { getSealedCredentials } from '../vault/repository';
+import { profileConfig, listingCredentials } from '../db/objects';
 import { vaultService } from '../vault/vaultService';
 import { detectLanguage, mediaKind } from './filetypes';
 import { languageSupport } from './languages';
@@ -193,7 +192,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   }, [dirty]);
 
   const readRemote = useCallback(async () => {
-    const sealed = await getSealedCredentials(db, profile.id);
+    const sealed = await listingCredentials(db, profile);
     return vaultService.call('s3.getText', {
       profile: profileConfig(profile), credentials: { sealed }, key: file.key,
     });
@@ -288,7 +287,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     setSaveError(null);
     const text = currentTextRef.current;
     try {
-      const sealed = await getSealedCredentials(db, profile.id);
+      const sealed = await listingCredentials(db, profile);
       const result = await vaultService.call('s3.putText', {
         profile: profileConfig(profile),
         credentials: { sealed },

@@ -22,9 +22,8 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
-import { loadListing, deleteKeys, forgetCachedFolder, harvestFolderStats, planDeletion, profileConfig, type DeletionPlan } from '../db/objects';
+import { loadListing, deleteKeys, forgetCachedFolder, harvestFolderStats, listingCredentials, planDeletion, profileConfig, type DeletionPlan } from '../db/objects';
 import { DeleteDialog } from './DeleteDialog';
-import { getSealedCredentials } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
 import { classifyConnectionFailure } from '../db/connectionDiagnostics';
 import {
@@ -467,7 +466,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const runObjectAction = useCallback(
     async (value: string) => {
       if (!action) return;
-      const sealed = await getSealedCredentials(db, profile.id);
+      const sealed = await listingCredentials(db, profile);
       const config = profileConfig(profile);
       const credentials = { sealed };
       if (action.kind === 'folder') {
@@ -491,7 +490,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       handleRefresh();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [action, db, profileId, bucket, endpoint, region, pathStyle, prefix, handleRefresh],
+    [action, db, profileId, bucket, endpoint, region, pathStyle, prefix, profileRevision, handleRefresh],
   );
 
   /** Queues dropped or picked files as uploads into the current folder. */
@@ -525,7 +524,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   /** Providers refuse changes to locked objects; say so before trying. */
   const assertNotLocked = useCallback(
     async (key: string) => {
-      const sealed = await getSealedCredentials(db, profile.id);
+      const sealed = await listingCredentials(db, profile);
       const meta = await vaultService.call('s3.head', {
         profile: profileConfig(profile),
         credentials: { sealed },
@@ -709,7 +708,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       const files: { key: string; size: number; name: string }[] = [];
       const directories = new Set<string>();
       let archived = 0;
-      const sealed = await getSealedCredentials(db, profile.id);
+      const sealed = await listingCredentials(db, profile);
       const config = profileConfig(profile);
       for (const entry of entries) {
         if (!entry.isDir) {

@@ -2,7 +2,6 @@ import type { AppDB, ConnectionRow } from './client';
 import type { EncryptedPayload } from '../vault/crypto';
 import type { S3ProfileConfig } from '../vault/protocol';
 import { vaultService } from '../vault/vaultService';
-import { getSealedCredentials } from '../vault/repository';
 import { parseStoredHeaders } from '../s3/customHeaders';
 import type { ListObjectsResult } from '../s3/client';
 import { parseNetwork } from '../server/network';
@@ -31,8 +30,13 @@ interface ListingSnapshot {
   sealed: EncryptedPayload;
 }
 
-/** Read the credentials and verify their target in one snapshot, including legacy JSONB strings. */
-async function listingCredentials(db: Pick<AppDB, 'query'>, profile: ConnectionRow): Promise<EncryptedPayload> {
+/**
+ * Read the credentials and verify their target in one snapshot, including
+ * legacy JSONB strings. Every action uses this, not the bare sealed blob: if
+ * another tab re-pointed the connection, the action must not pair the new
+ * credentials with the endpoint and bucket this view still shows.
+ */
+export async function listingCredentials(db: Pick<AppDB, 'query'>, profile: ConnectionRow): Promise<EncryptedPayload> {
   const { rows } = await db.query<{ encrypted_credentials: EncryptedPayload | string; custom_headers: unknown }>(
     `SELECT encrypted_credentials, custom_headers FROM profiles
       WHERE id = $1 AND bucket = $2 AND endpoint = $3 AND region = $4 AND path_style = $5
@@ -41,7 +45,7 @@ async function listingCredentials(db: Pick<AppDB, 'query'>, profile: ConnectionR
   );
   const row = rows[0];
   if (!row || JSON.stringify(parseStoredHeaders(row.custom_headers)) !== JSON.stringify(parseStoredHeaders(profile.custom_headers))) {
-    throw new Error('Connection changed while reading the listing. Refresh to use the current settings.');
+    throw new Error('This connection was changed in another tab. Refresh to use the current settings.');
   }
   return typeof row.encrypted_credentials === 'string' ? JSON.parse(row.encrypted_credentials) : row.encrypted_credentials;
 }
@@ -238,7 +242,7 @@ export async function planDeletion(
   const trees = new Map<string, { key: string; size: number }[]>();
   const folders = selected.filter(key => key.endsWith('/'));
   if (folders.length) {
-    const sealed = await getSealedCredentials(db, profile.id);
+    const sealed = await listingCredentials(db, profile);
     for (const prefix of folders) {
       const tree = await vaultService.call('s3.listTree', {
         profile: profileConfig(profile), credentials: { sealed }, prefix,
@@ -265,7 +269,7 @@ export async function deleteKeys(
   profile: ConnectionRow,
   keys: string[],
 ): Promise<{ deleted: string[]; errors: { key: string; code: string; message: string }[] }> {
-  const sealed = await getSealedCredentials(db, profile.id);
+  const sealed = await listingCredentials(db, profile);
   const result: { deleted: string[]; errors: { key: string; code: string; message: string }[] } = { deleted: [], errors: [] };
   for (let i = 0; i < keys.length; i += 1000) {
     const batch = keys.slice(i, i + 1000);
@@ -298,7 +302,7 @@ export async function presignDownload(
   key: string,
   expiresIn = 3600,
 ): Promise<string> {
-  const sealed = await getSealedCredentials(db, profile.id);
+  const sealed = await listingCredentials(db, profile);
   const { url } = await vaultService.call('s3.presignGet', {
     profile: profileConfig(profile),
     credentials: { sealed },
