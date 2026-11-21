@@ -1,5 +1,5 @@
 import { assertConnectionEndpoint } from '../s3/endpoint';
-import { assertSafeCustomHeaders } from '../s3/customHeaders';
+import { assertSafeCustomHeaders, parseStoredHeaders } from '../s3/customHeaders';
 import type { EncryptedPayload } from './crypto';
 import { VaultManager, type SealedVault } from './vault';
 
@@ -42,8 +42,15 @@ function header(sealed: SealedVault): Uint8Array<ArrayBuffer> {
 }
 
 export async function sealManifest(vault: VaultManager, data: BackupManifest): Promise<BackupEnvelope> {
-  // Normalize database timestamps just as they appear in a JSON backup.
-  const snapshot = JSON.stringify({ profiles: data.profiles });
+  // Normalize database timestamps just as they appear in a JSON backup. Export
+  // the headers the runtime actually sends: a stored header that a later rule
+  // rejects is already dropped per entry, and must not block the whole backup.
+  const snapshot = JSON.stringify({
+    profiles: data.profiles.map(row => row.custom_headers == null ? row : {
+      ...row,
+      custom_headers: (headers => Object.keys(headers).length ? headers : null)(parseStoredHeaders(row.custom_headers)),
+    }),
+  });
   const manifest = JSON.parse(snapshot) as { profiles: unknown };
   try {
     await verifiedProfiles(manifest.profiles, vault);
@@ -110,8 +117,12 @@ async function verifiedProfiles(raw: unknown, verifier: VaultManager): Promise<R
   return rows;
 }
 
+/** Far above any real vault (about 1 KB per connection); refuses before reading into memory. */
+export const MAX_BACKUP_FILE_BYTES = 10 * 1024 * 1024;
+
 /** Worker only. Return sealed rows only after checking the complete backup. */
 export async function openManifest(file: Blob, passphrase: string): Promise<VerifiedBackup> {
+  if (file.size > MAX_BACKUP_FILE_BYTES) throw new Error('This file is too large to be a vault backup.');
   let raw: unknown;
   try {
     raw = JSON.parse(await file.text());

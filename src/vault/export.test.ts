@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { openManifest, sealManifest } from './exportFormat';
+import { MAX_BACKUP_FILE_BYTES, openManifest, sealManifest } from './exportFormat';
 import { VaultManager, type SealedVault } from './vault';
 import type { EncryptedPayload } from './crypto';
 
@@ -41,6 +41,18 @@ describe('vault backup verification', () => {
     expect(verified.profiles[0]).toMatchObject(row());
     const damaged = { ...row(), id: '22222222-2222-4222-8222-222222222222', encrypted_credentials: { ...credentials, ciphertext: '' } };
     await expect(openManifest(file(legacy([row(), damaged])), password)).rejects.toThrow('integrity');
+  });
+
+  test('a stored header a later rule rejects is dropped from the export, not fatal to it', async () => {
+    const stale = { ...row(), custom_headers: JSON.stringify({ 'x-tenant': 'archive', authorization: 'fixture' }) };
+    const envelope = await sealManifest(vault, { ...sealed, profiles: [stale] });
+    const verified = await openManifest(file(envelope), password);
+    expect(verified.profiles[0]?.custom_headers).toEqual({ 'x-tenant': 'archive' });
+  });
+
+  test('an oversized file is refused before it is read', async () => {
+    const huge = new Blob([new Uint8Array(MAX_BACKUP_FILE_BYTES + 1)]);
+    await expect(openManifest(huge, password)).rejects.toThrow('too large');
   });
 
   test('unsafe legacy endpoints and header values cannot reach restored rows', async () => {
