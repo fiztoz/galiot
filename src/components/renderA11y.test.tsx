@@ -254,7 +254,11 @@ describe('rendered dialog accessibility', () => {
     }
 
     const pathStyle = el.querySelector<HTMLInputElement>('#conn-path-style');
-    expect(pathStyle?.className).toContain('accent-teal-600');
+    // Themed checkbox: the native input stays for semantics but is visually
+    // replaced, and its wrapping label still names it.
+    expect(pathStyle?.type).toBe('checkbox');
+    expect(pathStyle?.className).toContain('sr-only');
+    expect(pathStyle?.labels?.[0]?.textContent).toContain('Path-style addressing');
 
     const sessionTokenLabel = el.querySelector('label[for="conn-session-token"]');
     const sessionTokenInput = el.querySelector<HTMLInputElement>('#conn-session-token');

@@ -24,6 +24,7 @@ import {
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
 import { loadListing, deleteKeys, forgetCachedFolder, harvestFolderStats, listingCredentials, planDeletion, profileConfig, type DeletionPlan } from '../db/objects';
 import { DeleteDialog } from './DeleteDialog';
+import { ConfirmDialog } from './ConfirmDialog';
 import { vaultService } from '../vault/vaultService';
 import { classifyConnectionFailure } from '../db/connectionDiagnostics';
 import {
@@ -54,7 +55,7 @@ import { underFolder } from '../transfer/paths';
 import { ObjectActionDialog } from './ObjectActionDialog';
 import { ObjectDetailsDialog } from './ObjectDetailsDialog';
 import { BucketSearchDialog } from './BucketSearchDialog';
-import { isTextualFilename, mediaKind } from '../editor/filetypes';
+import { hasTypeClue, isTextualFilename, mediaKind } from '../editor/filetypes';
 import { ShareDialog } from './ShareDialog';
 import { SHARE_TARGET_QUERY, shareTargetParams, type ShareTarget } from '../s3/links';
 
@@ -160,6 +161,13 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [showLocal, setShowLocal] = useState(false);
   const [editing, setEditing] = useState<ObjectRow | null>(null);
+  /** Pending overwrite confirmation for a local download (replaces window.confirm). */
+  const [replacePrompt, setReplacePrompt] = useState<{
+    files: { key: string; size: number; name: string }[];
+    handle: FileSystemDirectoryHandle;
+    collisions: Set<string>;
+    archived: number;
+  } | null>(null);
   const [sharing, setSharing] = useState<{ file: ObjectRow | null; target: ShareTarget } | null>(null);
   const shareTarget = useLiveQuery<ShareTarget>(SHARE_TARGET_QUERY, shareTargetParams(profile))?.rows[0];
   const [details, setDetails] = useState<ObjectRow | null>(null);
@@ -390,9 +398,14 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
         navigateTo(row.key);
         return;
       }
-      // Double-click opens a text file in the editor (or a media preview);
-      // binaries are left to the Download action.
-      if (isTextualFilename(row.filename) || mediaKind(row.filename, row.content_type)) {
+      // Double-click opens a text file in the editor (or a media preview).
+      // Nameless objects open too: the editor sniffs their first bytes to
+      // decide between preview, text and binary. Known binaries download.
+      if (
+        isTextualFilename(row.filename) ||
+        mediaKind(row.filename, row.content_type) ||
+        !hasTypeClue(row.filename)
+      ) {
         setEditing(row);
         return;
       }
@@ -437,7 +450,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   }, [rows, selected]);
 
   const dialogOpen = paletteOpen || action !== null || details !== null || sharing !== null || bucketSearch !== null || editing !== null ||
-    deleteSelection !== null;
+    deleteSelection !== null || replacePrompt !== null;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -765,6 +778,34 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
     [selected, selectedRows],
   );
 
+  /** Queues the expanded download set once any overwrite prompt is settled. */
+  const enqueueLocalDownloads = useCallback(
+    async (
+      files: { key: string; size: number; name: string }[],
+      handle: FileSystemDirectoryHandle,
+      collisions: Set<string>,
+      archived: number,
+    ) => {
+      for (const file of files) {
+        await transferManager.enqueueDownload(
+          profile,
+          file.key,
+          file.size,
+          { kind: 'directory', handle, filename: file.name, replace: collisions.has(file.name) },
+          file.name,
+        );
+      }
+      setNotice(
+        `Saving ${files.length} file${files.length === 1 ? '' : 's'} into the local folder…` +
+          (archived > 0
+            ? ` ${archived} archived object${archived === 1 ? '' : 's'} included; if one fails, restore it from Details first.`
+            : ''),
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db, profileId, bucket, endpoint, region, pathStyle, profileRevision],
+  );
+
   /** Saves dropped remote objects into the mounted local folder. */
   const handleDownloadToLocal = useCallback(
     async (items: RemoteDropItem[], handle: FileSystemDirectoryHandle | null) => {
@@ -795,28 +836,17 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
           names.add(file.name);
           if (await localFileExists(handle, file.name)) collisions.add(file.name);
         }
-        if (collisions.size && !window.confirm(`Replace ${collisions.size} existing file(s) in this download folder?`)) return;
-        for (const file of files) {
-          await transferManager.enqueueDownload(
-            profile,
-            file.key,
-            file.size,
-            { kind: 'directory', handle, filename: file.name, replace: collisions.has(file.name) },
-            file.name,
-          );
+        if (collisions.size) {
+          setReplacePrompt({ files, handle, collisions, archived });
+          return;
         }
-        setNotice(
-          `Saving ${files.length} file${files.length === 1 ? '' : 's'} into the local folder…` +
-            (archived > 0
-              ? ` ${archived} archived object${archived === 1 ? '' : 's'} included; if one fails, restore it from Details first.`
-              : ''),
-        );
+        await enqueueLocalDownloads(files, handle, collisions, archived);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db, profileId, bucket, endpoint, region, pathStyle, profileRevision],
+    [db, profileId, bucket, endpoint, region, pathStyle, profileRevision, enqueueLocalDownloads],
   );
 
 
@@ -1574,6 +1604,26 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
         plan={planSelectedDeletion}
         onConfirm={handleDelete}
         onClose={() => setDeleteSelection(null)}
+      />
+    )}
+
+    {replacePrompt && (
+      <ConfirmDialog
+        title="Replace existing files?"
+        message={`Replace ${replacePrompt.collisions.size} existing file(s) in this download folder? The local copies will be overwritten.`}
+        confirmLabel="Replace"
+        tone="danger"
+        onCancel={() => setReplacePrompt(null)}
+        onConfirm={() => {
+          const pending = replacePrompt;
+          setReplacePrompt(null);
+          void enqueueLocalDownloads(
+            pending.files,
+            pending.handle,
+            pending.collisions,
+            pending.archived,
+          ).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+        }}
       />
     )}
 

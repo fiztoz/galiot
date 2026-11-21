@@ -17,6 +17,7 @@ import { assertConnectionEndpoint } from '../s3/endpoint';
 import { getProxyToken } from '../server/session';
 import type { ConnectionShare } from '../vault/share';
 import { useFocusTrap } from '../lib/useFocusTrap';
+import { Checkbox } from './Checkbox';
 
 interface ConnectionDialogProps {
   db: AppDB;
@@ -586,21 +587,16 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
                   spellCheck={false}
                 />
               </div>
-              <label htmlFor="conn-path-style" className="flex items-start gap-2.5 text-sm text-zinc-600 dark:text-zinc-300 cursor-pointer">
-                <input
-                  id="conn-path-style"
-                  type="checkbox"
-                  checked={form.pathStyle}
-                  onChange={(e) => setField('pathStyle', e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-zinc-300 dark:border-zinc-600 accent-teal-600 text-teal-600 focus:ring-teal-500"
-                />
-                <span>
-                  Path-style addressing
-                  <span className="block text-zinc-500 dark:text-zinc-400">
-                    Required for most MinIO and on-premises endpoints.
-                  </span>
+              <Checkbox
+                id="conn-path-style"
+                checked={form.pathStyle}
+                onChange={(checked) => setField('pathStyle', checked)}
+              >
+                Path-style addressing
+                <span className="block text-zinc-500 dark:text-zinc-400">
+                  Required for most MinIO and on-premises endpoints.
                 </span>
-              </label>
+              </Checkbox>
               <CustomHeadersField
                 rows={form.headers}
                 onChange={(headers) => setField('headers', headers)}

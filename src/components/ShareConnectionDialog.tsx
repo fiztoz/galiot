@@ -4,6 +4,7 @@ import type { ConnectionRow } from '../db/client';
 import { connectionShareText } from '../vault/share';
 import { parseStoredHeaders } from '../s3/customHeaders';
 import { useFocusTrap } from '../lib/useFocusTrap';
+import { Checkbox } from './Checkbox';
 
 interface ShareConnectionDialogProps {
   profile: ConnectionRow;
@@ -90,10 +91,9 @@ export function ShareConnectionDialog({ profile, onClose }: ShareConnectionDialo
             Share the endpoint and bucket settings. The recipient supplies their own S3 credentials.
           </p>
           {hasHeaders && !error && (
-            <label className="flex gap-2 text-sm">
-              <input type="checkbox" checked={includeHeaders} onChange={e => setIncludeHeaders(e.target.checked)} />
+            <Checkbox checked={includeHeaders} onChange={setIncludeHeaders}>
               Include custom header values in the shared JSON
-            </label>
+            </Checkbox>
           )}
           {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           <textarea

@@ -7,6 +7,7 @@ import { profileConfig, listingCredentials } from '../db/objects';
 import { vaultService } from '../vault/vaultService';
 import { formatBytes, formatDate } from '../lib/format';
 import { useFocusTrap } from '../lib/useFocusTrap';
+import { Select } from './Select';
 
 interface ObjectDetailsDialogProps {
   db: AppDB;
@@ -200,17 +201,18 @@ export function ObjectDetailsDialog({ db, profile, file, onClose }: ObjectDetail
                   : 'Archived objects cannot be downloaded until a restore completes.'}
               </p>
               <div className="mt-2 flex items-center gap-2">
-                <select
-                  value={restoreDays}
-                  onChange={(event) => setRestoreDays(Number(event.target.value))}
+                <Select
+                  value={String(restoreDays)}
+                  onChange={(next) => setRestoreDays(Number(next))}
                   disabled={restoreBusy}
-                  className="px-2 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg text-zinc-700 dark:text-zinc-200"
-                  aria-label="Restore days"
-                >
-                  <option value={1}>1 day</option>
-                  <option value={7}>7 days</option>
-                  <option value={30}>30 days</option>
-                </select>
+                  className="w-24"
+                  ariaLabel="Restore days"
+                  options={[
+                    { value: '1', label: '1 day' },
+                    { value: '7', label: '7 days' },
+                    { value: '30', label: '30 days' },
+                  ]}
+                />
                 <button
                   type="button"
                   onClick={() => void requestRestore()}

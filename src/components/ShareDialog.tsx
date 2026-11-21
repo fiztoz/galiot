@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { AppDB, ObjectRow } from '../db/client';
 import { useFocusTrap } from '../lib/useFocusTrap';
+import { Select } from './Select';
 import {
   EXPIRY_PRESETS,
   createLink,
@@ -171,18 +172,15 @@ export function ShareDialog({ db, target, currentIdentity, file, onClose }: Shar
               >
                 Expires in
               </label>
-              <select
+              <Select
                 id="link-expiry"
-                value={expirySeconds}
-                onChange={(e) => setExpirySeconds(Number(e.target.value))}
-                className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 dark:text-zinc-100"
-              >
-                {EXPIRY_PRESETS.map((preset) => (
-                  <option key={preset.seconds} value={preset.seconds}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
+                value={String(expirySeconds)}
+                onChange={(next) => setExpirySeconds(Number(next))}
+                options={EXPIRY_PRESETS.map((preset) => ({
+                  value: String(preset.seconds),
+                  label: preset.label,
+                }))}
+              />
             </div>
           </div>
 
@@ -232,16 +230,16 @@ export function ShareDialog({ db, target, currentIdentity, file, onClose }: Shar
               <label htmlFor="share-upload-cap" className="block text-[11px] font-medium text-zinc-500 dark:text-zinc-400 mb-1">
                 Upload cap
               </label>
-              <select
+              <Select
                 id="share-upload-cap"
-                value={maxBytes}
-                onChange={(event) => setMaxBytes(Number(event.target.value))}
-                className="w-full px-2.5 py-1.5 text-xs bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-700 rounded-lg text-zinc-700 dark:text-zinc-200"
-              >
-                <option value={10 * 1024 * 1024}>10 MiB</option>
-                <option value={100 * 1024 * 1024}>100 MiB</option>
-                <option value={1024 * 1024 * 1024}>1 GiB</option>
-              </select>
+                value={String(maxBytes)}
+                onChange={(next) => setMaxBytes(Number(next))}
+                options={[
+                  { value: String(10 * 1024 * 1024), label: '10 MiB' },
+                  { value: String(100 * 1024 * 1024), label: '100 MiB' },
+                  { value: String(1024 * 1024 * 1024), label: '1 GiB' },
+                ]}
+              />
               <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
                 The recipient uploads with a single PUT, e.g.{' '}
                 <code className="break-all">curl -X PUT --data-binary @file URL</code>. Larger bodies

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Filter, X, SlidersHorizontal } from 'lucide-react';
+import { Select } from './Select';
 
 export interface FilterPanelState {
   /** Minimum object size in megabytes. */
@@ -59,7 +60,7 @@ export function ExplorerFilterBar({ value, onChange }: ExplorerFilterBarProps) {
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape' && !event.defaultPrevented) setOpen(false);
     };
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -171,19 +172,15 @@ export function ExplorerFilterBar({ value, onChange }: ExplorerFilterBarProps) {
             <label htmlFor="filter-storage-class" className={LABEL_CLASS}>
               Storage class
             </label>
-            <select
+            <Select
               id="filter-storage-class"
-              className={INPUT_CLASS}
               value={value.storageClass ?? ''}
-              onChange={(e) => set('storageClass', e.target.value || null)}
-            >
-              <option value="">Any</option>
-              {STORAGE_CLASSES.map((sc) => (
-                <option key={sc} value={sc}>
-                  {sc}
-                </option>
-              ))}
-            </select>
+              onChange={(next) => set('storageClass', next || null)}
+              options={[
+                { value: '', label: 'Any' },
+                ...STORAGE_CLASSES.map((sc) => ({ value: sc, label: sc })),
+              ]}
+            />
           </div>
 
           <p className="text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400">
