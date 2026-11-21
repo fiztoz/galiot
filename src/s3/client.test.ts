@@ -185,6 +185,22 @@ describe('ListObjects v1 fallback for older gateways', () => {
     expect(calls).toBe(1);
   });
 
+  test('a v1 page that ends in folders resumes after the last prefix', async () => {
+    const client = new S3Client({
+      endpoint: 'https://s3.example.com', bucket: 'archive', region: 'us-east-1', pathStyle: true,
+      accessKeyId: 'AKIA', secretAccessKey: 'secret',
+      dispatch: async () => new Response(
+        '<ListBucketResult><IsTruncated>true</IsTruncated>' +
+          '<Contents><Key>a.txt</Key><Size>1</Size></Contents>' +
+          '<CommonPrefixes><Prefix>b/</Prefix></CommonPrefixes><CommonPrefixes><Prefix>c/</Prefix></CommonPrefixes>' +
+          '</ListBucketResult>',
+        { status: 200 },
+      ),
+    });
+    const page = await client.listObjects('', { delimiter: '/', continuationToken: 'v1:0' });
+    expect(page.nextContinuationToken).toBe('v1:c/');
+  });
+
   test('a genuine refusal is not retried as v1', async () => {
     let calls = 0;
     const client = new S3Client({

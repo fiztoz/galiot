@@ -454,7 +454,7 @@ export class S3Client {
       return query;
     };
     let v1 = this.listV1 || v1Marker !== undefined;
-    if (token && !v1Marker && v1) throw new Error('This listing token belongs to ListObjects v2.');
+    if (token && v1Marker === undefined && v1) throw new Error('This listing token belongs to ListObjects v2.');
     const url = this.buildUrl(undefined, v1 ? v1Query() : listObjectsQuery(prefix, options));
 
     let res = await this.request(url);
@@ -493,7 +493,11 @@ export class S3Client {
     // any leading/trailing spaces S3 allows.
     const isTruncated = (xmlFirst(text, 'IsTruncated') ?? '').trim() === 'true';
     // v1 pages with NextMarker (or the last key when the provider omits it).
-    const v1Next = xmlFirst(text, 'NextMarker') ?? (isTruncated ? objects[objects.length - 1]?.key : undefined);
+    // Without NextMarker, v1 resumes after the greatest key or prefix returned:
+    // a delimited page can end in CommonPrefixes, which the last object misses.
+    const lastReturned = [objects[objects.length - 1]?.key, prefixes[prefixes.length - 1]]
+      .filter((key): key is string => Boolean(key)).sort().pop();
+    const v1Next = xmlFirst(text, 'NextMarker') ?? (isTruncated ? lastReturned : undefined);
     const nextContinuationToken = v1
       ? v1Next === undefined ? undefined : V1_MARKER_PREFIX + v1Next
       : xmlFirst(text, 'NextContinuationToken');
