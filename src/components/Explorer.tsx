@@ -58,10 +58,43 @@ import { isTextualFilename, mediaKind } from '../editor/filetypes';
 import { ShareDialog } from './ShareDialog';
 import { SHARE_TARGET_QUERY, shareTargetParams, type ShareTarget } from '../s3/links';
 
+/**
+ * Shown when the editor chunk cannot load. After a redeploy an open tab still
+ * names the previous build's hashed chunk, which the server no longer has.
+ */
+function EditorLoadFailed({ onClose }: { onClose: () => void }) {
+  return (
+    <div role="alertdialog" aria-modal="true" aria-label="Editor unavailable"
+      className="fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center p-6">
+      <div className="max-w-sm text-center space-y-3">
+        <p className="text-sm text-zinc-700 dark:text-zinc-300">
+          The editor could not load. The server was probably updated since this tab opened.
+        </p>
+        <div className="flex justify-center gap-2">
+          <button type="button" onClick={onClose}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+            Close
+          </button>
+          <button type="button" autoFocus onClick={() => window.location.reload()}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-600 hover:bg-teal-700 text-white">
+            Reload
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // CodeMirror and the language packages are heavy; keep them out of the
 // first-load bundle and fetch them when a file is actually opened.
 const EditorPanel = lazy(() =>
-  import('../editor/EditorPanel').then((m) => ({ default: m.EditorPanel })),
+  import('../editor/EditorPanel').then(
+    (m) => ({ default: m.EditorPanel }),
+    (error: unknown) => {
+      console.error('Editor chunk failed to load:', error);
+      return { default: EditorLoadFailed as typeof import('../editor/EditorPanel').EditorPanel };
+    },
+  ),
 );
 
 interface ExplorerProps {
