@@ -789,3 +789,21 @@ describe('share link failures', () => {
     }
   });
 });
+
+describe('upload integrity', () => {
+  test('a valid Content-MD5 reaches S3 with the part; a malformed one is dropped', async () => {
+    const { calls, forward } = scripted([{ headers: { etag: '"p1"' } }, { headers: { etag: '"p2"' } }]);
+    const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward };
+    const { result: { sessionId } } = await (await open(options)).json() as { result: { sessionId: string } };
+    const put = (md5: string) => handleAppRequest(new Request(
+      `http://127.0.0.1/api/s3/sessions/${sessionId}/part?key=big.bin&uploadId=u1&partNumber=1`, {
+        method: 'PUT',
+        headers: { 'x-galiot-access-token': GATE, 'content-length': '5', 'content-md5': md5 },
+        body: 'hello',
+      }), options);
+    expect((await put('XUFAKrxLKna5cZ2REBfFkg==')).status).toBe(200);
+    expect((await put('not base64 md5')).status).toBe(200);
+    expect(calls[0]?.headers['content-md5']).toBe('XUFAKrxLKna5cZ2REBfFkg==');
+    expect(calls[1]?.headers['content-md5']).toBeUndefined();
+  });
+});

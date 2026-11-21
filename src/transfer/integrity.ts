@@ -23,8 +23,18 @@ function toHex(bytes: Uint8Array): string {
 }
 
 function rotl(x: number, c: number): number {
-  return ((x << c) | (x >>> (32 - c))) >>> 0;
+  return (x << c) | (x >>> (32 - c));
 }
+
+// Computed once: rebuilding them for every 64-byte block made hashing a part
+// several times slower than the upload it protects.
+const SHIFTS = Uint8Array.from([
+  7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+  5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+  4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+  6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+]);
+const CONSTANTS = Int32Array.from({ length: 64 }, (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) | 0);
 
 /** Incremental MD5, so large payloads never need to be buffered whole. */
 export class Md5 {
@@ -88,55 +98,41 @@ export class Md5 {
     return toHex(this.digestBytes());
   }
 
+  private readonly words = new Int32Array(16);
+
   private processBlock(block: Uint8Array, offset: number): void {
-    const m = new Int32Array(16);
+    const m = this.words;
     for (let i = 0; i < 16; i += 1) {
-      m[i] =
-        (block[offset + i * 4] ?? 0) |
-        ((block[offset + i * 4 + 1] ?? 0) << 8) |
-        ((block[offset + i * 4 + 2] ?? 0) << 16) |
-        ((block[offset + i * 4 + 3] ?? 0) << 24);
+      const at = offset + i * 4;
+      m[i] = block[at]! | (block[at + 1]! << 8) | (block[at + 2]! << 16) | (block[at + 3]! << 24);
     }
 
     let a: number = this.state[0]!;
     let b: number = this.state[1]!;
     let c: number = this.state[2]!;
     let d: number = this.state[3]!;
-    const shifts = [
-      7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-      5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
-      4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-      6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
-    ];
-    const constants = new Int32Array(64);
-    for (let i = 0; i < 64; i += 1) {
-      constants[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) | 0;
+
+    // One loop per round: no per-step branch or modulo.
+    let i = 0;
+    for (; i < 16; i += 1) {
+      const sum = (a + ((b & c) | (~b & d)) + CONSTANTS[i]! + m[i]!) | 0;
+      a = d; d = c; c = b;
+      b = (b + rotl(sum, SHIFTS[i]!)) | 0;
     }
-
-    for (let i = 0; i < 64; i += 1) {
-      let f: number;
-      let g: number;
-
-      if (i < 16) {
-        f = (b & c) | (~b & d);
-        g = i;
-      } else if (i < 32) {
-        f = (d & b) | (~d & c);
-        g = (5 * i + 1) % 16;
-      } else if (i < 48) {
-        f = b ^ c ^ d;
-        g = (3 * i + 5) % 16;
-      } else {
-        f = c ^ (b | ~d);
-        g = (7 * i) % 16;
-      }
-
-      const temp = d;
-      d = c;
-      c = b;
-      const sum = (a + f + constants[i]! + m[g]!) >>> 0;
-      b = (b + rotl(sum, shifts[i]!)) >>> 0;
-      a = temp;
+    for (; i < 32; i += 1) {
+      const sum = (a + ((d & b) | (~d & c)) + CONSTANTS[i]! + m[(5 * i + 1) & 15]!) | 0;
+      a = d; d = c; c = b;
+      b = (b + rotl(sum, SHIFTS[i]!)) | 0;
+    }
+    for (; i < 48; i += 1) {
+      const sum = (a + (b ^ c ^ d) + CONSTANTS[i]! + m[(3 * i + 5) & 15]!) | 0;
+      a = d; d = c; c = b;
+      b = (b + rotl(sum, SHIFTS[i]!)) | 0;
+    }
+    for (; i < 64; i += 1) {
+      const sum = (a + (c ^ (b | ~d)) + CONSTANTS[i]! + m[(7 * i) & 15]!) | 0;
+      a = d; d = c; c = b;
+      b = (b + rotl(sum, SHIFTS[i]!)) | 0;
     }
 
     this.state[0] = (this.state[0]! + a) >>> 0;

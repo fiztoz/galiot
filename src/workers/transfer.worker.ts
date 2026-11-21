@@ -22,6 +22,19 @@ import { removeStaging, TRANSFER_LOCK, uploadFingerprint } from '../transfer/che
 import { closeServerSession } from '../s3/remote';
 import { downloadFile, publishLocal } from '../transfer/download';
 import { isSessionExpired, sessionCacheKey } from '../transfer/session';
+import { md5Base64 } from '../transfer/integrity';
+
+/**
+ * Bodies up to this size carry a Content-MD5, so S3 rejects bytes damaged on
+ * the way (BadDigest) instead of storing them. The digest needs the bytes in
+ * memory, so very large parts skip it rather than buffer hundreds of MiB.
+ */
+const CONTENT_MD5_MAX_BYTES = 32 * 1024 * 1024;
+
+async function contentMd5(body: Blob): Promise<Record<string, string>> {
+  if (body.size > CONTENT_MD5_MAX_BYTES) return {};
+  return { 'content-md5': md5Base64(new Uint8Array(await body.arrayBuffer())) };
+}
 
 /** Per-part retry policy for transient network failures. */
 const MAX_ATTEMPTS = 3;
@@ -456,7 +469,7 @@ export class TransferEngine {
     try {
       const res = await this.serverFetch(job, `/object?key=${encodeURIComponent(job.key)}`, {
         method: 'PUT',
-        headers: { 'content-type': contentType },
+        headers: { 'content-type': contentType, ...await contentMd5(body) },
         body,
         signal: controller.signal,
       });
@@ -478,6 +491,7 @@ export class TransferEngine {
     done: Map<number, CompletedPart>,
   ): Promise<void> {
     const blob = job.file.slice(part.startByte, part.endByte + 1);
+    const digest = await contentMd5(blob);
     let lastError: unknown = null;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -493,6 +507,7 @@ export class TransferEngine {
         });
         const res = await this.serverFetch(job, `/part?${query}`, {
           method: 'PUT',
+          headers: digest,
           body: blob,
           signal: controller.signal,
         });

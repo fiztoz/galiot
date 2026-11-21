@@ -182,6 +182,12 @@ function countedBody(
   return { body: stream, exceeded: () => over };
 }
 
+/** A client-supplied Content-MD5 is forwarded so S3 checks the bytes it receives. */
+function contentMd5Header(request: Request): Record<string, string> {
+  const digest = request.headers.get('content-md5');
+  return digest && /^[A-Za-z0-9+/]{22}==$/.test(digest) ? { 'content-md5': digest } : {};
+}
+
 function uploadLength(request: Request): { ok: true; length: string } | { ok: false; status: 411 | 400 } {
   const length = request.headers.get('content-length');
   if (length === null) return { ok: false, status: 411 };
@@ -843,6 +849,7 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
         const headers: Record<string, string> = {
           'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
           'content-length': length.length,
+          ...contentMd5Header(request),
         };
         const type = request.headers.get('content-type');
         if (type) headers['content-type'] = type;
@@ -880,7 +887,7 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
       const s3 = client(session, options);
       const upstream = await s3.send(s3.objectUrl(key, { uploadId, partNumber }), {
         method: 'PUT',
-        headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD', 'content-length': length.length },
+        headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD', 'content-length': length.length, ...contentMd5Header(request) },
         body: request.body,
         signal: request.signal,
         duplex: 'half',
