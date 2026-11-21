@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { TransferEngine } from '../workers/transfer.worker';
+import { MAX_ACTIVE_TASKS, TransferEngine } from '../workers/transfer.worker';
 import { removeStaging, uploadFingerprint } from './checkpoint';
 import { scheduleListingRefresh } from './listingRefresh';
 import type { TransferEvent, UploadJob } from './protocol';
@@ -209,4 +209,47 @@ test('a batch completion coalesces only uploads affecting the viewed prefix', as
   stop();
   await Bun.sleep(12);
   expect(reloads).toBe(1);
+});
+
+test('only MAX_ACTIVE_TASKS transfers run at once, and a queued one can be canceled', async () => {
+  const events: TransferEvent[] = [];
+  let running = 0;
+  let peak = 0;
+  const gates: (() => void)[] = [];
+  const engine = new TransferEngine(e => events.push(e), async () => {
+    running += 1;
+    peak = Math.max(peak, running);
+    await new Promise<void>(resolve => gates.push(resolve));
+    running -= 1;
+    return new Response(null, { status: 500 });
+  });
+  const port = new MessageChannel();
+  port.port2.onmessage = ({ data }) => port.port2.postMessage({ type: 'session', id: data.id, sessionId: 's' });
+  engine.attachPort(port.port1);
+  const job = (taskId: string) => ({ taskId, profileId: 'p', key: taskId,
+    credentials: { iv: '', ciphertext: '' }, target: { bucket: 'b', endpoint: 'https://s3.example.com', region: 'r', pathStyle: true },
+    expectedSize: 1, destination: { kind: 'staged' } as const });
+  try {
+    const total = MAX_ACTIVE_TASKS + 3;
+    const runs = Array.from({ length: total }, (_, i) => engine.run(job(`t${i}`)));
+    const settle = () => new Promise(resolve => setTimeout(resolve, 10));
+    await settle();
+    expect(running).toBe(MAX_ACTIVE_TASKS);
+
+    // A waiting task leaves the queue at once, without a request.
+    engine.cancel(`t${total - 1}`);
+    await settle();
+    expect(events).toContainEqual({ type: 'canceled', taskId: `t${total - 1}` });
+
+    while (gates.length || running) {
+      gates.splice(0).forEach(open => open());
+      await settle();
+    }
+    await Promise.all(runs);
+    expect(peak).toBe(MAX_ACTIVE_TASKS);
+    expect(events.filter(e => e.type === 'error')).toHaveLength(total - 1);
+  } finally {
+    port.port1.close();
+    port.port2.close();
+  }
 });

@@ -27,6 +27,12 @@ import { isSessionExpired, sessionCacheKey } from '../transfer/session';
 const MAX_ATTEMPTS = 3;
 const RETRY_BASE_MS = 400;
 const PROGRESS_INTERVAL_MS = 300;
+/**
+ * Tasks moving bytes at once. Each multipart task runs its own part pool, so
+ * this bounds connections, OPFS handles and server streams for a folder of
+ * thousands of objects. The rest wait as `queued`.
+ */
+export const MAX_ACTIVE_TASKS = 4;
 
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -91,6 +97,8 @@ export class TransferEngine {
   ) {}
 
   private readonly tasks = new Map<string, TaskRuntime>();
+  private activeTasks = 0;
+  private readonly waiting: { rt: TaskRuntime; start: (held: boolean) => void }[] = [];
   private sessions: PortSession | null = null;
   private fingerprintQueue: Promise<void> = Promise.resolve();
   private signingKeys = new Map<string, string>();
@@ -128,6 +136,7 @@ export class TransferEngine {
     };
     this.tasks.set(job.taskId, rt);
     const execute = async () => {
+      const held = await this.acquireSlot(rt);
       try {
         if (rt.pauseRequested) throw new Error('Transfer interrupted');
         if ('file' in job) await this.upload(rt, job);
@@ -142,6 +151,8 @@ export class TransferEngine {
           return;
         }
         this.emit({ type: 'canceled', taskId: job.taskId });
+      } finally {
+        if (held) this.releaseSlot();
       }
     };
     try {
@@ -280,6 +291,7 @@ export class TransferEngine {
     if (!rt) return;
     rt.pauseRequested = true;
     for (const controller of rt.controllers) controller.abort();
+    this.wakeWaiting(rt);
   }
 
   cancel(taskId: string): void {
@@ -288,6 +300,33 @@ export class TransferEngine {
     rt.cancelRequested = true;
     rt.pauseRequested = true;
     for (const controller of rt.controllers) controller.abort();
+    this.wakeWaiting(rt);
+  }
+
+  /**
+   * Waits for one of MAX_ACTIVE_TASKS slots. Resolves false for a waiter that
+   * was paused or canceled in the queue: it stops without holding a slot.
+   */
+  private acquireSlot(rt: TaskRuntime): Promise<boolean> {
+    if (this.activeTasks < MAX_ACTIVE_TASKS) {
+      this.activeTasks += 1;
+      return Promise.resolve(true);
+    }
+    return new Promise(resolve => this.waiting.push({ rt, start: resolve }));
+  }
+
+  /** Hands the slot straight to the next waiter, or frees it. */
+  private releaseSlot(): void {
+    const next = this.waiting.shift();
+    if (next) next.start(true);
+    else this.activeTasks -= 1;
+  }
+
+  private wakeWaiting(rt: TaskRuntime): void {
+    const index = this.waiting.findIndex(waiter => waiter.rt === rt);
+    if (index === -1) return;
+    const [waiter] = this.waiting.splice(index, 1);
+    waiter!.start(false);
   }
 
   /* ----------------------------- uploads ----------------------------- */
