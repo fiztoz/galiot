@@ -1333,5 +1333,36 @@ path.
 
 ---
 
+## 35. Removal of browser-route code (2026-11-21)
+
+Every S3 request has been signed and sent by the server since §22, so the code
+written for the client-only design (README §2's original model, ARCHITECTURE
+§2) had no remaining caller. Removed:
+
+- **Bucket CORS management**: `src/s3/corsPolicy.ts`, `src/s3/corsRemediation.ts`,
+  the `s3.cors.*` vault methods, the `corsGet/corsPut/corsDelete/corsPresign`
+  server operations, `presignPutBucketCors`, and `S3Client` get/put/delete
+  bucket CORS. No screen used them. Removing the server operations also takes
+  away the ability of anyone holding the access gate to rewrite a bucket's
+  CORS policy. §15 and §16's CORS findings describe the removed helper.
+- **Browser reachability probes**: `S3Client.probeReachable` and
+  `probeAddressing` (`mode: 'no-cors'`). The server probe in `api.ts` replaces
+  them; the MinIO suite checks reachability with a real listing.
+- **Browser-route diagnosis**: `src/s3/diagnostics.ts` became
+  `src/s3/connectionDiagnosis.ts` with only the verdicts the server route can
+  produce (no `cors-blocked`, no missing-scheme probe).
+- **Retired forwarder**: `handleS3Proxy`, `/api/s3-proxy` and the
+  `x-galiot-s3-target` header. Its integration tests now drive `forwardRequest`,
+  the transport the server uses, directly.
+- **Signing leftovers**: `src/workers/s3-signer.worker.ts`,
+  `src/server/transport.ts`, `src/transfer/signing.ts`.
+
+Kept on purpose: `parseNetwork` and the `profiles.network` column (old vaults
+still carry it), the `x-galiot-proxy-token` alias and `GALIOT_PROXY_TOKEN` /
+`GALIOT_PROXY_OPEN` names (existing deployments set them), and the
+`x-galiot-bridge-target` refusal in custom headers (old rows may hold it).
+
+---
+
 *End of stack decision. Update this file when spikes close; do not edit the
 original spec docs retroactively - link corrections from here instead.*

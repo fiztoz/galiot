@@ -36,9 +36,8 @@ jobs:
       - name: Build
         run: bun run build
 
-      # Source maps are opt-in (GALIOT_SOURCEMAPS=1) because Cloudflare Workers
-      # Assets serves everything in dist/ publicly, with no Vercel-style .map
-      # protection. Fail loudly rather than publish ~5 MB of readable source.
+      # Source maps are opt-in (GALIOT_SOURCEMAPS=1): the server serves
+      # everything in dist/, so a map would publish ~5 MB of readable source.
       - name: Assert no source maps in dist
         run: |
           if find dist -name '*.map' -print -quit | grep -q .; then

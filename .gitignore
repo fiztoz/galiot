@@ -10,5 +10,4 @@ public/.downloads-build-*/
 *.log
 .DS_Store
 .vite/
-.wrangler/
 *.tsbuildinfo

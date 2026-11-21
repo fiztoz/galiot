@@ -175,7 +175,7 @@ thread. Galeon remains the tool for those connections.
 
 Every connection is editable — hover a card for the pencil icon. Name, endpoint,
 region, bucket, addressing and credentials can all change, and the same
-diagnostics, CORS helper and connection test run inside the editor.
+diagnostics and connection test run inside the editor.
 
 **The stored keys are kept unless you replace them.** The editor shows the key
 fields blank with an "unchanged — type to replace" placeholder, because the
@@ -193,67 +193,14 @@ Two consequences of editing, by design:
   keeps the cache. Transfer history and presigned links are kept: a transfer
   carries its own target snapshot, and a presigned URL stays valid until it
   expires and cannot be revoked anyway.
-- **A refused request is no longer reported as CORS.** A `403` or `404` arrives
-  from the bucket with its CORS headers intact, so the browser did not block
-  anything; the diagnostics now say so, and point at the keys, the bucket name or
-  permissions instead of offering a CORS policy that cannot help.
+- **A refused request is reported as a refusal.** A `403` or `404` means the
+  endpoint answered, so the diagnostics point at the keys, the bucket name or
+  permissions. Only a request that never arrived is reported as a network problem
+  on the machine running Galiot.
 
 ---
 
-## 7. Fixing CORS from a terminal, with nothing pre-configured
-
-The app itself does not need bucket CORS. Listing, transfer, edit, and preview
-go through the Galiot server. This section is only for a share link or other
-direct browser load of the bucket.
-
-When a bucket has no CORS policy, the browser blocks the very request that would
-write one — so Galiot cannot fix it from the page. The CORS helper offers
-commands for that, and **none of them assume you have set anything up first**,
-which matters because you cannot configure `mc` or the AWS CLI until you have a
-profile, and you cannot get a profile until CORS is fixed.
-
-| Option | What you need |
-|---|---|
-| **curl** | Nothing. `curl` is already on your machine |
-| **MinIO client (`mc`)** | The `mc` binary only — the command creates and then removes its own alias |
-| **AWS CLI (`aws`)** | The `aws` binary only — the command sets its own environment |
-| **Provider dashboard** | Your provider's web console — paste the JSON |
-
-The curl path is the shortest: Galiot presigns the `PutBucketCors` request in the
-vault worker and prints a complete copy-paste block. The URL carries a signature
-scoped to that one request, valid for an hour — **the secret key is never in the
-command**, and the request is not from a browser, so CORS does not apply.
-
-The `mc` and `aws` commands prompt for the keys rather than embedding them, so
-they do not end up in your shell history. Tick *Fill in my keys* if you would
-rather paste once, and the helper will warn you that the command then contains
-the secret.
-
-The generated policy always uses your current origin, so a local build suggests
-`http://localhost:5173` and a deployed one suggests your real hostname.
-
-**MinIO is different, and Galiot tells you so.** MinIO has no per-bucket CORS
-API — `PutBucketCors` answers `501 NotImplemented`, and `mc cors set` fails the
-same way — because it configures CORS for the whole server and allows every
-origin by default. When Galiot sees that response it stops offering the commands
-that cannot work and points at the real setting instead:
-
-```bash
-# at server start
-MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:5173
-
-# or on a running server (needs admin credentials, then restarts it)
-mc admin config set <alias> api cors_allow_origin=http://localhost:5173
-mc admin service restart <alias>
-```
-
-Because MinIO is permissive by default, a "Failed to fetch" there is usually
-something else — the wrong port, an `http`/`https` mismatch, or credentials the
-bucket rejects — and the connection test says which.
-
----
-
-## 8. Verifying against a real server
+## 7. Verifying against a real server
 
 The primary live suite runs Zenko CloudServer in a container
 (`./scripts/live-s3-test.sh`; see [docs/OPERATIONS.md](docs/OPERATIONS.md) §7).
@@ -272,8 +219,9 @@ longer publicly pullable (upstream archived 2026-04-25).
   recomputed and compared with the bucket's own, interrupted uploads resume,
   range requests return exactly the requested slice, and the checker is proved
   non-vacuous by corrupting a byte.
-- `bun run test:minio` — CORS handling, presigned links, listing past the
-  1000-key page boundary, keys with spaces and non-ASCII text, and multi-delete.
+- `bun run test:minio` — presigned links, listing past the 1000-key page
+  boundary, keys with spaces and non-ASCII text, multi-delete, and connection
+  custom headers.
 
 Worth knowing why the second suite exists: the unit tests and every mock missed
 four real defects that a live server caught immediately — an empty
@@ -285,7 +233,7 @@ error-code loss that reported a `501` as a permissions problem. Details in
 
 ---
 
-## 9. Where S3 traffic goes
+## 8. Where S3 traffic goes
 
 Every S3 request is posted to `/api/s3` on the Galiot origin. The Bun server
 signs it and calls S3, so the bucket does not need a CORS policy for listing,
@@ -293,13 +241,15 @@ upload, download, edit, or preview. The machine running Galiot has to be able
 to reach the endpoint. A bucket that is only visible on a laptop VPN stays
 unreachable until that machine can see it too.
 
-Only "Direct S3" presigned share links open the object URL in a browser. Those
-loads use the viewer's network and can need a bucket CORS rule; in-app
-previews stream through this server over a same-origin media URL and do not.
+Only "Direct S3" presigned share links send the viewer straight to the bucket.
+Opening one is a page navigation on the viewer's network, which needs a route to
+the endpoint but no CORS rule. In-app previews stream through this server over a
+same-origin media URL. Galiot does not manage bucket CORS; a site that fetches
+objects from its own scripts configures that with the provider's tools.
 
 ---
 
-## 10. Known Limitations
+## 9. Known Limitations
 
 | Area | Limitation | Why |
 |---|---|---|
@@ -313,12 +263,12 @@ previews stream through this server over a same-origin media URL and do not.
 
 ---
 
-## 11. Security & contributing
+## 10. Security & contributing
 
 - Report vulnerabilities privately — see [SECURITY.md](SECURITY.md). The server
   holds session credentials in memory; the vault is zero-knowledge at rest.
 - Development setup, checks, and conventions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## 12. License
+## 11. License
 
 [MIT](LICENSE) © Galiot Contributors. Self-host it, fork it, ship it.

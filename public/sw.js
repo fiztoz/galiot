@@ -1,4 +1,4 @@
-/* Galiot service worker — static shell caching; S3 traffic is never cached. */
+/* Galiot service worker — static shell caching. S3 traffic goes through /api/ and is never cached. */
 /*
  * This file is plain JavaScript, served verbatim from public/. It is NOT
  * transpiled, so TypeScript syntax here is a runtime SyntaxError that kills
@@ -31,12 +31,6 @@ function pruneAssets() {
     )
   );
 }
-
-const CLOUD_URL_PATTERNS = [
-  /^https:\/\/[^/]+\.amazonaws\.com/,
-  /^https:\/\/[^/]+\.r2\.cloudflarestorage\.com/,
-  /^https:\/\/[^/]+\.digitaloceanspaces\.com/
-];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -71,13 +65,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 1. Cloud Storage Requests -> Network Only
-  if (CLOUD_URL_PATTERNS.some((pattern) => pattern.test(url.href))) {
-    event.respondWith(fetch(event.request));
-    return;
-  }
-
-  // 2. App Assets (/assets/*) -> Cache First, fallback to Network
+  // 1. App Assets (/assets/*) -> Cache First, fallback to Network
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
       caches.match(event.request).then((cachedResponse) => {
@@ -106,7 +94,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Navigation/App Shell -> Network First, fallback to Cache
+  // 2. Navigation/App Shell -> Network First, fallback to Cache
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request)

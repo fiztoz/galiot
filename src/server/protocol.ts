@@ -4,8 +4,6 @@ export const S3_API_PREFIX = '/api/s3';
 export const S3_ACCESS_TOKEN_HEADER = 'x-galiot-access-token';
 /** Accepted alias for servers and tabs that still send the previous name. */
 export const S3_PROXY_TOKEN_HEADER = 'x-galiot-proxy-token';
-export const S3_PROXY_PATH = '/api/s3-proxy';
-export const S3_PROXY_TARGET_HEADER = 'x-galiot-s3-target';
 export const S3_PROXY_DEFAULT_PORT = 8788;
 
 /** Deployment branding (white-label). The server injects these into the shell. */

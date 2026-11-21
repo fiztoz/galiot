@@ -4,15 +4,14 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import { createServer as createTcpServer } from 'node:net';
 import type { PreviewServer, ViteDevServer } from 'vite';
 import { AwsClient } from '../lib/aws4fetch';
-import { handleS3Proxy, S3_PROXY_PATH, S3_PROXY_TARGET_HEADER } from './proxy';
+import { BlockedProxyTargetError, resolveProxyAddresses, type ProxyLookup } from './target';
+import { forwardRequest } from './upstream';
 import { s3ProxyPlugin } from './vite';
 
 const payload = 'example payload '.repeat(8192);
 const compressed = gzipSync(payload);
 const calls: { url: string; host: string | null; length: string | null; encoding: string | null; body: string; authorization: string | null }[] = [];
 let upstream: ReturnType<typeof Bun.serve>;
-let proxy: ReturnType<typeof Bun.serve>;
-let lookups = 0;
 
 beforeAll(() => {
   upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
@@ -30,38 +29,33 @@ beforeAll(() => {
     if (request.method === 'PUT' && !request.headers.has('content-length')) return new Response('MissingContentLength', { status: 411 });
     return new Response(path, { headers: { etag: '"abc"', 'cache-control': 'public, max-age=3600' } });
   } });
-  proxy = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: (request) => handleS3Proxy(request, {
-    expectedToken: null,
-    lookup: async (hostname) => {
-      expect(hostname).toBe('s3.example.com');
-      lookups += 1;
-      return [{ address: '127.0.0.1', family: 4 }];
-    },
-  }) });
 });
 
 afterAll(async () => {
-  await proxy?.stop(true);
   await upstream?.stop(true);
 });
 
-async function signedHeaders(target: string, method = 'GET', body?: string): Promise<Headers> {
+const toLoopback: ProxyLookup = async () => [{ address: '127.0.0.1', family: 4 }];
+
+/** Signs like the server does, then connects through the live transport. */
+async function send(
+  target: string,
+  { method = 'GET', body, lookup = toLoopback }: { method?: string; body?: string; lookup?: ProxyLookup } = {},
+): Promise<Response> {
   const signer = new AwsClient({ accessKeyId: 'review-key', secretAccessKey: 'review-secret', service: 's3', region: 'us-east-1' });
   const signed = await signer.sign(target, { method, ...(body !== undefined ? { body } : {}), headers: { 'x-tenant-id': 'example' } });
   const headers = new Headers(signed.headers);
-  headers.delete('host');
-  headers.set(S3_PROXY_TARGET_HEADER, target);
-  return headers;
+  if (body !== undefined) headers.set('content-length', String(Buffer.byteLength(body)));
+  const url = new URL(target);
+  const addresses = await resolveProxyAddresses(url, lookup);
+  const request = new Request(target, { method, headers, ...(body !== undefined ? { body } : {}) });
+  return forwardRequest(url, addresses, request, headers);
 }
 
-describe('real proxy transport', () => {
+describe('upstream transport', () => {
   test('falls back within the validated DNS set when the first address refuses connections', async () => {
-    const target = `http://s3.example.com:${upstream.port}/example-bucket/fallback`;
     let resolutions = 0;
-    const response = await handleS3Proxy(new Request('http://localhost/api/s3-proxy', {
-      headers: await signedHeaders(target),
-    }), {
-      expectedToken: null,
+    const response = await send(`http://s3.example.com:${upstream.port}/example-bucket/fallback`, {
       lookup: async () => {
         resolutions += 1;
         return [{ address: '::1', family: 6 }, { address: '127.0.0.1', family: 4 }];
@@ -74,24 +68,31 @@ describe('real proxy transport', () => {
 
   test('pins DNS while retaining the signed Host, query, path, and authorization', async () => {
     const target = `http://s3.example.com:${upstream.port}/example-bucket/Q3%20report.txt?partNumber=1&uploadId=a%2Bb`;
-    const headers = await signedHeaders(target);
-    const before = lookups;
-    const response = await fetch(`http://127.0.0.1:${proxy.port}${S3_PROXY_PATH}`, { headers });
+    const response = await send(target, {
+      lookup: async (hostname) => {
+        expect(hostname).toBe('s3.example.com');
+        return [{ address: '127.0.0.1', family: 4 }];
+      },
+    });
     expect(response.status).toBe(200);
     await response.text();
     const call = calls.at(-1)!;
     expect(call.url).toBe(target);
     expect(call.host).toBe(`s3.example.com:${upstream.port}`);
-    expect(call.authorization).toBe(headers.get('authorization'));
-    expect(lookups - before).toBe(1);
+    expect(call.authorization).toContain('AWS4-HMAC-SHA256');
+  });
+
+  test('a DNS answer in a blocked range is refused before any connection', async () => {
+    const before = calls.length;
+    await expect(send(`http://s3.example.com:${upstream.port}/example-bucket/x`, {
+      lookup: async () => [{ address: '127.0.0.1', family: 4 }, { address: '169.254.169.254', family: 4 }],
+    })).rejects.toBeInstanceOf(BlockedProxyTargetError);
+    expect(calls.length).toBe(before);
   });
 
   test('single PUT and multipart-sized bodies keep their exact length and bytes', async () => {
     for (const body of ['', 'hello', payload]) {
-      const target = `http://127.0.0.1:${upstream.port}/example-bucket/key?uploadId=example&partNumber=1`;
-      const response = await fetch(`http://127.0.0.1:${proxy.port}${S3_PROXY_PATH}`, {
-        method: 'PUT', headers: await signedHeaders(target, 'PUT', body), body: new Blob([body]),
-      });
+      const response = await send(`http://127.0.0.1:${upstream.port}/example-bucket/key?uploadId=example&partNumber=1`, { method: 'PUT', body });
       expect(response.status).toBe(200);
       await response.text();
       const call = calls.at(-1)!;
@@ -101,31 +102,27 @@ describe('real proxy transport', () => {
     }
   });
 
-  test('compressed GET and HEAD preserve wire bytes, encoding, length, and no-store', async () => {
-    const headers = await signedHeaders(`http://127.0.0.1:${upstream.port}/example-bucket/compressed`);
-    const url = `http://127.0.0.1:${proxy.port}${S3_PROXY_PATH}`;
-    const response = await fetch(url, { headers, decompress: false });
+  test('compressed GET and HEAD keep the wire bytes, encoding and length', async () => {
+    const target = `http://127.0.0.1:${upstream.port}/example-bucket/compressed`;
+    const response = await send(target);
     expect(response.headers.get('content-encoding')).toBe('gzip');
     expect(response.headers.get('content-length')).toBe(String(compressed.length));
-    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(Buffer.from(await response.arrayBuffer())).toEqual(compressed);
-    expect(await (await fetch(url, { headers })).text()).toBe(payload);
-    const head = await fetch(url, { headers, method: 'HEAD' });
+    const head = await send(target, { method: 'HEAD' });
     expect(head.headers.get('content-length')).toBe(String(compressed.length));
     expect(await head.text()).toBe('');
   });
 
-  test('upstream redirects never make a second request', async () => {
-    const response = await fetch(`http://127.0.0.1:${proxy.port}${S3_PROXY_PATH}`, {
-      headers: await signedHeaders(`http://127.0.0.1:${upstream.port}/example-bucket/redirect`), redirect: 'manual',
-    });
+  test('an upstream redirect is returned, never followed', async () => {
+    const before = calls.length;
+    const response = await send(`http://127.0.0.1:${upstream.port}/example-bucket/redirect`);
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('http://169.254.169.254/latest');
+    expect(calls.length).toBe(before);
   });
 
-  test('handles empty 205 responses and returns 502 for invalid upstream statuses', async () => {
-    const url = `http://127.0.0.1:${proxy.port}${S3_PROXY_PATH}`;
-    const reset = await fetch(url, { headers: await signedHeaders(`http://127.0.0.1:${upstream.port}/reset`) });
+  test('an empty 205 has no body, and an invalid upstream status is an error', async () => {
+    const reset = await send(`http://127.0.0.1:${upstream.port}/reset`);
     expect(reset.status).toBe(205);
     expect(await reset.text()).toBe('');
 
@@ -136,9 +133,7 @@ describe('real proxy transport', () => {
     try {
       const address = invalid.address();
       if (!address || typeof address === 'string') throw new Error('No port');
-      const response = await fetch(url, { headers: await signedHeaders(`http://127.0.0.1:${address.port}/`) });
-      expect(response.status).toBe(502);
-      expect((await response.json() as { ok: boolean }).ok).toBe(false);
+      await expect(send(`http://127.0.0.1:${address.port}/`)).rejects.toThrow();
     } finally {
       await new Promise<void>((resolve) => invalid.close(() => resolve()));
     }
