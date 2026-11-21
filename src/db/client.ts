@@ -20,13 +20,39 @@ export function initDb(): Promise<AppDB> {
       type: 'module',
     });
 
-    const db = (await PGliteWorker.create(worker, {
-      extensions: { live },
-    })) as AppDB;
+    // A worker-side migration failure can leave `waitReady` pending forever,
+    // which hung the vault gate with no error. Race readiness against worker
+    // errors and a deadline so init rejects readably and stays retryable.
+    let fail: (err: Error) => void = () => {};
+    const failure = new Promise<never>((_, reject) => {
+      fail = reject;
+    });
+    const timer = setTimeout(
+      () => fail(new Error('The database worker did not become ready within 30 seconds.')),
+      30_000,
+    );
+    worker.addEventListener('error', (event) =>
+      fail(new Error(`The database worker failed to start: ${event.message}`)),
+    );
+    worker.addEventListener('messageerror', () =>
+      fail(new Error('The database worker sent an unreadable message.')),
+    );
 
-    // Block until the leader has finished migrations before first use.
-    await db.waitReady;
-    return db;
+    try {
+      const db = (await Promise.race([
+        PGliteWorker.create(worker, { extensions: { live } }),
+        failure,
+      ])) as AppDB;
+
+      // Block until the leader has finished migrations before first use.
+      await Promise.race([db.waitReady, failure]);
+      return db;
+    } catch (err) {
+      worker.terminate();
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   })();
 
   dbPromise.catch(() => {
