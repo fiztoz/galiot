@@ -5,6 +5,7 @@ import { Select } from './Select';
 import { Checkbox } from './Checkbox';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ExplorerFilterBar, EMPTY_FILTER_PANEL } from './ExplorerFilterBar';
+import { ShortcutsDialog } from './ShortcutsDialog';
 
 /** Mounts into a fresh happy-dom window, restoring globals afterwards. */
 async function withDom(run: (container: HTMLElement, window: Window) => Promise<void>) {
@@ -122,6 +123,40 @@ test('Escape dismisses an open Select without closing the host filter panel', as
     expect(container.querySelector('#filter-storage-class')).not.toBeNull();
     await escape();
     expect(container.querySelector('#filter-storage-class')).toBeNull();
+    await act(async () => root.unmount());
+  });
+});
+
+test('Checkbox exposes the indeterminate select-all state', async () => {
+  await withDom(async (container) => {
+    const { createRoot } = await import('react-dom/client');
+    const root = createRoot(container);
+    await act(async () => root.render(
+      <Checkbox checked={false} indeterminate onChange={() => {}} ariaLabel="Select all" />,
+    ));
+    const input = container.querySelector('input[type=checkbox]') as HTMLInputElement;
+    expect(input.indeterminate).toBe(true);
+    expect(input.getAttribute('aria-label')).toBe('Select all');
+    await act(async () => root.render(
+      <Checkbox checked indeterminate onChange={() => {}} ariaLabel="Select all" />,
+    ));
+    expect((container.querySelector('input[type=checkbox]') as HTMLInputElement).indeterminate).toBe(false);
+    await act(async () => root.unmount());
+  });
+});
+
+test('ShortcutsDialog lists real shortcuts and escapes', async () => {
+  await withDom(async (container, window) => {
+    const events: string[] = [];
+    const { createRoot } = await import('react-dom/client');
+    const root = createRoot(container);
+    await act(async () => root.render(<ShortcutsDialog onClose={() => events.push('close')} />));
+    expect(container.textContent).toContain('Command palette');
+    expect(container.textContent).toContain('Extend selection');
+    await act(async () => {
+      window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(events).toEqual(['close']);
     await act(async () => root.unmount());
   });
 });

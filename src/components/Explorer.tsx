@@ -25,6 +25,8 @@ import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
 import { loadListing, deleteKeys, forgetCachedFolder, harvestFolderStats, listingCredentials, planDeletion, profileConfig, type DeletionPlan } from '../db/objects';
 import { DeleteDialog } from './DeleteDialog';
 import { ConfirmDialog } from './ConfirmDialog';
+import { Checkbox } from './Checkbox';
+import { ShortcutsDialog } from './ShortcutsDialog';
 import { vaultService } from '../vault/vaultService';
 import { classifyConnectionFailure } from '../db/connectionDiagnostics';
 import {
@@ -46,7 +48,7 @@ import { scheduleListingRefresh } from '../transfer/listingRefresh';
 import { transferManager } from '../transfer/manager';
 import { LocalPane, REMOTE_OBJECT_MIME, type RemoteDropItem } from './LocalPane';
 import { hasWritePermission } from '../localfs/localDirectory';
-import { FolderOpen, PanelLeftClose, Pencil, Link2, FolderPlus, FolderUp, Files, Info, PencilLine, Snowflake } from 'lucide-react';
+import { FolderOpen, PanelLeftClose, Pencil, Link2, FolderPlus, FolderUp, Files, Info, PencilLine, Snowflake, Command, Keyboard } from 'lucide-react';
 import { collectDroppedFiles } from '../localfs/dropEntries';
 import { relativeNameOf, uploadKey } from '../transfer/paths';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
@@ -174,6 +176,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   const [action, setAction] = useState<{ kind: 'rename' | 'copy' | 'folder'; row: ObjectRow | null } | null>(null);
   const [bucketSearch, setBucketSearch] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const anchorKeyRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -450,7 +453,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
   }, [rows, selected]);
 
   const dialogOpen = paletteOpen || action !== null || details !== null || sharing !== null || bucketSearch !== null || editing !== null ||
-    deleteSelection !== null || replacePrompt !== null;
+    deleteSelection !== null || replacePrompt !== null || shortcutsOpen;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -467,6 +470,11 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
         target !== null &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
       if (typing || dialogOpen) return;
+      if (event.key === '?') {
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         moveSelection(event.key === 'ArrowDown' ? 1 : -1, event.shiftKey);
@@ -932,6 +940,25 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
           >
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           </button>
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            className="flex-none inline-flex items-center gap-1.5 p-2 rounded-lg text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            aria-label="Open command palette"
+            title="Command palette"
+          >
+            <Command size={15} />
+            <kbd className="hidden md:inline px-1 py-0.5 rounded border border-zinc-200 dark:border-zinc-700 font-mono text-[10px] text-zinc-500 dark:text-zinc-400">⌘K</kbd>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShortcutsOpen(true)}
+            className="flex-none p-2 rounded-lg text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+          >
+            <Keyboard size={15} />
+          </button>
         </div>
 
         <div className="px-3 py-2 flex flex-wrap items-center gap-2">
@@ -1103,7 +1130,15 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
       {/* Column header (list view only) */}
       {viewMode === 'list' && (
-        <div className="flex-none grid grid-cols-[1fr_110px_150px] gap-2 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 select-none">
+        <div className="flex-none grid grid-cols-[24px_1fr_110px_150px] gap-2 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 select-none">
+          <span className="flex items-center justify-center">
+            <Checkbox
+              checked={rows.length > 0 && selected.size >= rows.length}
+              indeterminate={selected.size > 0 && selected.size < rows.length}
+              ariaLabel="Select all objects in view"
+              onChange={(on) => setSelected(on ? new Set(rows.map((r) => r.key)) : new Set())}
+            />
+          </span>
           <span>{isSearching ? 'Path' : 'Name'}</span>
           <span className="text-right">Size</span>
           <span>Modified</span>
@@ -1246,13 +1281,27 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                     }}
                     onClick={(e) => handleRowClick(e, row, virtualRow.index)}
                     onDoubleClick={() => handleRowDoubleClick(row)}
-                    className={`absolute left-0 top-0 w-full grid grid-cols-[1fr_110px_150px] gap-2 items-center px-4 cursor-default select-none transition-colors ${
+                    className={`absolute left-0 top-0 w-full grid grid-cols-[24px_1fr_110px_150px] gap-2 items-center px-4 cursor-default select-none transition-colors ${
                       isSelected
                         ? 'bg-teal-50 dark:bg-teal-950/40'
                         : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
                     } ${isLast ? '' : 'border-b border-zinc-100 dark:border-zinc-800/60'}`}
                     style={{ height: ROW_HEIGHT, transform: `translateY(${virtualRow.start}px)` }}
                   >
+                    <span className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={isSelected}
+                        ariaLabel={`Select ${row.filename}`}
+                        onChange={(on) =>
+                          setSelected((prev) => {
+                            const next = new Set(prev);
+                            if (on) next.add(row.key);
+                            else next.delete(row.key);
+                            return next;
+                          })
+                        }
+                      />
+                    </span>
                     <span className="flex items-center gap-2 min-w-0">
                       {row.is_dir ? (
                         <Folder
@@ -1572,6 +1621,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
     {paletteOpen && (
       <CommandPalette commands={paletteCommands} onClose={() => setPaletteOpen(false)} />
     )}
+
+    {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
 
     {bucketSearch !== null && (
       <BucketSearchDialog
