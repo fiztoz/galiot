@@ -6,6 +6,12 @@
  * The heavy language wiring lives in `languages.ts`.
  */
 
+/** Media the preview pane can render natively (images, PDF, audio, video). */
+export type MediaKind = 'image' | 'pdf' | 'audio' | 'video';
+
+/** Everything the preview pane may be asked to show, including opaque binaries. */
+export type PreviewKind = MediaKind | 'binary';
+
 export type EditorLanguage =
   | 'javascript'
   | 'json'
@@ -53,7 +59,32 @@ const BY_FILENAME: Record<string, EditorLanguage> = {
   '.babelrc': 'json',
 };
 
-export function detectLanguage(filename: string): EditorLanguage {
+const TEXTUAL_EXTENSION = /\.(txt|log|csv)$/i;
+
+/**
+ * Grammar hints from the first bytes of a file, for objects whose name gives
+ * nothing away (no extension, or an unrecognised one). Only strong signals:
+ * a shebang, a diff header, JSON/HTML/XML/YAML opening markers.
+ */
+function languageFromContent(sample: string): EditorLanguage | null {
+  const head = sample.slice(0, 4096).replace(/^\uFEFF/, '').trimStart();
+  const firstLine = head.split('\n', 1)[0] ?? '';
+
+  if (firstLine.startsWith('#!')) {
+    if (/python/.test(firstLine)) return 'python';
+    if (/\b(node|deno|bun)\b/.test(firstLine)) return 'javascript';
+    if (/\bruby\b/.test(firstLine)) return 'ruby';
+    return 'shell';
+  }
+  if (/^diff --git /m.test(head) || /^--- .*\r?\n\+\+\+ /m.test(head)) return 'diff';
+  if (head.startsWith('{') || head.startsWith('[')) return 'json';
+  if (/^<!doctype html/i.test(head) || /^<html[\s>]/i.test(head)) return 'html';
+  if (head.startsWith('<?xml') || /^<svg[\s>]/i.test(head)) return 'html';
+  if (head.startsWith('---\n') || head.startsWith('---\r\n')) return 'yaml';
+  return null;
+}
+
+export function detectLanguage(filename: string, contentSample?: string): EditorLanguage {
   const lower = filename.toLowerCase();
   const base = lower.split('/').pop() ?? lower;
 
@@ -63,20 +94,38 @@ export function detectLanguage(filename: string): EditorLanguage {
   if (base.startsWith('dockerfile')) return 'dockerfile';
 
   const dot = base.lastIndexOf('.');
-  if (dot === -1) return 'text';
+  const byExtension = dot === -1 ? 'text' : (BY_EXTENSION[base.slice(dot + 1)] ?? 'text');
+  if (byExtension !== 'text') return byExtension;
 
-  return BY_EXTENSION[base.slice(dot + 1)] ?? 'text';
+  // An explicit .txt/.log/.csv stays plain text even if the content looks like
+  // code; only nameless files fall back to content hints.
+  if (TEXTUAL_EXTENSION.test(base)) return 'text';
+  if (contentSample !== undefined) return languageFromContent(contentSample) ?? 'text';
+  return 'text';
 }
 
 /** Files worth opening in the text editor rather than as an image/PDF/media file. */
 export function isTextualFilename(filename: string): boolean {
-  return detectLanguage(filename) !== 'text' || /\.(txt|log|csv)$/i.test(filename);
+  return detectLanguage(filename) !== 'text' || TEXTUAL_EXTENSION.test(filename);
+}
+
+/**
+ * Whether the name alone already tells us how to open the object. When false
+ * (no extension, or one nobody recognises) the editor sniffs the first bytes
+ * instead of guessing — or worse, dumping binary into the text editor.
+ */
+export function hasTypeClue(filename: string): boolean {
+  return (
+    detectLanguage(filename) !== 'text' ||
+    TEXTUAL_EXTENSION.test(filename.toLowerCase()) ||
+    mediaKind(filename, null) !== null
+  );
 }
 
 export function mediaKind(
   filename: string,
   contentType: string | null,
-): 'image' | 'pdf' | 'audio' | 'video' | null {
+): MediaKind | null {
   const type = (contentType ?? '').toLowerCase();
   const ext = filename.toLowerCase().split('.').pop() ?? '';
 

@@ -56,6 +56,57 @@
   outline-offset: 2px;
 }
 
+/* PDF.js DOM layers over the preview canvas (src/editor/PdfPreview.tsx).
+   The library positions runs and link boxes with inline styles; these rules
+   supply the layer geometry, transparent selectable text and link affordance.
+   Kept here because pdfjs-dist ships no stylesheet in its npm package. */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 1;
+}
+
+.textLayer span,
+.textLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.textLayer ::selection {
+  background: color-mix(in srgb, var(--color-teal-500) 35%, transparent);
+}
+
+.annotationLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.annotationLayer a,
+.annotationLayer button {
+  pointer-events: auto;
+  position: absolute;
+  display: block;
+  border-radius: 2px;
+}
+
+.annotationLayer a:hover,
+.annotationLayer button:hover {
+  outline: 2px solid var(--color-teal-500);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--color-teal-500) 12%, transparent);
+}
+
 /* Reduced motion: state is still conveyed by text and colour, not movement. */
 @media (prefers-reduced-motion: reduce) {
   *,

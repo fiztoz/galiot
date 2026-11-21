@@ -11,7 +11,7 @@ RUN bun install --frozen-lockfile
 COPY index.html vite.config.ts tsconfig.json ./
 COPY src/ ./src/
 COPY public/ ./public/
-COPY scripts/server.ts ./scripts/server.ts
+COPY scripts/server.ts scripts/copy-pdfjs-assets.ts ./scripts/
 RUN bun run build
 RUN bun build scripts/server.ts --target=bun --outfile=server.js
 

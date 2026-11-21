@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { detectLanguage, isTextualFilename, mediaKind } from './filetypes';
+import { detectLanguage, hasTypeClue, isTextualFilename, mediaKind } from './filetypes';
 
 describe('detectLanguage', () => {
   test('maps common extensions', () => {
@@ -33,6 +33,38 @@ describe('detectLanguage', () => {
     expect(detectLanguage('.env')).toBe('ini');
     expect(detectLanguage('.gitignore')).toBe('ini');
     expect(detectLanguage('.babelrc')).toBe('json');
+  });
+
+  test('nameless files fall back to content hints', () => {
+    expect(detectLanguage('LICENSE', '{"a": 1}')).toBe('json');
+    expect(detectLanguage('run', '#!/bin/bash\necho hi\n')).toBe('shell');
+    expect(detectLanguage('script', '#!/usr/bin/env python3\n')).toBe('python');
+    expect(detectLanguage('page', '<!DOCTYPE html>\n<html>')).toBe('html');
+    expect(detectLanguage('feed', '<?xml version="1.0"?>')).toBe('html');
+    expect(detectLanguage('patch', 'diff --git a/x b/x\n')).toBe('diff');
+    expect(detectLanguage('conf', '---\nkey: value\n')).toBe('yaml');
+    expect(detectLanguage('plain', 'just words')).toBe('text');
+  });
+
+  test('explicit text extensions and known extensions ignore content hints', () => {
+    expect(detectLanguage('notes.txt', '{"a": 1}')).toBe('text');
+    expect(detectLanguage('app.js', '#!/bin/bash')).toBe('javascript');
+  });
+});
+
+describe('hasTypeClue', () => {
+  test('names that already say how to open', () => {
+    expect(hasTypeClue('a.pdf')).toBe(true);
+    expect(hasTypeClue('a.png')).toBe(true);
+    expect(hasTypeClue('a.txt')).toBe(true);
+    expect(hasTypeClue('Dockerfile')).toBe(true);
+    expect(hasTypeClue('app.js')).toBe(true);
+  });
+
+  test('nameless or unknown extensions need content sniffing', () => {
+    expect(hasTypeClue('LICENSE')).toBe(false);
+    expect(hasTypeClue('blob.qqq')).toBe(false);
+    expect(hasTypeClue('folder/object')).toBe(false);
   });
 });
 

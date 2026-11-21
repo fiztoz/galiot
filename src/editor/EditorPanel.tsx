@@ -32,7 +32,8 @@ import { X, Save, Columns2, PenLine, Loader2, AlertTriangle, CheckCircle2, FileT
 import type { AppDB, ConnectionRow, ObjectRow } from '../db/client';
 import { profileConfig, listingCredentials } from '../db/objects';
 import { vaultService } from '../vault/vaultService';
-import { detectLanguage, mediaKind } from './filetypes';
+import { detectLanguage, hasTypeClue, mediaKind, type EditorLanguage, type PreviewKind } from './filetypes';
+import { SNIFF_LIMIT, sampleStream, sniffBytes } from './sniff';
 import { languageSupport } from './languages';
 import { formatBytes } from '../lib/format';
 import { useFocusTrap } from '../lib/useFocusTrap';
@@ -84,7 +85,7 @@ const lightTheme = EditorView.theme({
 export interface EditorMountState {
   loading: boolean;
   error: string | null;
-  media: 'image' | 'pdf' | 'audio' | 'video' | null;
+  media: PreviewKind | null;
   /** Whether language resolution has finished — *not* whether it found a grammar. */
   langResolved: boolean;
 }
@@ -146,9 +147,11 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const [notice, setNotice] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [original, setOriginal] = useState('');
-  const [media, setMedia] = useState<'image' | 'pdf' | 'audio' | 'video' | null>(() =>
+  const [media, setMedia] = useState<PreviewKind | null>(() =>
     mediaKind(filename, file.content_type),
   );
+  /** Grammar chosen from content when the filename had no extension clue. */
+  const [contentLang, setContentLang] = useState<EditorLanguage | null>(null);
   const [langSupport, setLangSupport] = useState<Extension | undefined>(undefined);
   /**
    * Whether language resolution has finished.
@@ -198,6 +201,31 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     });
   }, [db, profile, file.key]);
 
+  /**
+   * Leading bytes of the object through the same-origin media stream, for
+   * content sniffing. Asks for a range but tolerates providers that ignore
+   * it: only the first SNIFF_LIMIT bytes are kept and the rest is cancelled.
+   */
+  const readSample = useCallback(async () => {
+    const sealed = await listingCredentials(db, profile);
+    const { url } = await vaultService.call('s3.mediaUrl', {
+      profile: profileConfig(profile), credentials: { sealed }, key: file.key,
+    });
+    const token = url.split('/').pop() ?? '';
+    try {
+      const response = await fetch(url, { headers: { Range: `bytes=0-${SNIFF_LIMIT - 1}` } });
+      if (!response.ok) {
+        throw new Error(`Type detection could not read the object (HTTP ${response.status}).`);
+      }
+      return await sampleStream(response);
+    } finally {
+      // One-shot grant: hand it back as soon as the sample is read (or fails).
+      void vaultService
+        .call('s3.revokeMedia', { profile: profileConfig(profile), credentials: { sealed }, token })
+        .catch(() => {});
+    }
+  }, [db, profile, file.key]);
+
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -207,6 +235,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     setSaveError(null);
     setNotice(null);
     setETag(null);
+    setContentLang(null);
     async function load() {
       try {
         const detectedMedia = mediaKind(filename, file.content_type);
@@ -215,9 +244,24 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
           return;
         }
 
+        // No extension (or one nobody recognises): let the first bytes decide
+        // between media preview, text editor and opaque binary.
+        let sample: string | undefined;
+        if (!hasTypeClue(filename)) {
+          const sniffed = sniffBytes(await readSample());
+          if (!active) return;
+          if (sniffed.kind !== null) {
+            setMedia(sniffed.kind);
+            return;
+          }
+          sample = sniffed.text ?? undefined;
+        }
+
         const result = await readRemote();
-        const support = await languageSupport(detectLanguage(filename));
+        const language = detectLanguage(filename, sample);
+        const support = await languageSupport(language);
         if (!active) return;
+        setContentLang(language);
         setOriginal(result.text);
         setETag(result.conditionalPut ? result.eTag : null);
         setContentType(result.contentType);
@@ -237,7 +281,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     }
     void load();
     return () => { active = false; };
-  }, [readRemote, file.content_type, filename]);
+  }, [readRemote, readSample, file.content_type, filename]);
 
   // Mount the CodeMirror view for the loaded text.
   useEffect(() => {
@@ -344,7 +388,8 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
             {filename}
           </p>
           <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-            {formatBytes(Number(file.size))} · {media ?? detectLanguage(filename)}
+            {formatBytes(Number(file.size))} ·{' '}
+            {media === 'binary' ? 'binary file' : (media ?? contentLang ?? detectLanguage(filename))}
             {dirty ? ' · unsaved changes' : ''}
           </p>
         </div>

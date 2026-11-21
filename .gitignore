@@ -4,6 +4,7 @@ bridge-build/
 .*.bun-build
 public/downloads/
 public/.downloads-build-*/
+public/pdfjs/
 .env
 .env.local
 .env.*.local

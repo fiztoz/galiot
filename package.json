@@ -6,9 +6,9 @@
   "description": "Galiot — a self-hosted S3 file browser. The Bun server signs and connects to S3; the host must be able to reach the bucket. MIT.",
   "license": "MIT",
   "scripts": {
-    "dev": "vite",
+    "dev": "bun scripts/copy-pdfjs-assets.ts && vite",
     "server": "bun run scripts/server.ts",
-    "build": "vite build",
+    "build": "bun scripts/copy-pdfjs-assets.ts && vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
     "test": "bun test",
@@ -38,6 +38,7 @@
     "@electric-sql/pglite-react": "^0.4.8",
     "@tanstack/react-virtual": "^3.14.13",
     "lucide-react": "^0.468.0",
+    "pdfjs-dist": "^6.5.438",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
@@ -46,7 +47,7 @@
     "@types/bun": "^1.4.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^4.5.0",
+    "@vitejs/plugin-react": "^6.3.0",
     "happy-dom": "^21.0.4",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
