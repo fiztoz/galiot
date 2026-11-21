@@ -19,7 +19,7 @@ class FakeAnnotationLayer {
   destroy() {}
 }
 const fakePage = () => ({
-  getViewport: ({ scale }: { scale: number }) => ({ width: 612 * scale, height: 792 * scale, scale }),
+  getViewport: ({ scale }: { scale: number }) => ({ width: 612 * scale, height: 792 * scale, scale, userUnit: 1 }),
   render: () => {
     state.renders += 1;
     return { promise: Promise.resolve(), cancel() {} };

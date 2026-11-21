@@ -95,7 +95,7 @@ test('Checkbox keeps native semantics behind a themed box', async () => {
     ));
     expect((container.querySelector('input[type=checkbox]') as HTMLInputElement).checked).toBe(true);
     // The themed box is teal when checked, neutral otherwise.
-    expect((container.querySelector('label > span') as HTMLElement).className).toContain('bg-teal-600');
+    expect((container.querySelector('input + span[aria-hidden="true"]') as HTMLElement).className).toContain('bg-teal-600');
     await act(async () => root.unmount());
   });
 });

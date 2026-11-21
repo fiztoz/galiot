@@ -59,7 +59,15 @@
 /* PDF.js DOM layers over the preview canvas (src/editor/PdfPreview.tsx).
    The library positions runs and link boxes with inline styles; these rules
    supply the layer geometry, transparent selectable text and link affordance.
-   Kept here because pdfjs-dist ships no stylesheet in its npm package. */
+   Geometry follows pdfjs-dist/web/pdf_viewer.css; do not import the full viewer UI. */
+:is(.annotationLayer, .textLayer) {
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  transform-origin: 0 0;
+}
+:is(.annotationLayer, .textLayer)[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+:is(.annotationLayer, .textLayer)[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+:is(.annotationLayer, .textLayer)[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
 .textLayer {
   position: absolute;
   inset: 0;
@@ -81,6 +89,13 @@
   transform-origin: 0 0;
 }
 
+.textLayer span:not(.markedContent) {
+  font-size: calc(var(--total-scale-factor) * var(--min-font-size, 1) * var(--font-height));
+  transform: rotate(var(--rotate, 0deg)) scaleX(var(--scale-x, 1)) scale(calc(1 / var(--min-font-size, 1)));
+  user-select: text;
+}
+.textLayer .markedContent { display: contents; }
+
 .textLayer ::selection {
   background: color-mix(in srgb, var(--color-teal-500) 35%, transparent);
 }
@@ -92,6 +107,8 @@
   z-index: 2;
 }
 
+.annotationLayer section { position: absolute; transform-origin: 0 0; }
+.annotationLayer .linkAnnotation > a { inset: 0; }
 .annotationLayer a,
 .annotationLayer button {
   pointer-events: auto;

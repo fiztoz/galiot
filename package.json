@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
     "test": "bun test",
+    "test:ui": "bash scripts/ui-checks.sh",
     "test:integrity": "bun run scripts/integrity-test.ts",
     "test:minio": "bun run scripts/minio-test.ts",
     "test:minio-server": "bun run scripts/server-minio-test.ts",

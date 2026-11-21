@@ -49,7 +49,7 @@ describe('dialog accessibility wiring', () => {
     // Full-screen editing is a trapped modal; docked media preview is a
     // non-modal master-detail panel (table stays usable behind it).
     expect(source).toContain('aria-modal={docked ? undefined : true}');
-    expect(source).toContain('ref={docked ? undefined : trapRef}');
+    expect(source).toContain('useFocusTrap<HTMLDivElement>(!docked)');
     expect(source).toContain("event.key === 'Escape'");
     expect(source.indexOf('mediaKind(filename, file.content_type)')).toBeLessThan(
       source.indexOf("vaultService.call('s3.getText'"),
@@ -91,9 +91,9 @@ describe('contrast and motion', () => {
 describe('responsive layout guards (pixel-pass regressions)', () => {
   test('object table drops low-priority columns on narrow viewports', () => {
     const source = read('Explorer.tsx');
-    expect(source).toContain('grid-cols-[24px_1fr] sm:grid-cols-[24px_1fr_110px] md:grid-cols-[24px_1fr_110px_150px]');
-    expect(source).toContain('hidden sm:block text-right');
-    expect(source).toContain('hidden md:block text-xs tabular-nums');
+    expect(source).toContain('grid-cols-[24px_1fr] @min-[30rem]/explorer:grid-cols-[24px_1fr_110px] @min-[45rem]/explorer:grid-cols-[24px_1fr_110px_150px]');
+    expect(source).toContain('hidden @min-[30rem]/explorer:block text-right');
+    expect(source).toContain('hidden @min-[45rem]/explorer:block text-xs tabular-nums');
   });
 
   test('connections toolbar wraps so Add connection is never clipped at 390px', () => {
@@ -104,9 +104,9 @@ describe('responsive layout guards (pixel-pass regressions)', () => {
     expect(source).toContain('aria-label="Import from Galeon"');
   });
 
-  test('explorer breadcrumb keeps a readable minimum width instead of collapsing', () => {
+  test('explorer breadcrumb yields space to action buttons and scrolls long paths', () => {
     const source = read('Explorer.tsx');
-    expect(source).toContain('min-w-40 flex-1 overflow-x-auto whitespace-nowrap');
+    expect(source).toContain('min-w-0 flex-1 overflow-x-auto whitespace-nowrap');
   });
 
   test('explorer status bar reserves space so the floating Transfers pill cannot overlap it', () => {

@@ -885,7 +885,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
   return (
     <>
-    <div className="flex-1 min-h-0 flex">
+    <div className="flex-1 min-h-0 min-w-0 flex">
       {showLocal && (
         <LocalPane
           onDownloadToLocal={(items, handle) => void handleDownloadToLocal(items, handle)}
@@ -893,10 +893,11 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
         />
       )}
 
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex flex-1 min-w-0 min-h-0">
+      <div className="@container/explorer flex-1 min-w-0 flex flex-col">
       {/* Toolbar */}
       <div className="flex-none border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
-        <div className="px-3 py-1.5 flex items-center gap-2 border-b border-zinc-100 dark:border-zinc-800/70">
+        <div className="px-3 py-1.5 flex items-center gap-1 @min-[40rem]/explorer:gap-2 border-b border-zinc-100 dark:border-zinc-800/70">
           <button
             type="button"
             onClick={onBack}
@@ -909,7 +910,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
           <nav
             ref={breadcrumbNavRef}
-            className="flex items-center gap-0.5 text-sm min-w-40 flex-1 overflow-x-auto whitespace-nowrap"
+            className="flex items-center gap-0.5 text-sm min-w-0 flex-1 overflow-x-auto whitespace-nowrap"
             aria-label="Folder path"
           >
             <button
@@ -969,7 +970,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             title="Command palette"
           >
             <Command size={15} />
-            <kbd className="hidden md:inline px-1 py-0.5 rounded border border-zinc-200 dark:border-zinc-700 font-mono text-[10px] text-zinc-500 dark:text-zinc-400">⌘K</kbd>
+            <kbd className="hidden @min-[50rem]/explorer:inline px-1 py-0.5 rounded border border-zinc-200 dark:border-zinc-700 font-mono text-[10px] text-zinc-500 dark:text-zinc-400">⌘K</kbd>
           </button>
           <button
             type="button"
@@ -1014,7 +1015,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             title="Create a folder in this prefix"
           >
             <FolderPlus size={13} />
-            <span className="hidden md:inline">New folder</span>
+            <span className="hidden @min-[50rem]/explorer:inline">New folder</span>
           </button>
 
           <button
@@ -1024,7 +1025,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             title="Upload a whole folder, keeping its structure"
           >
             <FolderUp size={13} />
-            <span className="hidden md:inline">Upload folder</span>
+            <span className="hidden @min-[50rem]/explorer:inline">Upload folder</span>
           </button>
 
           <input
@@ -1038,8 +1039,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             aria-label="Select a folder to upload"
           />
 
-          <div className="flex items-center gap-1 order-last w-full sm:order-none sm:w-auto sm:flex-none">
-            <div className="relative flex-1 sm:w-56">
+          <div className="flex items-center gap-1 order-last w-full @min-[40rem]/explorer:order-none @min-[40rem]/explorer:w-auto @min-[40rem]/explorer:flex-none">
+            <div className="relative flex-1 @min-[40rem]/explorer:w-56">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
               <input
                 type="text"
@@ -1085,7 +1086,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             title="Choose a folder on this computer for downloads"
           >
             {showLocal ? <PanelLeftClose size={13} /> : <FolderOpen size={13} />}
-            <span className="hidden md:inline">Download folder</span>
+            <span className="hidden @min-[50rem]/explorer:inline">Download folder</span>
           </button>
 
           <input
@@ -1097,7 +1098,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             aria-label="Select files to upload"
           />
 
-          <div className="hidden sm:flex items-center rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+          <div className="hidden @min-[40rem]/explorer:flex items-center rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
             <button
               type="button"
               onClick={() => setViewMode('list')}
@@ -1165,7 +1166,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
 
       {/* Column header (list view only) */}
       {viewMode === 'list' && (
-        <div className="flex-none grid grid-cols-[24px_1fr] sm:grid-cols-[24px_1fr_110px] md:grid-cols-[24px_1fr_110px_150px] gap-2 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 select-none">
+        <div className="flex-none grid grid-cols-[24px_1fr] @min-[30rem]/explorer:grid-cols-[24px_1fr_110px] @min-[45rem]/explorer:grid-cols-[24px_1fr_110px_150px] gap-2 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 select-none">
           <span className="flex items-center justify-center">
             <Checkbox
               checked={rows.length > 0 && selected.size >= rows.length}
@@ -1175,8 +1176,8 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
             />
           </span>
           <span>{isSearching ? 'Path' : 'Name'}</span>
-          <span className="hidden sm:block text-right">Size</span>
-          <span className="hidden md:block">Modified</span>
+          <span className="hidden @min-[30rem]/explorer:block text-right">Size</span>
+          <span className="hidden @min-[45rem]/explorer:block">Modified</span>
         </div>
       )}
 
@@ -1316,7 +1317,7 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                     }}
                     onClick={(e) => handleRowClick(e, row, virtualRow.index)}
                     onDoubleClick={() => handleRowDoubleClick(row)}
-                    className={`absolute left-0 top-0 w-full grid grid-cols-[24px_1fr] sm:grid-cols-[24px_1fr_110px] md:grid-cols-[24px_1fr_110px_150px] gap-2 items-center px-4 cursor-default select-none transition-colors ${
+                    className={`absolute left-0 top-0 w-full grid grid-cols-[24px_1fr] @min-[30rem]/explorer:grid-cols-[24px_1fr_110px] @min-[45rem]/explorer:grid-cols-[24px_1fr_110px_150px] gap-2 items-center px-4 cursor-default select-none transition-colors ${
                       isSelected
                         ? 'bg-teal-50 dark:bg-teal-950/40'
                         : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50'
@@ -1365,11 +1366,11 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
                       )}
                     </span>
 
-                    <span className="hidden sm:block text-right text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+                    <span className="hidden @min-[30rem]/explorer:block text-right text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
                       {row.is_dir ? '—' : formatBytes(row.size)}
                     </span>
 
-                    <span className="hidden md:block text-xs tabular-nums text-zinc-500 dark:text-zinc-400 truncate">
+                    <span className="hidden @min-[45rem]/explorer:block text-xs tabular-nums text-zinc-500 dark:text-zinc-400 truncate">
                       {formatDate(row.last_modified)}
                     </span>
                   </div>
@@ -1642,6 +1643,27 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
         </span>
       </div>
       </div>
+        {editing && (
+          <Suspense
+            fallback={
+              <div className="fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center">
+                <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+                  <Loader2 size={16} className="animate-spin" />
+                  Loading editor…
+                </div>
+              </div>
+            }
+          >
+            <EditorPanel
+              db={db}
+              profile={profile}
+              file={editing}
+              onClose={() => setEditing(null)}
+              onSaved={handleRefresh}
+            />
+          </Suspense>
+        )}
+      </div>
     </div>
 
     {sharing && (
@@ -1713,26 +1735,6 @@ export function Explorer({ db, profile, onBack }: ExplorerProps) {
       />
     )}
 
-    {editing && (
-      <Suspense
-        fallback={
-          <div className="fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center">
-            <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
-              <Loader2 size={16} className="animate-spin" />
-              Loading editor…
-            </div>
-          </div>
-        }
-      >
-        <EditorPanel
-          db={db}
-          profile={profile}
-          file={editing}
-          onClose={() => setEditing(null)}
-          onSaved={handleRefresh}
-        />
-      </Suspense>
-    )}
     </>
   );
 }

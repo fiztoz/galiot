@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { EditorState, type Extension } from '@codemirror/state';
 import {
   EditorView,
@@ -154,12 +154,15 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const [contentLang, setContentLang] = useState<EditorLanguage | null>(null);
   /** Media previews dock beside the table (master-detail); editing stays full-screen. */
   const [expandMedia, setExpandMedia] = useState(false);
-  const docked = media !== null && !expandMedia;
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  const canDock = workspaceWidth >= 768;
+  const docked = media !== null && canDock && !expandMedia;
+  const maxPanelWidth = Math.max(320, Math.min(720, workspaceWidth - 384));
   const [panelWidth, setPanelWidth] = useState(() => {
     const stored = typeof localStorage === 'undefined' ? NaN : Number(localStorage.getItem('galiot.previewWidth'));
     return Number.isFinite(stored) && stored >= 320 && stored <= 720 ? stored : 560;
   });
-  const resizingRef = useRef(false);
+  const dragPointer = useRef<number | null>(null);
   useEffect(() => {
     if (typeof localStorage !== 'undefined') localStorage.setItem('galiot.previewWidth', String(panelWidth));
   }, [panelWidth]);
@@ -179,7 +182,19 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
   const containerRef = useRef<HTMLDivElement>(null);
   const currentTextRef = useRef('');
 
-  const trapRef = useFocusTrap<HTMLDivElement>();
+  const trapRef = useFocusTrap<HTMLDivElement>(!docked);
+  useLayoutEffect(() => {
+    // Measure the shared Explorer/preview workspace, not the viewport: the
+    // local-files pane can also occupy space. The dock is a real flex sibling.
+    const workspace = trapRef.current?.parentElement;
+    if (!workspace) return;
+    const measure = () => setWorkspaceWidth(Math.floor(workspace.getBoundingClientRect().width));
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, [trapRef]);
 
   /** Asks before discarding a draft; Escape on that prompt keeps editing. */
   const [confirmingClose, setConfirmingClose] = useState(false);
@@ -387,41 +402,49 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
 
   return (
     <div
-      ref={docked ? undefined : trapRef}
+      ref={trapRef}
       role="dialog"
       aria-modal={docked ? undefined : true}
       aria-label={filename}
       className={
         docked
-          ? 'fixed top-0 right-0 bottom-0 z-40 w-full max-w-full bg-zinc-50 dark:bg-zinc-950 border-l border-zinc-200 dark:border-zinc-800 shadow-2xl flex flex-col'
+          ? 'relative flex-none min-h-0 bg-zinc-50 dark:bg-zinc-950 border-l border-zinc-200 dark:border-zinc-800 flex flex-col'
           : 'fixed inset-0 z-50 bg-zinc-50 dark:bg-zinc-950 flex flex-col'
       }
-      style={docked ? { width: panelWidth } : undefined}
+      style={docked ? { width: Math.min(panelWidth, maxPanelWidth) } : undefined}
     >
       {docked && (
         <div
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize preview panel"
+          aria-valuemin={320}
+          aria-valuemax={maxPanelWidth}
+          aria-valuenow={Math.min(panelWidth, maxPanelWidth)}
           tabIndex={0}
           onPointerDown={(event) => {
-            resizingRef.current = true;
+            if (!event.isPrimary || event.button !== 0) return;
             event.currentTarget.setPointerCapture(event.pointerId);
+            dragPointer.current = event.pointerId;
           }}
           onPointerMove={(event) => {
-            if (!resizingRef.current) return;
-            setPanelWidth(Math.min(720, Math.max(320, window.innerWidth - event.clientX)));
+            if (dragPointer.current !== event.pointerId) return;
+            const right = event.currentTarget.parentElement!.getBoundingClientRect().right;
+            setPanelWidth(Math.min(maxPanelWidth, Math.max(320, Math.round(right - event.clientX))));
           }}
-          onPointerUp={() => {
-            resizingRef.current = false;
-          }}
+          onLostPointerCapture={() => { dragPointer.current = null; }}
+          onPointerUp={() => { dragPointer.current = null; }}
+          onPointerCancel={() => { dragPointer.current = null; }}
           onKeyDown={(event) => {
-            if (event.key === 'ArrowLeft') setPanelWidth((w) => Math.min(720, w + 40));
-            else if (event.key === 'ArrowRight') setPanelWidth((w) => Math.max(320, w - 40));
+            const current = Math.min(panelWidth, maxPanelWidth);
+            if (event.key === 'ArrowLeft') setPanelWidth(Math.min(maxPanelWidth, current + 40));
+            else if (event.key === 'ArrowRight') setPanelWidth(Math.max(320, current - 40));
+            else if (event.key === 'Home') setPanelWidth(320);
+            else if (event.key === 'End') setPanelWidth(maxPanelWidth);
             else return;
             event.preventDefault();
           }}
-          className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-teal-500/40 focus-visible:bg-teal-500/60 transition-colors"
+          className="absolute z-10 left-0 top-0 bottom-0 w-1.5 touch-none cursor-col-resize hover:bg-teal-500/40 focus-visible:bg-teal-500/60 transition-colors"
         />
       )}
       <header className="flex-none flex items-center gap-3 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
@@ -482,7 +505,7 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
           </button>
         )}
 
-        {media !== null && (
+        {media !== null && canDock && (
           <button
             type="button"
             onClick={() => setExpandMedia((v) => !v)}

@@ -1574,6 +1574,31 @@ type-check and build clean. Still not visually verified — interactive browser
 approval remains unavailable this session; the density toggle, column
 breakpoints and resize handle rest on tests and guards.
 
+## 40. Re-verification — Explorer split layout and PDF hit targets
+
+The phone breadcrumb's fixed minimum clipped the density button at 390 px. It
+now yields width to the controls and scrolls long paths. Desktop media is a flex
+sibling of the table, not a fixed overlay. Below 768 px of **workspace** (after
+the local pane) preview is modal; above it the splitter reserves at least 384 px
+for browsing. Column priority follows the Explorer's container width. Modal focus
+trapping follows the actual mode on expand, dock and window resize. The native
+checkbox now occupies the visible square, including in the select-all mixed state.
+See [CSS container queries](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_containment/Container_queries)
+and [Window Splitter keyboard interaction](https://www.w3.org/WAI/ARIA/apg/patterns/windowsplitter/).
+
+PDF.js places selectable runs and link regions using its viewer stylesheet's
+custom properties and positioned annotation sections. The preview supplies the
+scoped geometry it needs (see the pinned `pdfjs-dist/web/pdf_viewer.css`), not
+the entire viewer stylesheet. An internal annotation in the real fixture now
+has a clickable area and turns the page without leaving the preview.
+
+Reproduce with `bun run test:ui` ([fixture and scope](../tests/ui/README.md)).
+Ten rendered scenarios at 390, 920 and 1440 px cover selection, focus, preview
+geometry, routing, PDF layers, and drawer retry dispatch. The vault and retry
+transport are synthetic; a component pointer sequence stubs hardware capture.
+Standalone headless-browser clicks additionally verified the native checkbox
+and the PDF destination. No external link, download or S3 request was needed.
+
 ---
 
 *End of stack decision. Update this file when spikes close; do not edit the

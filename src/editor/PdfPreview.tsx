@@ -217,6 +217,8 @@ export function PdfPreview({ url, filename }: PdfPreviewProps) {
         const dpr = Math.min(2, window.devicePixelRatio || 1);
         const cssWidth = Math.floor(viewport.width);
         const cssHeight = Math.floor(viewport.height);
+        // Both PDF.js DOM layers size themselves from this page-level CSS value.
+        canvas.parentElement?.style.setProperty('--total-scale-factor', String(viewport.scale * viewport.userUnit));
         canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
         canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
         canvas.style.width = `${cssWidth}px`;
@@ -241,7 +243,6 @@ export function PdfPreview({ url, filename }: PdfPreviewProps) {
         if (textContainer) {
           textLayerRef.current?.cancel();
           textContainer.replaceChildren();
-          textContainer.style.setProperty('--scale-factor', String(viewport.scale));
           const textLayer = new lib.TextLayer({
             textContentSource: pdfPage.streamTextContent(),
             container: textContainer,

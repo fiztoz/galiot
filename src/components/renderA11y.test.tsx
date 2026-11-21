@@ -257,7 +257,7 @@ describe('rendered dialog accessibility', () => {
     // Themed checkbox: the native input stays for semantics but is visually
     // replaced, and its wrapping label still names it.
     expect(pathStyle?.type).toBe('checkbox');
-    expect(pathStyle?.className).toContain('sr-only');
+    expect(pathStyle?.className).toContain('h-full w-full');
     expect(pathStyle?.labels?.[0]?.textContent).toContain('Path-style addressing');
 
     const sessionTokenLabel = el.querySelector('label[for="conn-session-token"]');
