@@ -2,7 +2,8 @@
 # the bucket. A public bind requires GALIOT_PROXY_TOKEN or GALIOT_GATE at
 # runtime (the server refuses to start without one). Do not bake the gate into
 # the image.
-FROM oven/bun:1.4.2 AS base
+# Pinned by digest, matching the SHA-pin policy used for actions and tools.
+FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS base
 WORKDIR /app
 
 FROM base AS build
