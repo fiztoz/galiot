@@ -318,3 +318,39 @@ test('a BadDigest part is retried, since the bytes were damaged in transit', asy
     port.port2.close();
   }
 });
+
+test('a cancel that arrives during completion lets the upload finish and sends no abort', async () => {
+  const job: UploadJob = {
+    taskId: 'late-cancel', profileId: 'profile', key: 'big.bin',
+    target: { endpoint: 'https://s3.example.com', bucket: 'example-bucket', region: 'r', pathStyle: true },
+    credentials: { iv: 'i', ciphertext: 'c' }, file: new File([new Uint8Array(33 * 1024 ** 2)], 'big.bin'),
+    partSize: 16 * 1024 ** 2, concurrency: 1,
+  };
+  const events: TransferEvent[] = [];
+  const ops: string[] = [];
+  const engine = new TransferEngine(e => events.push(e), async (url, init) => {
+    if (String(url).includes('/part?')) {
+      const part = new URL(String(url), 'http://x').searchParams.get('partNumber');
+      return new Response(null, { headers: { etag: `"e${part}"` } });
+    }
+    const body = JSON.parse(String(init?.body));
+    ops.push(body.op);
+    if (body.op === 'completeMultipart') {
+      engine.cancel(job.taskId);
+      expect(init?.signal?.aborted ?? false).toBe(false);
+    }
+    return Response.json({ ok: true, result: body.op === 'createMultipart' ? { uploadId: 'u' } : {} });
+  });
+  const port = new MessageChannel();
+  port.port2.onmessage = ({ data }) => port.port2.postMessage({ type: 'session', id: data.id, sessionId: 's' });
+  engine.attachPort(port.port1);
+  try {
+    await engine.run(job);
+    expect(ops).toEqual(['createMultipart', 'completeMultipart']);
+    expect(events.some(e => e.type === 'done')).toBe(true);
+    expect(events.some(e => e.type === 'error' || e.type === 'canceled')).toBe(false);
+  } finally {
+    port.port1.close();
+    port.port2.close();
+  }
+});

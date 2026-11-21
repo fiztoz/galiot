@@ -604,11 +604,16 @@ export class TransferEngine {
     uploadId: string,
     parts: CompletedPart[],
   ): Promise<void> {
+    if (_rt.pauseRequested) throw new Error('Transfer interrupted');
+    // Not cancelable once sent: aborting the browser request would not stop
+    // the server completing it on S3, and the follow-up abort would then fail
+    // against an object that exists. A late Cancel lets the upload finish.
     await this.serverCall(job, 'completeMultipart', {
       key: job.key,
       uploadId,
       parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.eTag })),
-    }, this.track(_rt));
+    });
+    _rt.uploadId = undefined;
   }
 
   private async abortMultipart(
