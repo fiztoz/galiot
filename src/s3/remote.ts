@@ -359,6 +359,16 @@ export class RemoteS3 {
     return this.call('restore', { key, days });
   }
 
+  /** An upload S3 no longer knows (already completed or aborted) counts as aborted. */
+  async abortMultipart(key: string, uploadId: string): Promise<{ aborted: boolean }> {
+    try {
+      return await this.call<{ aborted: boolean }>('abortMultipart', { key, uploadId });
+    } catch (error) {
+      if (error instanceof RemoteS3Error && error.code === 'NoSuchUpload') return { aborted: true };
+      throw error;
+    }
+  }
+
 
   createFolder(key: string): Promise<{ created: boolean }> {
     return this.call('createFolder', { key });

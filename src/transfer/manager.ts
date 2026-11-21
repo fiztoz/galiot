@@ -420,22 +420,74 @@ class TransferManager {
     this.post({ type: 'cancel', taskId });
   }
 
-  async removeTask(taskId: string): Promise<void> {
+  /**
+   * Aborts the task's incomplete multipart upload on S3. Its parts are stored
+   * (and billed) until then, and nothing else ever lists them. Returns a note
+   * when the upload cannot be reached any more; throws when S3 refused, so the
+   * caller keeps the row and the upload id.
+   */
+  private async abortStoredUpload(task: Pick<TransferTaskRow, 'id' | 'profile_id' | 'remote_key' | 'upload_id' | 'status'>):
+    Promise<string | null> {
+    if (!task.upload_id || task.status === 'completed') return null;
     const db = this.requireDb();
-    await db.query(`DELETE FROM transfer_tasks WHERE id = $1`, [taskId]);
+    const result = await db.query<ConnectionRow & { target_identity: string | null; encrypted_credentials: EncryptedPayload | string }>(
+      `SELECT p.*, t.target_identity FROM transfer_tasks t JOIN profiles p ON p.id = t.profile_id WHERE t.id = $1`,
+      [task.id],
+    );
+    const row = result.rows[0];
+    const credentials: EncryptedPayload | undefined = row && (typeof row.encrypted_credentials === 'string'
+      ? JSON.parse(row.encrypted_credentials) : row.encrypted_credentials);
+    // Abort only at the route the upload was started on, never a re-pointed connection.
+    if (!row || !credentials || !row.target_identity ||
+        row.target_identity !== await transferTargetIdentity({ ...profileConfig(row), profileId: row.id, credentials })) {
+      return `${task.remote_key}: the connection changed, so its incomplete S3 upload could not be cancelled. ` +
+        'A bucket lifecycle rule for incomplete multipart uploads will remove the stored parts.';
+    }
+    await vaultService.call('s3.abortUpload', {
+      profile: profileConfig(row),
+      credentials: { sealed: credentials },
+      key: task.remote_key,
+      uploadId: task.upload_id,
+    });
+    return null;
+  }
+
+  private async forgetTask(taskId: string): Promise<void> {
+    await this.requireDb().query(`DELETE FROM transfer_tasks WHERE id = $1`, [taskId]);
     this.directoryTargets.delete(taskId);
     if (!this.browserDownloads.has(taskId)) await removeStaging(taskId);
   }
 
+  /** Removes a finished or paused task, cancelling its incomplete S3 upload first. */
+  async removeTask(taskId: string): Promise<void> {
+    const db = this.requireDb();
+    const task = (await db.query<TransferTaskRow>(
+      `SELECT * FROM transfer_tasks WHERE id = $1 AND status IN ('completed', 'failed', 'paused')`, [taskId],
+    )).rows[0];
+    if (!task) return;
+    const note = await this.abortStoredUpload(task);
+    await this.forgetTask(taskId);
+    if (note) throw new Error(`Removed. ${note}`);
+  }
+
   async clearFinished(): Promise<void> {
     const db = this.requireDb();
-    const removed = await db.query<{ id: string }>(
-      `DELETE FROM transfer_tasks WHERE status IN ('completed', 'failed') RETURNING id`,
+    const finished = await db.query<TransferTaskRow>(
+      `SELECT * FROM transfer_tasks WHERE status IN ('completed', 'failed')`,
     );
-    for (const row of removed.rows) {
-      this.directoryTargets.delete(row.id);
-      if (!this.browserDownloads.has(row.id)) await removeStaging(row.id);
+    const problems: string[] = [];
+    for (const task of finished.rows) {
+      try {
+        const note = await this.abortStoredUpload(task);
+        if (note) problems.push(note);
+      } catch (error) {
+        problems.push(`${task.remote_key}: kept, because S3 did not confirm the upload was cancelled (${
+          error instanceof Error ? error.message : String(error)}).`);
+        continue;
+      }
+      await this.forgetTask(task.id);
     }
+    if (problems.length) throw new Error(problems.join(' '));
   }
 
   private async handleEvent(event: TransferEvent): Promise<void> {

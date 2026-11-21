@@ -563,6 +563,12 @@ async function dispatch<M extends VaultMethod>(
       return (await sessionClient(p.profile, creds)).restore(p.key, p.days);
     }
 
+    case 's3.abortUpload': {
+      const p = params as NonNullable<VaultRequest<'s3.abortUpload'>['params']>;
+      const creds = await resolveCredentials(p.credentials);
+      return (await sessionClient(p.profile, creds)).abortMultipart(p.key, p.uploadId);
+    }
+
     default: {
       throw new Error(`Unknown vault method: ${String(method)}`);
     }

@@ -153,6 +153,7 @@ export type VaultMethod =
   | 's3.search'
   | 's3.listTree'
   | 's3.restore'
+  | 's3.abortUpload'
   | 'galeon.preview'
   | 'galeon.prepare';
 
@@ -249,6 +250,8 @@ export interface VaultParams {
   's3.search': { profile: S3ProfileConfig; credentials: Credentials; query: string; prefix?: string };
   's3.listTree': { profile: S3ProfileConfig; credentials: Credentials; prefix: string };
   's3.restore': { profile: S3ProfileConfig; credentials: Credentials; key: string; days: number };
+  /** Discards an incomplete multipart upload so its parts stop being stored. */
+  's3.abortUpload': { profile: S3ProfileConfig; credentials: Credentials; key: string; uploadId: string };
   /**
    * Parses a Galeon profile export inside the worker and returns a preview with
    * no credential material in it. The page supplies the selected File handle.
@@ -307,6 +310,7 @@ export type VaultResults = {
   's3.search': BucketSearchResult;
   's3.listTree': { objects: { key: string; size: number; storageClass: string | null }[] };
   's3.restore': { requested: boolean };
+  's3.abortUpload': { aborted: boolean };
   'galeon.preview': GaleonImportPreview;
   'galeon.prepare': GaleonImportPrepareResult & { generation: string };
 };

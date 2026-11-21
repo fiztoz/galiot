@@ -31,6 +31,11 @@ function isFinished(task: TransferTaskRow): boolean {
   return task.status === 'completed' || task.status === 'failed';
 }
 
+/** A paused task has no running worker, so it can be discarded like a finished one. */
+function isRemovable(task: TransferTaskRow): boolean {
+  return isFinished(task) || task.status === 'paused';
+}
+
 export function TransferDrawer(_props: TransferDrawerProps) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -352,13 +357,13 @@ export function TransferDrawer(_props: TransferDrawerProps) {
                           </button>
                         )}
 
-                        {isFinished(task) && (
+                        {isRemovable(task) && (
                           <button
                             type="button"
                             onClick={() => void run(() => transferManager.removeTask(task.id))}
                             className="p-1 rounded text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                            title="Remove from list"
-                            aria-label="Remove transfer"
+                            title={task.status === 'paused' ? 'Discard transfer' : 'Remove from list'}
+                            aria-label={task.status === 'paused' ? 'Discard transfer' : 'Remove transfer'}
                           >
                             <Trash2 size={13} />
                           </button>

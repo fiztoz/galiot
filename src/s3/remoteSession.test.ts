@@ -50,3 +50,10 @@ test('a second expiry is reported instead of looping', async () => {
   const s3 = new RemoteS3('old', undefined, async () => 'new');
   await expect(s3.listObjects()).rejects.toThrow(/session expired/i);
 });
+
+test('aborting an upload S3 has already forgotten counts as aborted', async () => {
+  stub(() => Response.json({ ok: false, status: 404, code: 'NoSuchUpload', error: 'gone' }));
+  expect(await new RemoteS3('live', undefined).abortMultipart('a.bin', 'u1')).toEqual({ aborted: true });
+  stub(() => Response.json({ ok: false, status: 403, code: 'AccessDenied', error: 'denied' }));
+  await expect(new RemoteS3('live', undefined).abortMultipart('a.bin', 'u1')).rejects.toThrow(/AccessDenied/);
+});
