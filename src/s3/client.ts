@@ -175,6 +175,8 @@ function escapeXml(value: string): string {
 /** Allows a full ListObjects page with entity-escaped, maximum-length keys. */
 const MAX_S3_XML_BYTES = 8 * 1024 * 1024;
 const MAX_S3_ERROR_BYTES = 64 * 1024;
+/** Prefix for continuation tokens that are really ListObjects v1 markers. */
+const V1_MARKER_PREFIX = 'v1:';
 const readXml = (res: Response) => readBoundedText(res, MAX_S3_XML_BYTES);
 
 function serializeCorsRule(rule: CorsRule): string {
@@ -440,19 +442,25 @@ export class S3Client {
   }
 
   public async listObjects(prefix?: string, options?: { delimiter?: string; maxKeys?: number; continuationToken?: string }): Promise<ListObjectsResult> {
+    // The server builds a client per request, so a v1 page marks its own token.
+    const token = options?.continuationToken;
+    const v1Marker = token?.startsWith(V1_MARKER_PREFIX) ? token.slice(V1_MARKER_PREFIX.length) : undefined;
     const v1Query = (): Record<string, string> => {
       const query: Record<string, string> = {};
       if (prefix) query.prefix = prefix;
       if (options?.delimiter) query.delimiter = options.delimiter;
       if (options?.maxKeys !== undefined) query['max-keys'] = options.maxKeys.toString();
-      if (options?.continuationToken) query.marker = options.continuationToken;
+      if (v1Marker) query.marker = v1Marker;
       return query;
     };
-    const url = this.buildUrl(undefined, this.listV1 ? v1Query() : listObjectsQuery(prefix, options));
+    let v1 = this.listV1 || v1Marker !== undefined;
+    if (token && !v1Marker && v1) throw new Error('This listing token belongs to ListObjects v2.');
+    const url = this.buildUrl(undefined, v1 ? v1Query() : listObjectsQuery(prefix, options));
 
     let res = await this.request(url);
-    let v1 = this.listV1;
-    if (!res.ok && (res.status === 501 || res.status === 400)) {
+    // Only a first v2 page may fall back: a v2 continuation token is opaque, and
+    // replaying it as a v1 marker would silently list the wrong keys.
+    if (!res.ok && !v1 && !token && (res.status === 501 || res.status === 400)) {
       // Older S3 gateways (Dell ECS family and other on-premises systems) may
       // implement only ListObjects v1. Retry once with marker paging; a real
       // permissions or bucket error fails the same way on both and surfaces.
@@ -485,8 +493,9 @@ export class S3Client {
     // any leading/trailing spaces S3 allows.
     const isTruncated = (xmlFirst(text, 'IsTruncated') ?? '').trim() === 'true';
     // v1 pages with NextMarker (or the last key when the provider omits it).
+    const v1Next = xmlFirst(text, 'NextMarker') ?? (isTruncated ? objects[objects.length - 1]?.key : undefined);
     const nextContinuationToken = v1
-      ? xmlFirst(text, 'NextMarker') ?? (isTruncated ? objects[objects.length - 1]?.key : undefined)
+      ? v1Next === undefined ? undefined : V1_MARKER_PREFIX + v1Next
       : xmlFirst(text, 'NextContinuationToken');
 
     return { objects, prefixes, isTruncated, nextContinuationToken };

@@ -137,14 +137,52 @@ describe('ListObjects v1 fallback for older gateways', () => {
     expect(urls[0]).toContain('list-type=2');
     expect(urls[1]).not.toContain('list-type');
     expect(page.objects.map((o) => o.key)).toEqual(['docs/a.txt']);
-    expect(page.nextContinuationToken).toBe('docs/a.txt');
+    expect(page.nextContinuationToken).toBe('v1:docs/a.txt');
 
     const second = await client.listObjects('docs/', { continuationToken: page.nextContinuationToken });
     expect(urls).toHaveLength(3);
     expect(urls[2]).toContain('marker=docs%2Fa.txt');
     expect(urls[2]).not.toContain('list-type');
     expect(second.isTruncated).toBe(true);
-    expect(second.nextContinuationToken).toBe('docs/a.txt');
+    expect(second.nextContinuationToken).toBe('v1:docs/a.txt');
+  });
+
+  test('a fresh client resumes v1 paging from a marked token', async () => {
+    const urls: string[] = [];
+    const client = new S3Client({
+      endpoint: 'https://s3.example.com',
+      bucket: 'archive',
+      region: 'us-east-1',
+      pathStyle: true,
+      accessKeyId: 'AKIA',
+      secretAccessKey: 'secret',
+      dispatch: async (signed) => {
+        urls.push(signed.url);
+        return new Response('<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>', { status: 200 });
+      },
+    });
+    await client.listObjects('docs/', { continuationToken: 'v1:docs/a.txt' });
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('marker=docs%2Fa.txt');
+    expect(urls[0]).not.toContain('list-type');
+  });
+
+  test('a rejected v2 continuation token is not replayed as a v1 marker', async () => {
+    let calls = 0;
+    const client = new S3Client({
+      endpoint: 'https://s3.example.com',
+      bucket: 'archive',
+      region: 'us-east-1',
+      pathStyle: true,
+      accessKeyId: 'AKIA',
+      secretAccessKey: 'secret',
+      dispatch: async () => {
+        calls += 1;
+        return new Response('<Error><Code>InvalidArgument</Code></Error>', { status: 400 });
+      },
+    });
+    await expect(client.listObjects('docs/', { continuationToken: '1ueGcxLPRx1Tr' })).rejects.toThrow(/InvalidArgument/);
+    expect(calls).toBe(1);
   });
 
   test('a genuine refusal is not retried as v1', async () => {
