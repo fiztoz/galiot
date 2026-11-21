@@ -17,6 +17,8 @@ jobs:
       # arbitrary code in CI. Re-resolve deliberately when bumping, e.g.
       #   gh api repos/actions/checkout/git/ref/tags/v4
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -60,6 +62,32 @@ jobs:
           echo "$headers" | grep -qi "content-security-policy: default-src 'none'" || { echo "::error::CSP header missing"; exit 1; }
           echo "$headers" | grep -qi "x-content-type-options: nosniff" || { echo "::error::nosniff header missing"; exit 1; }
 
+  # The release image is otherwise only built on a tag. Build it here too, and
+  # check that it runs as the unprivileged user and answers its health check.
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build and smoke-test the container
+        run: |
+          set -euo pipefail
+          docker build -t galiot:ci .
+          test "$(docker run --rm --entrypoint id galiot:ci -u)" != "0" || { echo "::error::image runs as root"; exit 1; }
+          docker run -d --name galiot-ci -e GALIOT_HOST=127.0.0.1 --network host galiot:ci
+          trap 'docker rm -f galiot-ci >/dev/null' EXIT
+          for _ in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8788/api/health >/dev/null && exit 0
+            sleep 0.5
+          done
+          docker logs galiot-ci
+          echo "::error::container did not answer /api/health"
+          exit 1
+
   # The Helm chart is verified offline: lint, a render matrix with positive
   # and negative assertions, and strict schema validation. No cluster needed.
   helm:
@@ -68,6 +96,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       # Tools pinned by version AND sha256 — same supply-chain policy as the
       # SHA-pinned actions above.
