@@ -223,15 +223,17 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
             {rows.map((row) => (
               <div
                 key={row.id}
-                className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 hover:border-teal-500/60 dark:hover:border-teal-500/40 transition-colors"
+                className="relative isolate bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 hover:border-teal-500/60 dark:hover:border-teal-500/40 transition-colors"
               >
                 <div className="flex items-start justify-between gap-3">
+                  {/* Stretch the open button across the card, below the separate action buttons. */}
                   <button
                     type="button"
+                    aria-label={`Open ${row.name}`}
                     onClick={() => setActiveId(row.id)}
-                    className="min-w-0 flex-1 text-left rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    className="group/open min-w-0 flex-1 cursor-pointer text-left focus-visible:outline-hidden after:absolute after:-inset-px after:rounded-xl focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-teal-500"
                   >
-                    <span className="font-semibold text-zinc-900 dark:text-zinc-50 hover:text-teal-700 dark:hover:text-teal-400 flex items-center gap-1.5">
+                    <span className="font-semibold text-zinc-900 dark:text-zinc-50 group-hover/open:text-teal-700 dark:group-hover/open:text-teal-400 flex items-center gap-1.5">
                       <span className="truncate">{row.name}</span>
                       <ChevronRight size={15} className="flex-none text-zinc-500" />
                     </span>
@@ -245,14 +247,14 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                       <button
                         type="button"
                         onClick={() => void handleDelete(row.id)}
-                        className="px-2.5 py-1.5 text-xs font-medium rounded-md bg-red-600 hover:bg-red-700 text-white transition-colors"
+                        className="relative z-10 px-2.5 py-1.5 text-xs font-medium rounded-md bg-red-600 hover:bg-red-700 text-white transition-colors"
                       >
                         Confirm
                       </button>
                       <button
                         type="button"
                         onClick={() => setPendingDeleteId(null)}
-                        className="p-1.5 rounded-md text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                        className="relative z-10 p-1.5 rounded-md text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                         aria-label="Cancel delete"
                       >
                         <X size={14} />
@@ -263,7 +265,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                       <button
                         type="button"
                         onClick={() => setSharingId(row.id)}
-                        className="p-2 -mt-1 rounded-md text-zinc-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20"
+                        className="relative z-10 p-2 -mt-1 rounded-md text-zinc-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20"
                         aria-label={`Share ${row.name}`}
                         title="Share connection (no keys)"
                       >
@@ -272,7 +274,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                       <button
                         type="button"
                         onClick={() => setEditingId(row.id)}
-                        className="p-2 -mt-1 rounded-md text-zinc-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20"
+                        className="relative z-10 p-2 -mt-1 rounded-md text-zinc-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20"
                         aria-label={`Edit ${row.name}`}
                         title="Edit connection"
                       >
@@ -281,7 +283,7 @@ export function ConnectionsView({ db }: ConnectionsViewProps) {
                       <button
                         type="button"
                         onClick={() => setPendingDeleteId(row.id)}
-                        className="p-2 -mt-1 -mr-1 rounded-md text-zinc-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        className="relative z-10 p-2 -mt-1 -mr-1 rounded-md text-zinc-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"
                         aria-label={`Delete ${row.name}`}
                         title="Delete connection"
                       >

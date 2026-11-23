@@ -20,6 +20,7 @@ import { ShareConnectionDialog } from './ShareConnectionDialog';
 import { CommandPalette } from './CommandPalette';
 import { BucketSearchDialog } from './BucketSearchDialog';
 import { ConnectionDialog } from './ConnectionDialog';
+import { ConnectionsView } from './ConnectionsView';
 import { GaleonImportDialog } from './GaleonImportDialog';
 import { TransferDrawer } from './TransferDrawer';
 import { LocalPane } from './LocalPane';
@@ -218,6 +219,32 @@ describe('rendered dialog accessibility', () => {
     );
     expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('Add header'))).toBe(true);
     expect(el.textContent).toContain('Not for secrets');
+  });
+
+  test('a connection card has one focusable open action and separate management actions', async () => {
+    const rows = { rows: [profile], fields: [], totalCount: 1 };
+    const db = { live: { query: async (_sql: string, _params: unknown, notify: (value: typeof rows) => void) => {
+      notify(rows);
+      return { unsubscribe: () => {} };
+    } } } as unknown as AppDB;
+    const el = render(<PGliteProvider db={db}><ConnectionsView db={db} /></PGliteProvider>);
+    await act(async () => {});
+    const open = el.querySelector<HTMLButtonElement>('button[aria-label="Open Archive"]')!;
+    const actions = ['Share', 'Edit', 'Delete'].map(action =>
+      el.querySelector<HTMLButtonElement>(`button[aria-label="${action} Archive"]`)!);
+    expect(open).not.toBeNull();
+    expect(open.tabIndex).toBe(0);
+    expect(open.classList.contains('after:-inset-px')).toBe(true);
+    for (const action of actions) {
+      expect(open.contains(action)).toBe(false);
+      expect(action.classList.contains('z-10')).toBe(true);
+    }
+    act(() => actions[2]!.click());
+    expect(el.contains(open)).toBe(true);
+    const cancel = el.querySelector<HTMLButtonElement>('button[aria-label="Cancel delete"]')!;
+    expect(cancel.classList.contains('z-10')).toBe(true);
+    act(() => cancel.click());
+    expect(el.querySelector('button[aria-label="Delete Archive"]')).not.toBeNull();
   });
 
   test('ConnectionDialog is a labelled modal with associated fields and clears errors on edit or test', async () => {
