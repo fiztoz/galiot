@@ -80,6 +80,8 @@ export interface ConnectionRow {
   storage_class: string | null;
   /** Extra request headers for this connection; null when none are set. */
   custom_headers: Record<string, string> | string | null;
+  /** Local opt-in; absent in older backups and imported connection data. */
+  verify_editor_writes?: boolean;
   created_at: Date | string;
   updated_at: Date | string;
 }

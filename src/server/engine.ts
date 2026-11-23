@@ -22,6 +22,7 @@ export function clientForSession(
   session: SessionView,
   lookup?: ProxyLookup,
   forward = forwardRequest,
+  allowConditionalPut = false,
 ): S3Client {
   const profile: S3ProfileConfig = {
     endpoint: session.endpoint,
@@ -35,5 +36,5 @@ export function clientForSession(
     secretAccessKey: session.secretAccessKey,
     sessionToken: session.sessionToken,
   };
-  return s3ClientForProfile(profile, creds, { dispatch: pinnedDispatch(lookup, forward) });
+  return s3ClientForProfile(profile, creds, { dispatch: pinnedDispatch(lookup, forward), allowConditionalPut });
 }

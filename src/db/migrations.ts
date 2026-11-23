@@ -8,7 +8,7 @@ import schemaSql from './schema.sql?raw';
  * OPFS or IndexedDB and outlives every deploy, so an existing database has to be
  * upgraded in place — a fresh `schema.sql` only ever runs for a new vault.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /** The transaction handle PGlite hands the callback. */
 type Tx = Parameters<Parameters<PGlite['transaction']>[0]>[0];
@@ -119,6 +119,10 @@ export async function runMigrations(db: PGlite): Promise<void> {
     if (current < 6) {
       await tx.exec('ALTER TABLE transfer_tasks ADD COLUMN IF NOT EXISTS target_identity TEXT');
       await tx.exec('ALTER TABLE presigned_history ADD COLUMN IF NOT EXISTS target_identity TEXT');
+    }
+
+    if (current < 7) {
+      await tx.exec('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS verify_editor_writes BOOLEAN NOT NULL DEFAULT FALSE');
     }
 
     if (current !== SCHEMA_VERSION) {

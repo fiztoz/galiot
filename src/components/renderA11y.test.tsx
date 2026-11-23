@@ -260,6 +260,12 @@ describe('rendered dialog accessibility', () => {
     expect(pathStyle?.className).toContain('h-full w-full');
     expect(pathStyle?.labels?.[0]?.textContent).toContain('Path-style addressing');
 
+    const verifyEditor = el.querySelector<HTMLInputElement>('#conn-verify-editor-writes');
+    expect(verifyEditor?.type).toBe('checkbox');
+    expect(verifyEditor?.checked).toBe(false);
+    expect(verifyEditor?.labels?.[0]?.textContent).toContain('Verify editor saves automatically');
+    expect(verifyEditor?.labels?.[0]?.textContent).toContain('test object');
+
     const sessionTokenLabel = el.querySelector('label[for="conn-session-token"]');
     const sessionTokenInput = el.querySelector<HTMLInputElement>('#conn-session-token');
     expect(sessionTokenLabel?.textContent).toContain('Session Token');

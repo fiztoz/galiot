@@ -6,12 +6,17 @@
  * vault locks. Nothing here is written to disk.
  */
 
+import type { EditorWriteCheck } from './editorWriteProbe.ts';
+
+const EDITOR_WRITE_TTL_MS = 10 * 60 * 1000;
+const MAX_EDITOR_WRITE_PROBES = 4;
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const MEDIA_TTL_MS = 60 * 60 * 1000;
 const MAX_SESSIONS = 200;
 const MAX_MEDIA = 500;
 
 export interface SessionMaterial {
+  verifyEditorWrites?: boolean;
   endpoint: string;
   region: string;
   bucket: string;
@@ -35,6 +40,9 @@ export interface SessionView {
 
 interface SessionRecord {
   id: string;
+  verifyEditorWrites: boolean;
+  editorWriteResult?: { check: EditorWriteCheck; expiresAt: number };
+  editorWriteProbe?: { abort: AbortController; result: Promise<EditorWriteCheck> };
   endpoint: string;
   region: string;
   bucket: string;
@@ -99,6 +107,7 @@ export class SessionStore {
   private readonly issuer = newCapabilityId();
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private nextExpiry = Infinity;
+  private activeEditorWriteProbes = 0;
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -113,6 +122,7 @@ export class SessionStore {
     const expiresAt = this.now() + ttlMs;
     this.sessions.set(id, {
       id,
+      verifyEditorWrites: material.verifyEditorWrites === true,
       endpoint: material.endpoint,
       region: material.region,
       bucket: material.bucket,
@@ -148,9 +158,42 @@ export class SessionStore {
     };
   }
 
+  editorWriteCheck(id: string): EditorWriteCheck | undefined {
+    const record = this.sessions.get(id);
+    const result = record?.editorWriteResult;
+    const now = this.now();
+    return record && result && record.expiresAt > now && result.expiresAt > now ? result.check : undefined;
+  }
+
+  /** Dedupe by server session (target and credentials), and bound concurrent probes. */
+  startEditorWriteCheck(id: string, probe: (signal: AbortSignal) => Promise<EditorWriteCheck>): Promise<EditorWriteCheck | undefined> {
+    const record = this.sessions.get(id);
+    if (!record?.verifyEditorWrites || record.expiresAt <= this.now()) return Promise.resolve(undefined);
+    const cached = this.editorWriteCheck(id);
+    if (cached) return Promise.resolve(cached);
+    if (record.editorWriteProbe) return record.editorWriteProbe.result;
+    if (this.activeEditorWriteProbes >= MAX_EDITOR_WRITE_PROBES) {
+      return Promise.resolve({ verified: false, issue: 'Verification is busy. Reopen the editor to try again.' });
+    }
+    const abort = new AbortController();
+    this.activeEditorWriteProbes++;
+    const result = Promise.resolve().then(() => probe(abort.signal))
+      .catch((): EditorWriteCheck => ({ verified: false, issue: 'The verification test could not finish.' }))
+      .then(check => {
+        if (!abort.signal.aborted) record.editorWriteResult = { check, expiresAt: this.now() + EDITOR_WRITE_TTL_MS };
+        return check;
+      }).finally(() => {
+        record.editorWriteProbe = undefined;
+        this.activeEditorWriteProbes--;
+      });
+    record.editorWriteProbe = { abort, result };
+    return result;
+  }
+
   destroy(id: string): void {
     const record = this.sessions.get(id);
     if (!record) return;
+    record.editorWriteProbe?.abort.abort();
     wipe(record.accessKeyId);
     wipe(record.secretAccessKey);
     wipe(record.sessionToken);

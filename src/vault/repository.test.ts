@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { PGlite } from '@electric-sql/pglite';
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import { runMigrations } from '../db/migrations';
-import { updateConnection, type ConnectionUpdate } from './repository';
+import { createConnection, updateConnection, type ConnectionUpdate } from './repository';
 import { vaultService } from './vaultService';
-import { harvestFolderStats, loadListing } from '../db/objects';
+import { harvestFolderStats, loadListing, profileConfig } from '../db/objects';
 import type { AppDB, ConnectionRow } from '../db/client';
 
 /**
@@ -146,6 +146,21 @@ describe('updateConnection', () => {
     // lose their cached listing.
     const result = await update();
     expect(result.clearedCache).toBe(false);
+    expect(await cacheCount()).toBe(2);
+  });
+
+  test('stores opt-in locally and leaves listings intact when toggled', async () => {
+    const newId = await withEncrypted(() => createConnection(appDb, {
+      name: 'Opted in', endpoint: 'https://s3.example.com', region: 'us-east-1', bucket: 'my-bucket',
+      pathStyle: false, accessKeyId: 'fixture', secretAccessKey: 'fixture', verifyEditorWrites: true,
+    }));
+    const stored = async (key: string) => (await db.query<ConnectionRow>('SELECT * FROM profiles WHERE id = $1', [key])).rows[0]!;
+    expect(profileConfig(await stored(newId)).verifyEditorWrites).toBe(true);
+    expect(profileConfig(await stored(id)).verifyEditorWrites).toBe(false);
+    expect((await update({ verifyEditorWrites: true })).clearedCache).toBe(false);
+    expect(profileConfig(await stored(id)).verifyEditorWrites).toBe(true);
+    expect((await update({ verifyEditorWrites: false })).clearedCache).toBe(false);
+    expect(profileConfig(await stored(id)).verifyEditorWrites).toBe(false);
     expect(await cacheCount()).toBe(2);
   });
 

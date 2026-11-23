@@ -56,6 +56,7 @@ interface FormState {
   secretAccessKey: string;
   sessionToken: string;
   pathStyle: boolean;
+  verifyEditorWrites: boolean;
   /** Extra request headers, as editable rows. Validated on save and on test. */
   headers: HeaderDraft[];
 }
@@ -70,6 +71,7 @@ const EMPTY_FORM: FormState = {
   secretAccessKey: '',
   sessionToken: '',
   pathStyle: PRESETS.pathStyle,
+  verifyEditorWrites: false,
   headers: [],
 };
 
@@ -106,6 +108,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
             secretAccessKey: '',
             sessionToken: '',
             pathStyle: editing.path_style,
+            verifyEditorWrites: editing.verify_editor_writes === true,
             // Read through the same screening the request path uses, so a row
             // written before a rule existed is not shown back as editable.
             headers: Object.entries(parseStoredHeaders(editing.custom_headers)).map(
@@ -365,6 +368,7 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
           bucket: form.bucket.trim(),
           pathStyle: form.pathStyle,
           customHeaders: check.headers,
+          verifyEditorWrites: form.verifyEditorWrites,
         };
 
         if (isEdit && editing) {
@@ -605,6 +609,18 @@ export function ConnectionDialog({ db, open, onClose, editing, draft, onSaved }:
               />
             </div>
           </details>
+
+          <Checkbox
+            id="conn-verify-editor-writes"
+            checked={form.verifyEditorWrites}
+            onChange={(checked) => setField('verifyEditorWrites', checked)}
+          >
+            Verify editor saves automatically
+            <span className="block text-zinc-500 dark:text-zinc-400">
+              If needed, Galiot creates and removes a tiny test object when you open this bucket.
+              Versioning or retention can leave test data behind.
+            </span>
+          </Checkbox>
 
           {error && (
             <div role="alert" className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg border border-red-100 dark:border-red-900/30">

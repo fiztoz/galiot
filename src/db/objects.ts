@@ -16,6 +16,7 @@ export function profileConfig(profile: ConnectionRow): S3ProfileConfig {
     region: profile.region,
     bucket: profile.bucket,
     pathStyle: profile.path_style,
+    verifyEditorWrites: profile.verify_editor_writes === true,
     // Re-screened on the way out of the database, not just on the way in: the
     // column is cleartext and outlives upgrades, so a rule added later still has
     // to hold for rows written before it existed.
@@ -37,14 +38,15 @@ interface ListingSnapshot {
  * credentials with the endpoint and bucket this view still shows.
  */
 export async function listingCredentials(db: Pick<AppDB, 'query'>, profile: ConnectionRow): Promise<EncryptedPayload> {
-  const { rows } = await db.query<{ encrypted_credentials: EncryptedPayload | string; custom_headers: unknown }>(
-    `SELECT encrypted_credentials, custom_headers FROM profiles
+  const { rows } = await db.query<{ encrypted_credentials: EncryptedPayload | string; custom_headers: unknown; verify_editor_writes?: boolean }>(
+    `SELECT encrypted_credentials, custom_headers, verify_editor_writes FROM profiles
       WHERE id = $1 AND bucket = $2 AND endpoint = $3 AND region = $4 AND path_style = $5
         AND date_trunc('milliseconds', updated_at) = $6`,
     [profile.id, profile.bucket, profile.endpoint, profile.region, profile.path_style, new Date(profile.updated_at).toISOString()],
   );
   const row = rows[0];
-  if (!row || JSON.stringify(parseStoredHeaders(row.custom_headers)) !== JSON.stringify(parseStoredHeaders(profile.custom_headers))) {
+  if (!row || (row.verify_editor_writes === true) !== (profile.verify_editor_writes === true) ||
+      JSON.stringify(parseStoredHeaders(row.custom_headers)) !== JSON.stringify(parseStoredHeaders(profile.custom_headers))) {
     throw new Error('This connection was changed in another tab. Refresh to use the current settings.');
   }
   return typeof row.encrypted_credentials === 'string' ? JSON.parse(row.encrypted_credentials) : row.encrypted_credentials;

@@ -70,7 +70,7 @@ describe('schema migrations', () => {
     expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION));
     // Pinned so bumping the schema is a deliberate, reviewed edit: a new version
     // needs a migration step for every vault already in the field.
-    expect(SCHEMA_VERSION).toBe(6);
+    expect(SCHEMA_VERSION).toBe(7);
 
     const tables = await db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
@@ -252,6 +252,22 @@ describe('schema migrations', () => {
     expect(version.rows[0]?.value).toBe(String(SCHEMA_VERSION));
 
     await db.close();
+  });
+
+  test('v6 profiles are not opted in to editor verification after migration', async () => {
+    const db = await freshDb();
+    try {
+      await runMigrations(db);
+      await db.exec(`ALTER TABLE profiles DROP COLUMN verify_editor_writes;
+        UPDATE _meta SET value = '6' WHERE key = 'schema_version';
+        INSERT INTO profiles (id, name, protocol, endpoint, region, bucket, encrypted_credentials)
+        VALUES (gen_random_uuid(), 'existing', 's3', 'https://s3.example.com', 'us-east-1', 'example-bucket', '{}');`);
+      await runMigrations(db);
+      const rows = await db.query<{ verify_editor_writes: boolean }>('SELECT verify_editor_writes FROM profiles');
+      expect(rows.rows).toEqual([{ verify_editor_writes: false }]);
+    } finally {
+      await db.close();
+    }
   });
 
   test('vault meta upsert used by createVault persists and overwrites', async () => {

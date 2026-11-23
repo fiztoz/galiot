@@ -136,7 +136,7 @@ function forgetSession(id: string, token: string | undefined): void {
 async function cachedSession(profile: S3ProfileConfig, creds: SessionCredentials, stale?: string): Promise<string> {
   if (!creds.identity) return trackedSession(profile, creds);
   const key = JSON.stringify([profile.endpoint, profile.region, profile.bucket, profile.pathStyle,
-    Object.entries(profile.headers ?? {}).sort(), profile.proxyToken ?? null, creds.identity]);
+    Object.entries(profile.headers ?? {}).sort(), profile.verifyEditorWrites === true, profile.proxyToken ?? null, creds.identity]);
   const hit = sessionCache.get(key);
   if (hit && hit.owner === creds.owner) {
     const id = await hit.id.catch(() => undefined);
@@ -410,14 +410,21 @@ async function dispatch<M extends VaultMethod>(
       }
 
       const decoded = await readEditorText(res, maxBytes);
-      const { conditionalPut } = await client.editorWriteSupport();
-      return { ...decoded, conditionalPut };
+      const { conditionalPut, issue } = await client.editorWriteSupport();
+      return { ...decoded, conditionalPut, editorWriteIssue: issue };
     }
 
     case 's3.putText': {
       const p = params as NonNullable<VaultRequest<'s3.putText'>['params']>;
       const creds = await resolveCredentials(p.credentials);
       const client = await sessionClient(p.profile, creds);
+      // The server session or its proof can expire while the draft is open.
+      if (p.profile.verifyEditorWrites) {
+        const support = await client.editorWriteSupport();
+        if (!support.conditionalPut) {
+          throw new Error(`${support.issue ?? 'Conditional writes are not verified for this bucket.'} Your draft is still open.`);
+        }
+      }
       const result = await client.putTextIfMatch(p.key, p.body, p.contentType, p.eTag);
       return { eTag: result.eTag };
     }

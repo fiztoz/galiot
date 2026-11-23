@@ -114,6 +114,7 @@ export async function openServerSession(
         region: profile.region,
         bucket: profile.bucket,
         pathStyle: profile.pathStyle,
+        verifyEditorWrites: profile.verifyEditorWrites === true,
         headers: profile.headers,
         accessKeyId: creds.accessKeyId,
         secretAccessKey: creds.secretAccessKey,
@@ -253,7 +254,7 @@ export class RemoteS3 {
     });
   }
 
-  editorWriteSupport(): Promise<{ conditionalPut: boolean }> {
+  editorWriteSupport(): Promise<{ conditionalPut: boolean; issue?: string }> {
     return this.call('editorWriteSupport', {});
   }
 

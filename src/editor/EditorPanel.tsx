@@ -295,7 +295,9 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
         currentTextRef.current = result.text;
         setMedia(mediaKind(filename, result.contentType));
         setLangSupport(support);
-        if (!result.conditionalPut) setNotice('Read only — conditional writes have not been verified for this bucket.');
+        if (!result.conditionalPut) {
+          setNotice(`Read only — ${result.editorWriteIssue ?? 'conditional writes have not been verified for this bucket.'}`);
+        }
         else if (!isStrongETag(result.eTag)) setNotice('Read only — the provider did not return a strong ETag.');
       } catch (err) {
         if (active) setError(err instanceof Error ? err.message : String(err));
@@ -384,7 +386,9 @@ export function EditorPanel({ db, profile, file, onClose, onSaved }: EditorPanel
     setSaving(true);
     try {
       const result = await readRemote();
-      if (!result.conditionalPut) throw new Error('Conditional writes are unavailable for this bucket. Your draft is still open.');
+      if (!result.conditionalPut) {
+        throw new Error(`${result.editorWriteIssue ?? 'Conditional writes are unavailable for this bucket.'} Your draft is still open.`);
+      }
       if (!isStrongETag(result.eTag)) throw new Error('The latest version has no strong ETag. Your draft is still open.');
       setOriginal(result.text);
       setContentType(result.contentType);

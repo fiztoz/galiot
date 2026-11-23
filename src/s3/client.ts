@@ -32,6 +32,8 @@ export interface S3ClientOptions {
    * The browser does not set this.
    */
   dispatch?: S3Dispatch;
+  /** Server-only: allow conditional PUT for a verified session or its isolated probe. */
+  allowConditionalPut?: boolean;
 }
 
 /** Receives an already-signed request. The server pins DNS before connecting. */
@@ -273,7 +275,7 @@ async function confirmedETag(res: Response, operation: string, root: string): Pr
 export function s3ClientForProfile(
   profile: S3ProfileConfig,
   creds: CredentialPlaintext,
-  options?: { direct?: boolean; dispatch?: S3Dispatch },
+  options?: Pick<S3ClientOptions, 'direct' | 'dispatch' | 'allowConditionalPut'>,
 ): S3Client {
   return new S3Client({
     endpoint: profile.endpoint,
@@ -287,6 +289,7 @@ export function s3ClientForProfile(
     proxyToken: profile.proxyToken,
     direct: options?.direct,
     dispatch: options?.dispatch,
+    allowConditionalPut: options?.allowConditionalPut,
   });
 }
 
@@ -298,6 +301,7 @@ export class S3Client {
   private customHeaders: Record<string, string>;
   private direct: boolean;
   private dispatch?: S3Dispatch;
+  private readonly allowConditionalPut: boolean;
   /** Set once a gateway proves it only speaks ListObjects v1; pages stay on v1. */
   private listV1 = false;
 
@@ -315,6 +319,7 @@ export class S3Client {
     this.customHeaders = options.headers ?? {};
     this.direct = options.direct === true;
     this.dispatch = options.dispatch;
+    this.allowConditionalPut = options.allowConditionalPut === true;
   }
 
   /** Signed request, used by the server for operations that stream a body. */
@@ -331,6 +336,7 @@ export class S3Client {
   public supportsCondition(operation: 'put' | 'copy' | 'move'): boolean {
     // A custom header can select another tenant or backing service at this URL.
     if (Object.keys(this.customHeaders).length) return false;
+    if (operation === 'put' && this.allowConditionalPut) return true;
     try {
       const endpoint = new URL(this.endpoint);
       const standardHost = /^(?:s3\.amazonaws\.com|s3(?:-fips)?\.(?:dualstack\.)?(?:us(?:-gov)?|af|ap|ca|eu|il|me|mx|sa)-[a-z]+-\d+\.amazonaws\.com|s3\.(?:dualstack\.)?cn-[a-z]+-\d+\.amazonaws\.com\.cn)$/;

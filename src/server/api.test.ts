@@ -159,6 +159,120 @@ const LIST_TWO =
   '<Contents><Key>a/y.txt</Key><Size>2</Size></Contents>' +
   '</ListBucketResult>';
 
+describe('automatic editor verification', () => {
+  function gateway(mode: 'enforce' | 'ignore' | 'reject-all' | 'deny-cleanup', bodyGate = Promise.resolve()) {
+    const writes: { path: string; ifMatch: string | null; ifNoneMatch: string | null; length: string | null }[] = [];
+    const deletes: { path: string; versionId: string | null }[] = [];
+    const versions = new Map<string, { text: string; eTag: string }>();
+    let revision = 0;
+    const forward: NonNullable<Parameters<typeof handleAppRequest>[1]['forward']> = async (url, _addresses, request, headers) => {
+      if (url.searchParams.has('list-type')) return new Response(LIST_TWO);
+      const probe = url.pathname.startsWith('/staging-bucket/.galiot-editor-check/');
+      if (!probe) {
+        if (request.method === 'PUT' && headers.get('if-match') === '"user-revision"') return new Response(null, { status: 200 });
+        throw new Error('Unexpected upstream request');
+      }
+      const latest = [...versions.values()].at(-1);
+      if (request.method === 'GET') {
+        return latest ? new Response(latest.text, { headers: { etag: latest.eTag } }) : new Response(null, { status: 404 });
+      }
+      if (request.method === 'DELETE') {
+        const versionId = url.searchParams.get('versionId');
+        deletes.push({ path: url.pathname, versionId });
+        if (mode === 'deny-cleanup') return new Response(null, { status: 403 });
+        if (!versionId || !versions.delete(versionId)) return new Response(null, { status: 400 });
+        return new Response(null, { status: 204 });
+      }
+      const ifMatch = headers.get('if-match');
+      writes.push({ path: url.pathname, ifMatch, ifNoneMatch: headers.get('if-none-match'), length: headers.get('content-length') });
+      await bodyGate;
+      if (ifMatch && mode !== 'ignore' && (mode === 'reject-all' || ifMatch !== latest?.eTag)) {
+        return new Response(null, { status: 412 });
+      }
+      const versionId = `version-${++revision}`;
+      versions.set(versionId, { text: await request.text(), eTag: `"${versionId}"` });
+      return new Response(null, { headers: { 'x-amz-version-id': versionId } });
+    };
+    return { forward, writes, deletes, versions };
+  }
+
+  async function editorSession(options: Parameters<typeof handleAppRequest>[1], extra: Record<string, unknown> = {}) {
+    const response = await open(options, sessionBody({ bucket: 'staging-bucket', verifyEditorWrites: true, ...extra }));
+    const { result } = await response.json() as { result: { sessionId: string } };
+    return result.sessionId;
+  }
+
+  async function support(id: string, options: Parameters<typeof handleAppRequest>[1]) {
+    const response = await handleAppRequest(callRequest(id, { op: 'editorWriteSupport' }), options);
+    return (await response.json() as { result: { conditionalPut: boolean; issue?: string } }).result;
+  }
+
+  function save(id: string, options: Parameters<typeof handleAppRequest>[1]) {
+    return handleAppRequest(new Request(`http://localhost/api/s3/sessions/${id}/object?key=accounting.txt`, {
+      method: 'PUT', body: 'new content',
+      headers: { 'content-length': '11', 'if-match': '"user-revision"', 'x-galiot-access-token': GATE },
+    }), options);
+  }
+
+  test('starts after listing without blocking it; one server-side proof enables only that session’s saves', async () => {
+    const resume = Promise.withResolvers<void>();
+    const fake = gateway('enforce', resume.promise);
+    let now = Date.now();
+    const options = { expectedToken: GATE, sessions: new SessionStore(() => now), lookup: LOOKUP, forward: fake.forward };
+    const id = await editorSession(options);
+    expect(fake.writes).toHaveLength(0);
+    try {
+      const listed = await handleAppRequest(callRequest(id, { op: 'list' }), options);
+      expect((await listed.json()).ok).toBe(true);
+      expect((await save(id, options)).status).toBe(501);
+    } finally {
+      resume.resolve();
+    }
+    expect(await Promise.all([support(id, options), support(id, options)])).toEqual([{ conditionalPut: true }, { conditionalPut: true }]);
+    expect(fake.writes).toHaveLength(3);
+    expect(fake.writes[0]).toMatchObject({ ifNoneMatch: '*', ifMatch: null });
+    expect(Number(fake.writes[0]?.length)).toBeGreaterThan(0);
+    expect(fake.writes[1]?.ifMatch).not.toBe(fake.writes[2]?.ifMatch);
+    expect(fake.writes[2]?.ifMatch).toBe('"version-1"');
+    const key = fake.writes[0]?.path ?? '';
+    expect(key).toStartWith('/staging-bucket/.galiot-editor-check/');
+    expect(new Set(fake.writes.map(write => write.path))).toEqual(new Set([key]));
+    expect(fake.deletes).toEqual([{ path: key, versionId: 'version-1' }, { path: key, versionId: 'version-2' }]);
+    expect(fake.versions.size).toBe(0);
+    expect((await save(id, options)).status).toBe(200);
+    const other = await editorSession(options, { verifyEditorWrites: false, conditionalPut: true });
+    expect((await handleAppRequest(callRequest(other, { op: 'list' }), options)).status).toBe(200);
+    expect((await support(other, options)).conditionalPut).toBe(false);
+    expect((await save(other, options)).status).toBe(501);
+    expect(fake.writes).toHaveLength(3);
+
+    now += 10 * 60_000;
+    expect((await save(id, options)).status).toBe(501);
+    expect((await support(id, options)).conditionalPut).toBe(true);
+    expect(fake.writes).toHaveLength(6);
+    expect(fake.writes[3]?.path).not.toBe(key);
+    options.sessions.destroy(id);
+    expect((await save(id, options)).status).toBe(404);
+  });
+
+  for (const [mode, message] of [
+    ['ignore', 'mismatched ETag'], ['reject-all', 'current ETag'], ['deny-cleanup', '.galiot-editor-check/'],
+  ] as const) {
+    test(`keeps the editor read-only when the gateway responds with ${mode}`, async () => {
+      const fake = gateway(mode);
+      const options = { expectedToken: GATE, sessions: new SessionStore(), lookup: LOOKUP, forward: fake.forward };
+      const id = await editorSession(options);
+      const first = await support(id, options);
+      expect(first.conditionalPut).toBe(false);
+      expect(first.issue).toContain(message);
+      expect(await support(id, options)).toEqual(first);
+      expect((await save(id, options)).status).toBe(501);
+      expect(fake.writes).toHaveLength(mode === 'ignore' ? 2 : 3);
+      expect(fake.versions.size).toBe(mode === 'deny-cleanup' ? 2 : 0);
+    });
+  }
+});
+
 describe('server-side file operations', () => {
   let previousConditions: string | undefined;
   beforeEach(() => {

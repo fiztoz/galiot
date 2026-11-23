@@ -10,6 +10,7 @@ import { S3RequestError, type PartInfo, type ProbeResult } from '../s3/client.ts
 import { isStrongETag } from '../s3/clientHeaders.ts';
 import { xmlBlocks, xmlFirst } from '../s3/xml.ts';
 import { clientForSession } from './engine.ts';
+import { probeEditorWrites } from './editorWriteProbe.ts';
 import {
   S3_ACCESS_TOKEN_HEADER,
   S3_API_PREFIX,
@@ -228,8 +229,8 @@ const INLINE_TYPES = new Set([
   'video/ogg', 'video/quicktime',
 ]);
 
-function client(session: SessionView, options: AppApiOptions) {
-  return clientForSession(session, options.lookup, options.forward ?? forwardRequest);
+function client(session: SessionView, options: AppApiOptions, allowConditionalPut = false) {
+  return clientForSession(session, options.lookup, options.forward ?? forwardRequest, allowConditionalPut);
 }
 
 function signer(session: SessionView): AwsClient {
@@ -298,17 +299,25 @@ async function handleCall(
 ): Promise<Response> {
   const op = asString(body.op, 64);
   const s3 = client(session, options);
+  const verify = () => sessions.startEditorWriteCheck(sessionId, (signal) => {
+    if (Object.keys(session.headers).length) {
+      return Promise.resolve({ verified: false, issue: 'Automatic verification is unavailable for connections with custom request headers.' });
+    }
+    // Only the isolated probe may send an unverified If-Match. It generates
+    // its own key and never receives a caller-supplied object key.
+    return probeEditorWrites(client(session, options, true), signal);
+  });
   try {
     switch (op) {
-      case 'list':
-        return json({
-          ok: true,
-          result: await s3.listObjects(asString(body.prefix, 1024), {
-            delimiter: asString(body.delimiter, 8),
-            maxKeys: typeof body.maxKeys === 'number' ? body.maxKeys : undefined,
-            continuationToken: asString(body.continuationToken, 4096),
-          }),
-        }, 200);
+      case 'list': {
+        const result = await s3.listObjects(asString(body.prefix, 1024), {
+          delimiter: asString(body.delimiter, 8),
+          maxKeys: typeof body.maxKeys === 'number' ? body.maxKeys : undefined,
+          continuationToken: asString(body.continuationToken, 4096),
+        });
+        if (!s3.supportsCondition('put')) void verify();
+        return json({ ok: true, result }, 200);
+      }
       case 'delete': {
         const keys = body.keys;
         if (!Array.isArray(keys) || !keys.every((key): key is string =>
@@ -380,8 +389,10 @@ async function handleCall(
       }
       case 'head':
         return json({ ok: true, result: await s3.headObject(requireString(body.key, 'key', 1024)) }, 200);
-      case 'editorWriteSupport':
-        return json({ ok: true, result: { conditionalPut: s3.supportsCondition('put') } }, 200);
+      case 'editorWriteSupport': {
+        const check = s3.supportsCondition('put') ? { verified: true } : await verify();
+        return json({ ok: true, result: { conditionalPut: check?.verified === true, issue: check?.issue } }, 200);
+      }
       case 'listVersions':
         return json({ ok: true, result: await s3.listVersions(requireString(body.key, 'key', 1024)) }, 200);
       case 'deleteVersion':
@@ -634,6 +645,7 @@ function sessionMaterial(body: Record<string, unknown>): { ok: true; material: P
       region,
       bucket,
       pathStyle: body.pathStyle === true,
+      verifyEditorWrites: body.verifyEditorWrites === true,
       headers: parseStoredHeaders(body.headers),
       accessKeyId,
       secretAccessKey,
@@ -844,7 +856,7 @@ export async function handleAppRequest(request: Request, options: AppApiOptions)
         };
         const type = request.headers.get('content-type');
         if (type) headers['content-type'] = type;
-        const s3 = client(session, options);
+        const s3 = client(session, options, sessions.editorWriteCheck(sessionId)?.verified === true);
         const ifMatch = request.headers.get('if-match');
         if (ifMatch !== null) {
           if (!isStrongETag(ifMatch)) return json({ ok: false, error: 'A single strong ETag is required.' }, 400);

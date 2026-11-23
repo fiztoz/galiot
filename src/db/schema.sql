@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     -- design: credential-looking names are refused at the door (see
     -- src/s3/customHeaders.ts), so nothing secret should land here.
     custom_headers JSONB,
+    verify_editor_writes BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

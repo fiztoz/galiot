@@ -32,6 +32,8 @@ export interface S3ProfileConfig {
   region: string;
   bucket: string;
   pathStyle: boolean;
+  /** Opt into server-side verification using a temporary object. */
+  verifyEditorWrites?: boolean;
   /**
    * Extra headers to send on every signed request to this connection. Names are
    * already lowercased and screened by `src/s3/customHeaders.ts`.
@@ -258,7 +260,10 @@ export type VaultResults = {
   's3.list': ListObjectsResult;
   's3.delete': { deleted: string[]; errors: { key: string; code: string; message: string }[] };
   's3.folderStats': FolderStatsResult;
-  's3.getText': { text: string; size: number; contentType: string | null; eTag: string | null; conditionalPut: boolean };
+  's3.getText': {
+    text: string; size: number; contentType: string | null; eTag: string | null;
+    conditionalPut: boolean; editorWriteIssue?: string;
+  };
   's3.putText': { eTag: string };
   's3.presignGet': PresignResult;
   's3.presignPut': PresignResult;

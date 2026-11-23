@@ -57,7 +57,9 @@ needed, because only this machine can reach the listener.
 
 Standard AWS S3 general-purpose buckets on HTTPS service endpoints support saving with the ETag read by the editor and moving with conditional source deletion. [AWS S3 endpoints](https://docs.aws.amazon.com/general/latest/gr/s3.html) · [Conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html) · [DeleteObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html)
 
-For a private gateway, enable each operation after verifying that a stale ETag is rejected and the original object survives. The server-path integration suite in section 7 checks this on temporary keys. By default the editor opens read-only and a move stops before copying. Ordinary copy remains available.
+For a private gateway, turn on **Verify editor saves automatically** when adding or editing a connection. Galiot stores this preference in the local vault database. On a successful bucket listing, the server starts a background check on one random object under `.galiot-editor-check/`. It verifies that PutObject rejects a mismatched ETag, accepts a matching ETag, and returns the expected data, then removes the test object and any versions the gateway reports. It needs permission to create, read, and delete the test object (including its versions if applicable). Retention, versioning, or a dropped connection can leave test data behind. Failed checks leave the editor read-only. Results are cached for ten minutes in the server session; vault lock, session expiration, and server restart discard them. The preference is local and is not transferred when sharing or importing a connection.
+
+The automatic test covers editor saves only. Operators can still certify each operation manually after verifying that a stale ETag is rejected and the original object survives. The server-path integration suite in section 7 checks this on temporary keys. By default a move stops before copying. Ordinary copy remains available.
 
 ```bash
 export GALIOT_S3_CONDITIONS='{"https://s3.example.com/archive/":["put","move"]}'

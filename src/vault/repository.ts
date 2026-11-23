@@ -150,6 +150,7 @@ export interface ConnectionInput {
   region: string;
   bucket: string;
   pathStyle: boolean;
+  verifyEditorWrites?: boolean;
   accessKeyId: string;
   secretAccessKey: string;
   sessionToken?: string;
@@ -183,8 +184,8 @@ export async function createConnection(db: AppDB, input: ConnectionInput): Promi
     await requireGeneration(tx, generation);
     await tx.query(
       `INSERT INTO profiles
-         (id, name, protocol, endpoint, region, bucket, path_style, network, encrypted_credentials, custom_headers, created_at, updated_at)
-       VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+         (id, name, protocol, endpoint, region, bucket, path_style, network, encrypted_credentials, custom_headers, verify_editor_writes, created_at, updated_at)
+       VALUES ($1, $2, 's3', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         id,
         input.name,
@@ -195,6 +196,7 @@ export async function createConnection(db: AppDB, input: ConnectionInput): Promi
         'server',
         JSON.stringify(payload),
         headersColumnValue(headers),
+        input.verifyEditorWrites === true,
         now,
         now,
       ],
@@ -226,6 +228,7 @@ export interface ConnectionUpdate {
   region: string;
   bucket: string;
   pathStyle: boolean;
+  verifyEditorWrites?: boolean;
   /**
    * New credentials. Omit to keep the sealed ones already in the vault, which
    * is what lets a user rename or re-point a connection without retyping keys
@@ -308,8 +311,9 @@ export async function updateConnection(
       await tx.query(
         `UPDATE profiles
             SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5,
-                network = $6, encrypted_credentials = $7, custom_headers = $8, updated_at = $9
-          WHERE id = $10`,
+                network = $6, encrypted_credentials = $7, custom_headers = $8,
+                verify_editor_writes = COALESCE($9, verify_editor_writes), updated_at = $10
+          WHERE id = $11`,
         [
           input.name,
           input.endpoint,
@@ -319,6 +323,7 @@ export async function updateConnection(
           nextNetwork,
           JSON.stringify(sealed.payload),
           headersJson,
+          input.verifyEditorWrites ?? null,
           now,
           id,
         ],
@@ -327,8 +332,9 @@ export async function updateConnection(
       await tx.query(
         `UPDATE profiles
             SET name = $1, endpoint = $2, region = $3, bucket = $4, path_style = $5,
-                network = $6, custom_headers = $7, updated_at = $8
-          WHERE id = $9`,
+                network = $6, custom_headers = $7,
+                verify_editor_writes = COALESCE($8, verify_editor_writes), updated_at = $9
+          WHERE id = $10`,
         [
           input.name,
           input.endpoint,
@@ -337,6 +343,7 @@ export async function updateConnection(
           input.pathStyle,
           nextNetwork,
           headersJson,
+          input.verifyEditorWrites ?? null,
           now,
           id,
         ],
