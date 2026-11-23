@@ -52,10 +52,10 @@ jobs:
           set -euo pipefail
           app_version="$(helm show chart deploy/helm/galiot | awk '$1 == "appVersion:" { print $2 }' | tr -d '"')"
           token="$(curl -sf 'https://ghcr.io/token?scope=repository:fiztoz/galiot:pull' | jq -r .token)"
-          curl -sf -o /dev/null -H "Authorization: Bearer $token" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+          curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
             "https://ghcr.io/v2/fiztoz/galiot/manifests/${app_version}" \
-            || { echo "::error::image ghcr.io/fiztoz/galiot:${app_version} is not published yet"; exit 1; }
+            || { echo "::error::could not verify image ghcr.io/fiztoz/galiot:${app_version} in GHCR"; exit 1; }
 
       - name: Package and push to GHCR (OCI)
         env:

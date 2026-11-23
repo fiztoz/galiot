@@ -94,6 +94,17 @@ describe('release configuration', () => {
     expect(checkout?.with?.['persist-credentials']).toBe(false);
   });
 
+  test('chart publishing accepts single-image OCI manifests as well as image indexes', () => {
+    const release = Bun.YAML.parse(read('.github', 'workflows', 'chart-release.yml')) as {
+      jobs: { chart: { steps: { name?: string; run?: string }[] } };
+    };
+    const check = release.jobs.chart.steps.find(step => step.name === 'appVersion image must already exist');
+    expect(check?.run).toContain('application/vnd.oci.image.manifest.v1+json');
+    expect(check?.run).toContain('application/vnd.oci.image.index.v1+json');
+    expect(check?.run).toContain('application/vnd.docker.distribution.manifest.v2+json');
+    expect(check?.run).toContain('application/vnd.docker.distribution.manifest.list.v2+json');
+  });
+
   test('the Docker context denies unlisted files, including private files under public/', () => {
     const rules = read('.dockerignore').split(/\r?\n/).map(line => line.trim())
       .filter(line => line && !line.startsWith('#'));
