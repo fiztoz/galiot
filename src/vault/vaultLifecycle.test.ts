@@ -17,6 +17,14 @@ let app: AppDB;
 let navigatorDescriptor: PropertyDescriptor | undefined;
 let removedStaging: string[] = [];
 
+// Await the RPC before calling Bun's matcher. Its promise matcher can block
+// delivery of the worker response the rejected operation is still waiting for.
+async function expectFailure(operation: Promise<unknown>, message?: string): Promise<void> {
+  const error = await operation.catch((reason: unknown) => reason);
+  expect(error).toBeInstanceOf(Error);
+  if (message) expect((error as Error).message).toContain(message);
+}
+
 beforeEach(async () => {
   navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   removedStaging = [];
@@ -63,10 +71,10 @@ test('two setup attempts leave one usable key; restore rejects stale writers and
   await restoreVerifiedBackup(app, pending);
   expect((await vaultService.call('vault.status')).unlocked).toBe(false);
   expect((await readVaultMeta(app))?.generation).not.toBe(old!.generation);
-  await expect(insertSealedConnections(app, [{
+  await expectFailure(insertSealedConnections(app, [{
     id: crypto.randomUUID(), name: 'stale', endpoint: 'https://s3.example.com', region: 'region',
     bucket: 'archive', pathStyle: true, storageClass: null, encryptedCredentials: { iv: '', ciphertext: '' },
-  }], old!.generation)).rejects.toThrow('Vault changed');
+  }], old!.generation), 'Vault changed');
   expect((await db.query('SELECT id FROM profiles')).rows).toHaveLength(0);
   await unlockVault(app, replacementPassword);
   expect((await vaultService.call('vault.status')).unlocked).toBe(true);
@@ -99,10 +107,10 @@ test('locked reset requires the exact confirmation and cannot clear a newer vaul
     pathStyle: true, accessKeyId: 'fixture-id', secretAccessKey: 'fixture-key',
   });
   const original = (await readVaultMeta(app))!;
-  await expect(resetLockedVault(app, original.generation, START_OVER_PHRASE)).rejects.toThrow('unlocked');
+  await expectFailure(resetLockedVault(app, original.generation, START_OVER_PHRASE), 'unlocked');
   await lockVault();
-  await expect(resetLockedVault(app, original.generation, 'start over')).rejects.toThrow('exactly');
-  await expect(resetLockedVault(app, crypto.randomUUID(), START_OVER_PHRASE)).rejects.toThrow('Vault changed');
+  await expectFailure(resetLockedVault(app, original.generation, 'start over'), 'exactly');
+  await expectFailure(resetLockedVault(app, crypto.randomUUID(), START_OVER_PHRASE), 'Vault changed');
   expect(removedStaging).toEqual([]);
   expect((await db.query('SELECT id FROM profiles')).rows).toHaveLength(1);
   await resetLockedVault(app, original.generation, START_OVER_PHRASE);
@@ -118,7 +126,7 @@ test('a locked backup can be verified without modifying local state, and replace
   const file = new File([blob], 'backup.json');
   const initial = (await readVaultMeta(app))!;
   await lockVault();
-  await expect(prepareLockedVaultRestore(app, initial.generation, file, 'wrong fixture phrase')).rejects.toThrow();
+  await expectFailure(prepareLockedVaultRestore(app, initial.generation, file, 'wrong fixture phrase'));
   expect(await readVaultMeta(app)).toEqual(initial);
   expect(removedStaging).toEqual([]);
   const pending = await prepareLockedVaultRestore(app, initial.generation, file, phrase);
@@ -127,7 +135,7 @@ test('a locked backup can be verified without modifying local state, and replace
   await restoreLockedVaultBackup(app, pending);
   expect(removedStaging).toEqual(['galiot-transfers']);
   expect((await readVaultMeta(app))?.generation).not.toBe(initial.generation);
-  await expect(restoreLockedVaultBackup(app, pending)).rejects.toThrow('Vault changed');
+  await expectFailure(restoreLockedVaultBackup(app, pending), 'Vault changed');
   await unlockVault(app, phrase);
   expect(await readVaultState(app)).toBe('unlocked');
 });
@@ -157,10 +165,10 @@ test('passkey enrollment and password replacement preserve the same vault key in
   } });
   try {
     const candidate = await createVaultPasskey();
-    await expect(enableVaultPasskey(app, generation, candidate, phrase)).rejects.toThrow('could not unlock encrypted data');
+    await expectFailure(enableVaultPasskey(app, generation, candidate, phrase), 'could not unlock encrypted data');
     expect(await readPasskeyEnrollment(app)).toBeNull();
     prfByte = 44;
-    await expect(enableVaultPasskey(app, generation, candidate, 'wrong fixture phrase')).rejects.toThrow('current master password');
+    await expectFailure(enableVaultPasskey(app, generation, candidate, 'wrong fixture phrase'), 'current master password');
     expect(await readPasskeyEnrollment(app)).toBeNull();
     await enableVaultPasskey(app, generation, candidate, phrase);
     expect(returnedOutput?.byteLength).toBe(0);
@@ -174,26 +182,26 @@ test('passkey enrollment and password replacement preserve the same vault key in
     });
     await lockVault();
     prfByte = 45;
-    await expect(unlockVaultWithPasskey(app, entry)).rejects.toThrow('could not unlock');
+    await expectFailure(unlockVaultWithPasskey(app, entry), 'could not unlock');
     expect(await readVaultState(app)).toBe('unlock');
     prfByte = 44;
     await unlockVaultWithPasskey(app, entry);
     const backup = new File([await exportVault(app)], 'still-usable.json');
     await resetMasterPasswordWithPasskey(app, entry, nextPhrase);
     expect(await readVaultState(app)).toBe('unlock');
-    await expect(unlockVaultWithPasskey(app, entry)).rejects.toThrow('Vault changed');
-    await expect(unlockVault(app, phrase)).rejects.toThrow('Invalid passphrase');
+    await expectFailure(unlockVaultWithPasskey(app, entry), 'Vault changed');
+    await expectFailure(unlockVault(app, phrase), 'Invalid passphrase');
     await unlockVault(app, nextPhrase);
     expect((await db.query('SELECT name FROM profiles')).rows).toEqual([{ name: 'retained connection' }]);
     expect((await prepareVaultRestore(backup, phrase)).backup.profiles).toHaveLength(1);
     const updated = (await readPasskeyEnrollment(app))!;
-    await expect(removeVaultPasskey(app, updated, phrase)).rejects.toThrow('current master password');
+    await expectFailure(removeVaultPasskey(app, updated, phrase), 'current master password');
     await lockVault();
     await unlockVaultWithPasskey(app, updated);
     await removeVaultPasskey(app, updated, nextPhrase);
     expect(await readPasskeyEnrollment(app)).toBeNull();
     await lockVault();
-    await expect(unlockVaultWithPasskey(app, updated)).rejects.toThrow('Passkey settings changed');
+    await expectFailure(unlockVaultWithPasskey(app, updated), 'Passkey settings changed');
     await unlockVault(app, nextPhrase);
   } finally {
     Reflect.deleteProperty(navigator, 'credentials');
@@ -213,7 +221,7 @@ test('unverified legacy metadata requires review and an invalid backup preserves
     version: 1, meta: [{ key: 'salt', value: sealed.salt }, { key: 'wrapped_dek', value: sealed.wrappedDek }], profiles: [],
   };
   const pending = await prepareVaultRestore(new File([JSON.stringify(backup)], 'legacy.json'), 'legacy password');
-  await expect(restoreVerifiedBackup(app, pending)).rejects.toThrow('Review');
+  await expectFailure(restoreVerifiedBackup(app, pending), 'Review');
   const error = await prepareVaultRestore(new File(['{}'], 'broken.json'), 'bad').catch((reason: unknown) => reason);
   expect(error).toBeInstanceOf(Error);
   expect(await readVaultMeta(app)).toEqual(original);

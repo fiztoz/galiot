@@ -23,7 +23,9 @@ jobs:
 
       - run: bun install --frozen-lockfile
       - run: bun run type-check
-      - run: bun test
+      - name: Test
+        timeout-minutes: 5
+        run: bun test
       - run: bun run build
 
   image:

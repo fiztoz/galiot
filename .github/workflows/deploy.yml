@@ -31,6 +31,7 @@ jobs:
         run: bun run type-check
 
       - name: Test
+        timeout-minutes: 5
         run: bun test
 
       - name: Build
