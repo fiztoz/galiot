@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { openManifest, sealManifest } from '../vault/exportFormat';
 import { VaultManager } from '../vault/vault';
+import { zeroBuffer } from '../vault/crypto';
 import { MAX_EDITOR_BYTES, RemoteS3, closeServerSession, listBucketsFromServer, openServerSession, probeFromServer, readEditorText } from '../s3/remote';
 import {
   MAX_IMPORT_FILE_BYTES,
@@ -278,6 +279,61 @@ async function dispatch<M extends VaultMethod>(
       vault = result.vault;
       generation = p.generation;
       return result.sealed ?? { unlocked: true };
+    }
+
+    case 'vault.passkeyUnlock': {
+      const p = params as NonNullable<VaultRequest<'vault.passkeyUnlock'>['params']>;
+      try {
+        invalidate();
+        const ticket = epoch;
+        const unlocked = await VaultManager.unlockWithPasskey(p.output, p.wrappedDek, reason => {
+          if (ticket === epoch) emitLocked(reason);
+        });
+        if (ticket !== epoch) {
+          unlocked.lock();
+          throw new Error('Vault state changed during passkey unlock');
+        }
+        vault = unlocked;
+        generation = p.generation;
+        return { unlocked: true };
+      } finally {
+        zeroBuffer(p.output);
+      }
+    }
+
+    case 'vault.passkeyEnroll': {
+      const p = params as NonNullable<VaultRequest<'vault.passkeyEnroll'>['params']>;
+      try {
+        const owner = requireUnlocked();
+        if (p.generation !== generation) throw new Error('Vault changed. Unlock and try again.');
+        const wrappedDek = await VaultManager.enrollPasskey(p.passphrase, p, p.output);
+        assertOwner(owner);
+        return { wrappedDek };
+      } finally {
+        zeroBuffer(p.output);
+      }
+    }
+
+    case 'vault.passkeyRewrap': {
+      const p = params as NonNullable<VaultRequest<'vault.passkeyRewrap'>['params']>;
+      try {
+        const owner = requireUnlocked();
+        if (p.generation !== generation) throw new Error('Vault changed. Unlock and try again.');
+        const sealed = await VaultManager.resetPasswordWithPasskey(p.output, p.wrappedDek, p.passphrase);
+        assertOwner(owner);
+        return sealed;
+      } finally {
+        zeroBuffer(p.output);
+      }
+    }
+
+    case 'vault.checkPhrase': {
+      const p = params as NonNullable<VaultRequest<'vault.checkPhrase'>['params']>;
+      const owner = requireUnlocked();
+      if (p.generation !== generation) throw new Error('Vault changed. Unlock and try again.');
+      const verified = await VaultManager.verify(p.passphrase, p);
+      assertOwner(owner);
+      return { verified };
     }
 
     case 'vault.lock': {

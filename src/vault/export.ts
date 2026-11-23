@@ -3,7 +3,7 @@ import type { AppDB } from '../db/client';
 import { vaultService } from './vaultService';
 
 import { SCHEMA_VERSION } from '../db/migrations';
-import { readVaultMeta, requireGeneration, withCurrentVault } from './repository';
+import { readVaultMeta, requireGeneration, withCurrentVault, withVaultMutation } from './repository';
 import type { VerifiedBackup } from './exportFormat';
 
 /** Columns copied during import — must exist in `schema.sql`. */
@@ -79,30 +79,51 @@ export async function prepareVaultRestore(file: File, passphrase: string): Promi
   return { generation, backup };
 }
 
-export async function restoreVerifiedBackup(db: AppDB, { generation, backup }: PendingRestore, reviewedLegacy = false): Promise<void> {
-  if (backup.legacy && !reviewedLegacy) throw new Error('Review the legacy connection settings before restoring.');
-  await withCurrentVault(db, generation, async () => {
-    await transferManager.withVaultDeletion(() => db.transaction(async tx => {
-      await requireGeneration(tx, generation);
-      if ((await vaultService.call('vault.status')).generation !== generation) {
-        throw new Error('Vault locked during restore. Unlock it and retry.');
-      }
-      await tx.exec('DELETE FROM _meta; DELETE FROM profiles; DELETE FROM transfer_tasks;');
-      await tx.query(
-        "INSERT INTO _meta (key, value) VALUES ('salt', $1), ('wrapped_dek', $2), ('vault_generation', $3), ('schema_version', $4)",
-        [backup.salt, backup.wrappedDek, crypto.randomUUID(), String(SCHEMA_VERSION)],
-      );
-      const placeholders = PROFILE_COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
-      for (const profile of backup.profiles) {
-        await tx.query(
-          `INSERT INTO profiles (${PROFILE_COLUMNS.join(', ')}) VALUES (${placeholders})`,
-          profileValues(profile),
-        );
-      }
-      await vaultService.call('vault.invalidate', { generation });
-    }));
-    vaultService.notifyReplacement(generation, false);
+export async function prepareLockedVaultRestore(db: AppDB, generation: string, file: File, passphrase: string): Promise<PendingRestore> {
+  await requireGeneration(db, generation);
+  await requireLockedRestore();
+  return { generation, backup: await vaultService.call('vault.import', { file, passphrase }) };
+}
+
+async function requireLockedRestore(): Promise<void> {
+  if ((await vaultService.call('vault.status')).unlocked) throw new Error('The vault is now unlocked. Restore from Vault Settings instead.');
+}
+
+export async function restoreVerifiedBackup(db: AppDB, pending: PendingRestore, reviewedLegacy = false): Promise<void> {
+  await withCurrentVault(db, pending.generation, () => replaceFromBackup(db, pending, reviewedLegacy, false));
+}
+
+export async function restoreLockedVaultBackup(db: AppDB, pending: PendingRestore, reviewedLegacy = false): Promise<void> {
+  await withVaultMutation(async () => {
+    await requireGeneration(db, pending.generation);
+    await requireLockedRestore();
+    await replaceFromBackup(db, pending, reviewedLegacy, true);
   });
+}
+
+async function replaceFromBackup(db: AppDB, { generation, backup }: PendingRestore, reviewedLegacy: boolean, locked: boolean): Promise<void> {
+  if (backup.legacy && !reviewedLegacy) throw new Error('Review the legacy connection settings before restoring.');
+  await transferManager.withVaultDeletion(() => db.transaction(async tx => {
+    await requireGeneration(tx, generation);
+    if (locked) await requireLockedRestore();
+    else if ((await vaultService.call('vault.status')).generation !== generation) {
+      throw new Error('Vault locked during restore. Unlock it and retry.');
+    }
+    await tx.exec('DELETE FROM _meta; DELETE FROM profiles; DELETE FROM transfer_tasks;');
+    await tx.query(
+      "INSERT INTO _meta (key, value) VALUES ('salt', $1), ('wrapped_dek', $2), ('vault_generation', $3), ('schema_version', $4)",
+      [backup.salt, backup.wrappedDek, crypto.randomUUID(), String(SCHEMA_VERSION)],
+    );
+    const placeholders = PROFILE_COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
+    for (const profile of backup.profiles) {
+      await tx.query(
+        `INSERT INTO profiles (${PROFILE_COLUMNS.join(', ')}) VALUES (${placeholders})`,
+        profileValues(profile),
+      );
+    }
+    await vaultService.call('vault.invalidate', { generation });
+  }));
+  vaultService.notifyReplacement(generation, false);
 }
 
 /** Triggers a browser download for a backup blob. */

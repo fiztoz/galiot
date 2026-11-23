@@ -4,7 +4,10 @@ import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import type { AppDB } from '../db/client';
 import { runMigrations } from '../db/migrations';
 import { createVault, createConnection, deleteVault, insertSealedConnections, lockVault, readVaultMeta, readVaultState, unlockVault } from './repository';
-import { exportVault, prepareVaultRestore, restoreVerifiedBackup } from './export';
+import { exportVault, prepareLockedVaultRestore, prepareVaultRestore, restoreLockedVaultBackup, restoreVerifiedBackup } from './export';
+import { resetLockedVault, START_OVER_PHRASE } from './repository';
+import { createVaultPasskey } from './passkey';
+import { enableVaultPasskey, readPasskeyEnrollment, removeVaultPasskey, resetMasterPasswordWithPasskey, unlockVaultWithPasskey } from './passkeyRepository';
 import { vaultService } from './vaultService';
 import { VaultManager } from './vault';
 import { sealManifest } from './exportFormat';
@@ -87,6 +90,118 @@ test('returning to a tab checks its worker against the durable generation', asyn
   await db.query("UPDATE _meta SET value = $1 WHERE key = 'vault_generation'", [crypto.randomUUID()]);
   expect(await readVaultState(app)).toBe('unlock');
   expect((await vaultService.call('vault.status')).unlocked).toBe(false);
+});
+
+test('locked reset requires the exact confirmation and cannot clear a newer vault', async () => {
+  await createVault(app, 'local fixture phrase');
+  await createConnection(app, {
+    name: 'before reset', bucket: 'archive', region: 'region', endpoint: 'https://s3.example.com',
+    pathStyle: true, accessKeyId: 'fixture-id', secretAccessKey: 'fixture-key',
+  });
+  const original = (await readVaultMeta(app))!;
+  await expect(resetLockedVault(app, original.generation, START_OVER_PHRASE)).rejects.toThrow('unlocked');
+  await lockVault();
+  await expect(resetLockedVault(app, original.generation, 'start over')).rejects.toThrow('exactly');
+  await expect(resetLockedVault(app, crypto.randomUUID(), START_OVER_PHRASE)).rejects.toThrow('Vault changed');
+  expect(removedStaging).toEqual([]);
+  expect((await db.query('SELECT id FROM profiles')).rows).toHaveLength(1);
+  await resetLockedVault(app, original.generation, START_OVER_PHRASE);
+  expect(removedStaging).toEqual(['galiot-transfers']);
+  expect((await db.query('SELECT id FROM profiles')).rows).toHaveLength(0);
+  expect(await readVaultState(app)).toBe('create');
+});
+
+test('a locked backup can be verified without modifying local state, and replaced only on confirmation', async () => {
+  const phrase = 'known fixture phrase';
+  await createVault(app, phrase);
+  const blob = await exportVault(app);
+  const file = new File([blob], 'backup.json');
+  const initial = (await readVaultMeta(app))!;
+  await lockVault();
+  await expect(prepareLockedVaultRestore(app, initial.generation, file, 'wrong fixture phrase')).rejects.toThrow();
+  expect(await readVaultMeta(app)).toEqual(initial);
+  expect(removedStaging).toEqual([]);
+  const pending = await prepareLockedVaultRestore(app, initial.generation, file, phrase);
+  expect(await readVaultMeta(app)).toEqual(initial);
+  expect(removedStaging).toEqual([]);
+  await restoreLockedVaultBackup(app, pending);
+  expect(removedStaging).toEqual(['galiot-transfers']);
+  expect((await readVaultMeta(app))?.generation).not.toBe(initial.generation);
+  await expect(restoreLockedVaultBackup(app, pending)).rejects.toThrow('Vault changed');
+  await unlockVault(app, phrase);
+  expect(await readVaultState(app)).toBe('unlocked');
+});
+
+test('passkey enrollment and password replacement preserve the same vault key in the worker', async () => {
+  const phrase = 'original fixture phrase';
+  const nextPhrase = 'replacement fixture phrase';
+  await createVault(app, phrase);
+  const { generation } = (await readVaultMeta(app))!;
+  let prfByte: number | null = null;
+  let returnedOutput: ArrayBuffer | undefined;
+  const rawId = Uint8Array.of(1, 2, 3, 4).buffer;
+  class FixtureCredential {
+    rawId = rawId;
+    getClientExtensionResults() {
+      returnedOutput = prfByte === null ? undefined : new Uint8Array(32).fill(prfByte).buffer;
+      return { prf: { enabled: true, results: { first: returnedOutput } } };
+    }
+  }
+  const globals = { PublicKeyCredential: FixtureCredential, isSecureContext: true, location: { origin: 'https://galiot.example.com' } };
+  const descriptors = Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
+  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value });
+  const seen: CredentialRequestOptions[] = [];
+  Object.assign(navigator, { credentials: {
+    create: async () => new FixtureCredential(),
+    get: async (options: CredentialRequestOptions) => { seen.push(options); return new FixtureCredential(); },
+  } });
+  try {
+    const candidate = await createVaultPasskey();
+    await expect(enableVaultPasskey(app, generation, candidate, phrase)).rejects.toThrow('could not unlock encrypted data');
+    expect(await readPasskeyEnrollment(app)).toBeNull();
+    prfByte = 44;
+    await expect(enableVaultPasskey(app, generation, candidate, 'wrong fixture phrase')).rejects.toThrow('current master password');
+    expect(await readPasskeyEnrollment(app)).toBeNull();
+    await enableVaultPasskey(app, generation, candidate, phrase);
+    expect(returnedOutput?.byteLength).toBe(0);
+    expect(seen.at(-1)?.publicKey?.userVerification).toBe('required');
+    expect(seen.at(-1)?.publicKey?.extensions?.prf?.eval?.first).toHaveLength(32);
+    const entry = (await readPasskeyEnrollment(app))!;
+    const creds = { accessKeyId: 'fixture-id', secretAccessKey: 'fixture-key' };
+    await createConnection(app, {
+      name: 'retained connection', bucket: 'archive', region: 'region', endpoint: 'https://s3.example.com',
+      pathStyle: true, ...creds,
+    });
+    await lockVault();
+    prfByte = 45;
+    await expect(unlockVaultWithPasskey(app, entry)).rejects.toThrow('could not unlock');
+    expect(await readVaultState(app)).toBe('unlock');
+    prfByte = 44;
+    await unlockVaultWithPasskey(app, entry);
+    const backup = new File([await exportVault(app)], 'still-usable.json');
+    await resetMasterPasswordWithPasskey(app, entry, nextPhrase);
+    expect(await readVaultState(app)).toBe('unlock');
+    await expect(unlockVaultWithPasskey(app, entry)).rejects.toThrow('Vault changed');
+    await expect(unlockVault(app, phrase)).rejects.toThrow('Invalid passphrase');
+    await unlockVault(app, nextPhrase);
+    expect((await db.query('SELECT name FROM profiles')).rows).toEqual([{ name: 'retained connection' }]);
+    expect((await prepareVaultRestore(backup, phrase)).backup.profiles).toHaveLength(1);
+    const updated = (await readPasskeyEnrollment(app))!;
+    await expect(removeVaultPasskey(app, updated, phrase)).rejects.toThrow('current master password');
+    await lockVault();
+    await unlockVaultWithPasskey(app, updated);
+    await removeVaultPasskey(app, updated, nextPhrase);
+    expect(await readPasskeyEnrollment(app)).toBeNull();
+    await lockVault();
+    await expect(unlockVaultWithPasskey(app, updated)).rejects.toThrow('Passkey settings changed');
+    await unlockVault(app, nextPhrase);
+  } finally {
+    Reflect.deleteProperty(navigator, 'credentials');
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
 });
 
 test('unverified legacy metadata requires review and an invalid backup preserves the current generation', async () => {

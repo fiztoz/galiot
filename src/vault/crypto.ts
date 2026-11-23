@@ -110,6 +110,23 @@ export async function unwrapDEK(kek: CryptoKey, wrappedDek: ArrayBuffer): Promis
   );
 }
 
+/** Rewraps within WebCrypto; the transient extractable key is never exported or retained. */
+export async function rewrapDEK(from: CryptoKey, to: CryptoKey, wrapped: ArrayBuffer): Promise<ArrayBuffer> {
+  const dek = await crypto.subtle.unwrapKey('raw', wrapped, from, 'AES-KW',
+    { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  return wrapDEK(to, dek);
+}
+
+/** Derives a wrap-only key from a WebAuthn PRF result, separated from other uses. */
+export async function derivePasskeyKEK(output: ArrayBuffer): Promise<CryptoKey> {
+  if (output.byteLength !== 32) throw new Error('Invalid passkey output');
+  const encoder = new TextEncoder();
+  const material = await crypto.subtle.importKey('raw', output, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0),
+    info: encoder.encode('galiot/local-vault/passkey-wrap/v1') }, material,
+    { name: 'AES-KW', length: 256 }, false, ['wrapKey', 'unwrapKey']);
+}
+
 /**
  * Encrypts a plaintext string using the DEK (AES-GCM-256).
  */

@@ -1,5 +1,7 @@
 import {
   deriveKEK,
+  derivePasskeyKEK,
+  rewrapDEK,
   generateDEK,
   generateSalt,
   wrapDEK,
@@ -151,6 +153,53 @@ export class VaultManager {
     // Constructor already armed a timer; keep a single clean state.
     vault.resetTimer();
     return vault;
+  }
+
+  static async enrollPasskey(passphrase: string, sealed: SealedVault, output: ArrayBuffer): Promise<string> {
+    const salt = fromBase64(sealed.salt);
+    const wrapped = fromBase64(sealed.wrappedDek);
+    try {
+      const from = await deriveKEK(passphrase, salt);
+      const to = await derivePasskeyKEK(output);
+      const rewrapped = new Uint8Array(await rewrapDEK(from, to, wrapped.buffer as ArrayBuffer));
+      try { return toBase64(rewrapped); } finally { zeroBuffer(rewrapped); }
+    } catch {
+      throw new Error('Could not enable passkey unlock. Check the current master password.');
+    } finally {
+      zeroBuffer(salt);
+      zeroBuffer(wrapped);
+    }
+  }
+
+  static async unlockWithPasskey(output: ArrayBuffer, wrappedDek: string, onLock?: (reason: VaultLockReason) => void): Promise<VaultManager> {
+    const wrapped = fromBase64(wrappedDek);
+    try {
+      const dek = await unwrapDEK(await derivePasskeyKEK(output), wrapped.buffer as ArrayBuffer);
+      const vault = new VaultManager(onLock);
+      vault.dek = dek;
+      return vault;
+    } catch {
+      throw new Error('This passkey could not unlock the vault. Use your master password.');
+    } finally {
+      zeroBuffer(wrapped);
+    }
+  }
+
+  static async resetPasswordWithPasskey(output: ArrayBuffer, wrappedDek: string, passphrase: string): Promise<SealedVault> {
+    if (passphrase.length < 8) throw new Error('Password must be at least 8 characters.');
+    const salt = generateSalt();
+    const wrapped = fromBase64(wrappedDek);
+    try {
+      const from = await derivePasskeyKEK(output);
+      const to = await deriveKEK(passphrase, salt);
+      const rewrapped = new Uint8Array(await rewrapDEK(from, to, wrapped.buffer as ArrayBuffer));
+      try { return { salt: toBase64(salt), wrappedDek: toBase64(rewrapped) }; } finally { zeroBuffer(rewrapped); }
+    } catch {
+      throw new Error('This passkey could not reset the master password.');
+    } finally {
+      zeroBuffer(salt);
+      zeroBuffer(wrapped);
+    }
   }
 
   /**

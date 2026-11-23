@@ -1,9 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { BRAND } from '../branding';
-import { Eye, EyeOff, Lock, ArrowRight, Check, Loader2, ShieldCheck } from 'lucide-react';
+import { Eye, EyeOff, Lock, ArrowRight, Check, Fingerprint, Loader2, ShieldCheck } from 'lucide-react';
 import type { AppDB } from '../db/client';
 import { createVault, unlockVault, vaultExists, readVaultState } from '../vault/repository';
 import { vaultService } from '../vault/vaultService';
+import { canUsePasskey } from '../vault/passkey';
+import { readPasskeyEnrollment, unlockVaultWithPasskey, type PasskeyEnrollment } from '../vault/passkeyRepository';
+import { VaultRecoveryPanel } from './VaultRecoveryPanel';
 
 interface VaultGateProps {
   db: AppDB;
@@ -12,6 +15,8 @@ interface VaultGateProps {
 }
 
 type GateState = 'loading' | 'error' | 'create' | 'unlock' | 'unlocked';
+const GATE_LAYOUT = 'flex-1 flex flex-col items-center justify-center p-6 bg-zinc-50/50 dark:bg-zinc-950/50';
+const GATE_CARD = 'bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-8 max-w-md w-full shadow-lg shadow-zinc-200/50 dark:shadow-none';
 
 export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
   const [state, setState] = useState<GateState>('loading');
@@ -23,9 +28,17 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [passkey, setPasskey] = useState<PasskeyEnrollment | null>(null);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [recovering, setRecovering] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+
+    const refreshPasskey = async () => {
+      const entry = canUsePasskey() ? await readPasskeyEnrollment(db).catch(() => null) : null;
+      if (!cancelled) setPasskey(entry);
+    };
 
     const checkState = async () => {
       try {
@@ -33,6 +46,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
         if (cancelled) return;
         setState(next);
         onUnlockChange?.(next === 'unlocked');
+        if (next === 'unlock') void refreshPasskey();
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -59,8 +73,9 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       setShowConfirmPassword(false);
       onUnlockChange?.(false);
       setState('unlock');
+      void refreshPasskey();
       setNotice(
-        reason === 'inactivity' ? 'Locked after inactivity. Enter your password to continue.' : null,
+        reason === 'inactivity' ? 'Locked after inactivity. Unlock to continue.' : null,
       );
 
       void (async () => {
@@ -83,7 +98,9 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
       setShowConfirmPassword(false);
       setError(null);
       onUnlockChange?.(false);
-      setNotice('The vault was deleted. Create a new one to continue.');
+      setNotice('The local vault was cleared. Create a new one to continue.');
+      setRecovering(false);
+      setPasskey(null);
       setState('loading');
       setAttempt(value => value + 1);
     });
@@ -178,6 +195,25 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
     [db, password, onUnlockChange],
   );
 
+  async function handlePasskeyUnlock() {
+    if (!passkey || passkeyBusy || busy) return;
+    setPasskeyBusy(true);
+    setError(null);
+    setNotice(null);
+    setPassword('');
+    setShowPassword(false);
+    try {
+      await unlockVaultWithPasskey(db, passkey);
+      setState('unlocked');
+      onUnlockChange?.(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Passkey unlock failed. Use your master password.');
+      setPasskey(await readPasskeyEnrollment(db).catch(() => null));
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
   if (state === 'error') {
     return (
       <div className="flex flex-col items-center gap-3 p-6">
@@ -202,9 +238,24 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
 
   const isCreate = state === 'create';
 
+  if (recovering && !isCreate) return (
+    <div className={GATE_LAYOUT}>
+      <div className={GATE_CARD}>
+        <VaultRecoveryPanel db={db}
+          onBack={() => setRecovering(false)}
+          onRestored={() => {
+            setRecovering(false);
+            setPasskey(null);
+            setNotice('Backup restored. Unlock with the password that protected it.');
+          }}
+        />
+      </div>
+    </div>
+  );
+
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-6 bg-zinc-50/50 dark:bg-zinc-950/50">
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-8 max-w-md w-full shadow-lg shadow-zinc-200/50 dark:shadow-none">
+    <div className={GATE_LAYOUT}>
+      <div className={GATE_CARD}>
         <div className="mb-8 text-center">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-teal-100/50 dark:bg-teal-900/30 text-teal-600 dark:text-teal-500 mb-4">
             <Lock size={24} />
@@ -230,7 +281,8 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                disabled={busy}
+                autoComplete={`${isCreate ? 'new' : 'current'}-password`}
+                disabled={busy || passkeyBusy}
                 className="w-full pl-4 pr-10 py-2.5 bg-zinc-50 dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent dark:text-zinc-100 transition-shadow disabled:opacity-60"
                 placeholder={isCreate ? 'Minimum 8 characters' : 'Enter your password'}
                 autoFocus
@@ -254,6 +306,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
               <div className="relative">
                 <input
                   id="confirm-passphrase"
+                  autoComplete="new-password"
                   type={showConfirmPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
@@ -287,7 +340,7 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
 
           <button
             type="submit"
-            disabled={busy}
+            disabled={busy || passkeyBusy}
             className="w-full mt-6 inline-flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 disabled:opacity-70 disabled:cursor-not-allowed"
           >
             {busy ? (
@@ -308,6 +361,20 @@ export function VaultGate({ db, children, onUnlockChange }: VaultGateProps) {
             )}
           </button>
         </form>
+        {!isCreate && <div className="mt-3 space-y-3">
+          {passkey && <button type="button" onClick={() => void handlePasskeyUnlock()} disabled={busy || passkeyBusy}
+            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-300 px-4 py-2.5 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800 disabled:opacity-50">
+            <Fingerprint size={16} aria-hidden="true" /> {passkeyBusy ? 'Waiting for passkey…' : 'Unlock with a passkey'}
+          </button>}
+          <button type="button" disabled={busy || passkeyBusy} onClick={() => {
+            setPassword('');
+            setShowPassword(false);
+            setError(null);
+            setRecovering(true);
+          }} className="cursor-pointer text-sm font-medium text-teal-700 hover:underline dark:text-teal-400">
+            Forgot master password?
+          </button>
+        </div>}
 
         <p className="mt-6 flex items-start gap-2 text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
           <ShieldCheck size={14} className="flex-none mt-0.5" />

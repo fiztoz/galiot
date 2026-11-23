@@ -56,6 +56,11 @@ export async function withCurrentVault<T>(db: AppDB, generation: string, action:
     }
     return action();
   };
+  return withVaultMutation(run);
+}
+
+/** Serialize reset and replacement with the existing vault writer lock. */
+export function withVaultMutation<T>(run: () => Promise<T>): Promise<T> {
   return navigator.locks ? navigator.locks.request('galiot-vault-replacement', run) : run();
 }
 
@@ -129,6 +134,19 @@ export async function deleteVault(db: AppDB): Promise<void> {
   const { generation } = await vaultService.call('vault.status');
   if (!generation) throw new Error('Unlock the vault before deleting it');
   await withCurrentVault(db, generation, async () => {
+    await transferManager.withVaultDeletion(() => wipeVaultData(db, generation));
+    vaultService.notifyReplacement(generation, true);
+  });
+}
+
+export const START_OVER_PHRASE = 'START OVER';
+
+/** An explicit locked-screen reset. This never uses S3 credentials. */
+export async function resetLockedVault(db: AppDB, generation: string, phrase: string): Promise<void> {
+  if (phrase !== START_OVER_PHRASE) throw new Error(`Type ${START_OVER_PHRASE} exactly to confirm.`);
+  await withVaultMutation(async () => {
+    await requireGeneration(db, generation);
+    if ((await vaultService.call('vault.status')).unlocked) throw new Error('The vault is now unlocked. Use Vault Settings to delete it.');
     await transferManager.withVaultDeletion(() => wipeVaultData(db, generation));
     vaultService.notifyReplacement(generation, true);
   });

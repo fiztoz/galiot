@@ -96,6 +96,10 @@ export interface FolderStatsResult {
 export type VaultMethod =
   | 'vault.create'
   | 'vault.unlock'
+  | 'vault.passkeyEnroll'
+  | 'vault.passkeyUnlock'
+  | 'vault.passkeyRewrap'
+  | 'vault.checkPhrase'
   | 'vault.lock'
   | 'vault.invalidate'
   | 'vault.status'
@@ -143,6 +147,10 @@ export interface VaultRequest<M extends VaultMethod = VaultMethod> {
 export interface VaultParams {
   'vault.create': { passphrase: string; generation: string };
   'vault.unlock': { passphrase: string; salt: string; wrappedDek: string; generation: string };
+  'vault.passkeyEnroll': VaultParams['vault.unlock'] & { output: ArrayBuffer };
+  'vault.passkeyUnlock': { output: ArrayBuffer; wrappedDek: string; generation: string };
+  'vault.passkeyRewrap': VaultParams['vault.passkeyUnlock'] & Pick<VaultParams['vault.unlock'], 'passphrase'>;
+  'vault.checkPhrase': VaultParams['vault.unlock'];
   'vault.lock': undefined;
   'vault.invalidate': { generation: string };
   'vault.status': undefined;
@@ -240,6 +248,10 @@ export interface VaultParams {
 export type VaultResults = {
   'vault.create': CreateVaultResult;
   'vault.unlock': { unlocked: true };
+  'vault.passkeyEnroll': { wrappedDek: string };
+  'vault.passkeyUnlock': { unlocked: true };
+  'vault.passkeyRewrap': CreateVaultResult;
+  'vault.checkPhrase': { verified: boolean };
   'vault.lock': { locked: true };
   'vault.invalidate': { invalidated: boolean };
   'vault.status': { unlocked: boolean; generation: string | null };

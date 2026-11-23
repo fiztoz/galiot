@@ -84,6 +84,7 @@ class VaultService {
   public call<M extends VaultMethod>(
     method: M,
     params: VaultParams[M] = undefined as VaultParams[M],
+    transfer: Transferable[] = [],
   ): Promise<VaultResults[M]> {
     const worker = this.ensureWorker();
     const id = this.nextId++;
@@ -93,7 +94,12 @@ class VaultService {
         resolve: resolve as (value: unknown) => void,
         reject,
       });
-      worker.postMessage({ channel: VAULT_CHANNEL, id, method, params });
+      try {
+        worker.postMessage({ channel: VAULT_CHANNEL, id, method, params }, transfer);
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 

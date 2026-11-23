@@ -12,6 +12,7 @@ import {
 import type { AppDB } from '../db/client';
 import { downloadVaultBackup, exportVault, prepareVaultRestore, restoreVerifiedBackup, type PendingRestore } from '../vault/export';
 import { deleteVault, lockVault } from '../vault/repository';
+import { VaultPasskeySettings } from './VaultPasskeySettings';
 
 interface VaultSettingsProps {
   db: AppDB;
@@ -236,6 +237,8 @@ export function VaultSettings({ db, onLocked, onDeleted }: VaultSettingsProps) {
         <ShieldCheck size={13} className="flex-none mt-0.5" />
         Restoring replaces every connection, transfer record and partial staged download in this browser, then locks the vault.
       </p>
+
+      <VaultPasskeySettings db={db} />
 
       <div className="pt-3 border-t border-red-100 dark:border-red-900/40">
         {!confirmDelete ? (
